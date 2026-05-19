@@ -12,6 +12,7 @@ export default [
 	index("routes/home.tsx"),
 	route("mailboxes", "routes/mailboxes.tsx"),
 	route("settings", "routes/org-settings.tsx"),
+	route("acl-overview", "routes/acl-overview.tsx"),
 	route("domains", "routes/domains-list.tsx"),
 	route("domains/:domain", "routes/domain-detail.tsx"),
 	route("domains/:domain/settings", "routes/domain-settings.tsx"),

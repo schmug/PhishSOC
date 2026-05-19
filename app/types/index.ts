@@ -420,3 +420,15 @@ export interface HubInviteResponse {
 	token: string;
 	expires_at: string;
 }
+
+/**
+ * One row in the `GET /api/v1/org/acl-overview` response (#292).
+ * `owner` is null for unscoped (pre-ACL) mailboxes.
+ * `members` is empty for unscoped mailboxes.
+ */
+export interface OrgAclOverviewEntry {
+	email: string;
+	acl_status: "scoped" | "unscoped";
+	owner: string | null;
+	members: string[];
+}

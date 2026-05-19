@@ -15,6 +15,7 @@ import type {
 	HubInviteResponse,
 	HubSharingGroupsResponse,
 	Mailbox,
+	OrgAclOverviewEntry,
 	OrgOverview,
 } from "~/types";
 
@@ -245,6 +246,10 @@ const api = {
 	// Org overview
 	getOrgOverview: (opts?: { signal?: AbortSignal }) =>
 		get<OrgOverview>("/api/v1/org/overview", { signal: opts?.signal }),
+
+	// Org ACL overview (#292) — every mailbox with owner + member list.
+	getOrgAclOverview: (opts?: { signal?: AbortSignal }) =>
+		get<OrgAclOverviewEntry[]>("/api/v1/org/acl-overview", { signal: opts?.signal }),
 
 	// Domains (#85). Domain identifiers are hostname-shaped (a-z, 0-9, hyphen,
 	// dot); they don't need encodeURIComponent for those characters, but we

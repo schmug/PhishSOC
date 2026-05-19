@@ -365,6 +365,49 @@ app.get("/api/v1/org/overview", async (c) => {
 	return c.json(overview);
 });
 
+// -- Org ACL overview (#292) ----------------------------------------
+
+/**
+ * GET /api/v1/org/acl-overview
+ *
+ * Returns every mailbox with its ACL status, owner (or null for unscoped), and
+ * member list — so an org operator can audit who-can-access-what across the
+ * fleet in one request.
+ *
+ * Authz model: any Cloudflare Access-admitted caller (i.e. any request that
+ * carries a valid `cf-access-authenticated-user-email` header) may read this
+ * overview. This mirrors the `GET /api/v1/org/overview` pattern: no per-mailbox
+ * scoping, no org-admin role (none exists yet). Callers with NO CF Access email
+ * header (unauthenticated / dev proxy without Access) receive 403 so that the
+ * member list is never exposed to unauthenticated requests. If a future
+ * org-admin RBAC layer is introduced, this endpoint should be narrowed to that
+ * role (#292 out-of-scope note).
+ */
+app.get("/api/v1/org/acl-overview", async (c) => {
+	const callerEmail =
+		c.req.header("cf-access-authenticated-user-email") ?? null;
+	if (!callerEmail) {
+		return c.json({ error: "CF Access email required" }, 403);
+	}
+
+	const mailboxes = await listMailboxes(c.env.BUCKET);
+	const acls = await Promise.all(
+		mailboxes.map((m) => readMailboxAcl(c.env, m.id)),
+	);
+
+	return c.json(
+		mailboxes.map((m, i) => {
+			const acl = acls[i];
+			return {
+				email: m.id,
+				acl_status: acl ? "scoped" : "unscoped",
+				owner: acl ? acl.owner : null,
+				members: acl ? acl.members : [],
+			};
+		}),
+	);
+});
+
 // -- Org-scope search (#197) ----------------------------------------
 
 /** Per-mailbox cap for org-search fan-out. We pull at most this many rows
