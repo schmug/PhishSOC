@@ -16,6 +16,7 @@ import { getOrgSettings } from "./org-settings";
 import type { DomainSettings } from "../../shared/domain-settings";
 import { domainFromMailboxId, getDomainSettings } from "./domain-settings";
 import {
+	DEFAULT_DETECTOR_SETTINGS,
 	DEFAULT_SECURITY_SETTINGS,
 	type BusinessHours,
 	type MailboxSecuritySettings,
@@ -254,6 +255,14 @@ function mergeSecurityWithDefault(value: unknown): MailboxSecuritySettings {
 		ruf_ingestion: {
 			...DEFAULT_SECURITY_SETTINGS.ruf_ingestion,
 			...(partial.ruf_ingestion ?? {}),
+		},
+		detectors: {
+			...DEFAULT_DETECTOR_SETTINGS,
+			...(partial.detectors ?? {}),
+			sender_graph: {
+				...DEFAULT_DETECTOR_SETTINGS.sender_graph,
+				...(partial.detectors?.sender_graph ?? {}),
+			},
 		},
 	};
 }

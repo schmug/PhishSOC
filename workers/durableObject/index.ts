@@ -1189,6 +1189,52 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 	}
 
+	// ── Sender graph (issue #26) ──────────────────────────────────
+
+	async getSenderGraphByName(senderName: string): Promise<Array<{ sender_address: string; message_count: number }>> {
+		if (!senderName) return [];
+		return this.db
+			.select({
+				sender_address: schema.senderGraph.sender_address,
+				message_count: schema.senderGraph.message_count,
+			})
+			.from(schema.senderGraph)
+			.where(eq(schema.senderGraph.sender_name, senderName))
+			.all();
+	}
+
+	async upsertSenderGraph(senderName: string, senderAddress: string): Promise<void> {
+		if (!senderName || !senderAddress) return;
+		const now = new Date().toISOString();
+		const existing = this.db
+			.select({ message_count: schema.senderGraph.message_count })
+			.from(schema.senderGraph)
+			.where(
+				and(
+					eq(schema.senderGraph.sender_name, senderName),
+					eq(schema.senderGraph.sender_address, senderAddress),
+				),
+			)
+			.get();
+		if (!existing) {
+			this.db
+				.insert(schema.senderGraph)
+				.values({ sender_name: senderName, sender_address: senderAddress, message_count: 1, first_seen: now, last_seen: now })
+				.run();
+		} else {
+			this.db
+				.update(schema.senderGraph)
+				.set({ message_count: existing.message_count + 1, last_seen: now })
+				.where(
+					and(
+						eq(schema.senderGraph.sender_name, senderName),
+						eq(schema.senderGraph.sender_address, senderAddress),
+					),
+				)
+				.run();
+		}
+	}
+
 	// ── Threat intel feed state ────────────────────────────────────
 
 	async getIntelFeedState(feedId: string) {

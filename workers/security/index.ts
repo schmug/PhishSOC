@@ -39,6 +39,7 @@ import {
 } from "./reputation";
 import { lookupIp } from "../intel/crowdsec-cti";
 import type { StageId, StageRecord, StageStatus } from "./stage-trace";
+import { SenderGraphDetector } from "./detectors";
 
 /**
  * Apply a post-aggregation score bump and recompute the action tier and
@@ -74,7 +75,7 @@ export interface RunPipelineInput {
 	targetFolder: string;
 	parsedEmail: {
 		subject?: string;
-		from?: { address?: string };
+		from?: { address?: string; name?: string };
 		html?: string;
 		text?: string;
 		headers?: unknown;
@@ -103,6 +104,7 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	if (!settings.enabled) return { verdict: null, skipped: true, stageTrace: [] };
 
 	const sender = (parsedEmail.from?.address || "").toLowerCase();
+	const senderName = (parsedEmail.from?.name || "").toLowerCase().trim();
 	const bodyHtml = parsedEmail.html || parsedEmail.text || "";
 	const subject = parsedEmail.subject || "";
 	const attachments = parsedEmail.attachments ?? [];
@@ -187,6 +189,22 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	const repContrib = scoreReputation(reputation, firstTimeSenderPrior);
 	tracer.setContrib("reputation", repContrib.score, repContrib.reasons[0]);
 
+	// ── Sender-graph detector (issue #26) ──────────────────────────
+	// BEC / display-name impersonation signal. Folded into the reputation
+	// stage's wall-clock time (it's another per-mailbox DO read) so the
+	// trace stays at 7 rows. Score is applied as a post-aggregation boost
+	// in the verdict stage, bounded at +30.
+	let detectorBoost = 0;
+	let detectorReason: string | undefined;
+	if (settings.detectors?.sender_graph?.enabled !== false && senderName) {
+		await tracer.extend("reputation", async () => {
+			const detector = new SenderGraphDetector();
+			const result = await detector.score({ senderAddress: sender, senderName }, stub).catch(() => ({ score: 0, reason: undefined }));
+			detectorBoost = Math.min(30, result.score);
+			detectorReason = result.reason;
+		});
+	}
+
 	// ── Stage 5: triage ────────────────────────────────────────────
 	const triaged = tracer.measure("triage", () =>
 		evaluateTriage({
@@ -227,7 +245,7 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 			);
 		}
 		tracer.completeVerdict(verdict.score);
-		await persistAll(env, mailboxId, messageId, sender, verdict, urls, tracer.snapshot());
+		await persistAll(env, mailboxId, messageId, sender, senderName, verdict, urls, tracer.snapshot());
 		return { verdict, skipped: false, stageTrace: tracer.snapshot() };
 	}
 
@@ -287,6 +305,10 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		if (offHours.score > 0) {
 			v = applyBoost(v, offHours.score, offHours.reasons[0], settings.thresholds);
 		}
+		// Sender-graph detector boost (issue #26). Capped at +30 by construction.
+		if (detectorBoost > 0 && detectorReason) {
+			v = applyBoost(v, detectorBoost, detectorReason, settings.thresholds);
+		}
 		// Learning mode never quarantines/blocks — cap at "tag".
 		if (settings.learning_mode && (v.action === "quarantine" || v.action === "block")) {
 			v = { ...v, action: "tag" };
@@ -315,7 +337,7 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	tracer.completeVerdict(verdict.score);
 
 	const stageTrace = tracer.snapshot();
-	await persistAll(env, mailboxId, messageId, sender, verdict, urls, stageTrace);
+	await persistAll(env, mailboxId, messageId, sender, senderName, verdict, urls, stageTrace);
 	return { verdict, skipped: false, stageTrace };
 }
 
@@ -462,6 +484,7 @@ async function persistAll(
 	mailboxId: string,
 	messageId: string,
 	sender: string,
+	senderName: string,
 	verdict: FinalVerdict,
 	urls: ReturnType<typeof extractUrls>,
 	stageTrace: StageRecord[],
@@ -499,6 +522,14 @@ async function persistAll(
 			await stub.upsertSenderReputation(sender, verdict.score);
 		} catch (e) {
 			console.error("upsertSenderReputation failed:", (e as Error).message);
+		}
+	}
+
+	if (senderName && sender) {
+		try {
+			await stub.upsertSenderGraph(senderName, sender);
+		} catch (e) {
+			console.error("upsertSenderGraph failed:", (e as Error).message);
 		}
 	}
 }

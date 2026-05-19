@@ -40,6 +40,11 @@ export interface IntelFeedStateRow {
 	bloom_kv_key: string;
 }
 
+export interface FakeSenderGraphRecord {
+	sender_address: string;
+	message_count: number;
+}
+
 /**
  * Minimal subset of `MailboxDO` methods the security pipeline calls. Widened
  * to include the feed-state methods so the pipeline's intel lookup doesn't
@@ -58,6 +63,8 @@ export interface FakeMailboxStub {
 		feedId: string,
 		data: Omit<IntelFeedStateRow, "feed_id">,
 	): Promise<void>;
+	getSenderGraphByName(senderName: string): Promise<FakeSenderGraphRecord[]>;
+	upsertSenderGraph(senderName: string, senderAddress: string): Promise<void>;
 }
 
 export function createFakeMailboxStub(): {
@@ -67,12 +74,14 @@ export function createFakeMailboxStub(): {
 	urls: Map<string, FakeUrlRow[]>;
 	moves: Array<{ id: string; folderId: string }>;
 	feedState: Map<string, IntelFeedStateRow>;
+	senderGraph: Map<string, FakeSenderGraphRecord[]>;
 } {
 	const reputation = new Map<string, SenderReputation>();
 	const verdicts = new Map<string, FakeVerdictRow>();
 	const urls = new Map<string, FakeUrlRow[]>();
 	const moves: Array<{ id: string; folderId: string }> = [];
 	const feedState = new Map<string, IntelFeedStateRow>();
+	const senderGraph = new Map<string, FakeSenderGraphRecord[]>();
 
 	const stub: FakeMailboxStub = {
 		async getSenderReputation(sender) {
@@ -121,9 +130,23 @@ export function createFakeMailboxStub(): {
 		async upsertIntelFeedState(feedId, data) {
 			feedState.set(feedId, { feed_id: feedId, ...data });
 		},
+		async getSenderGraphByName(name) {
+			return senderGraph.get(name) ?? [];
+		},
+		async upsertSenderGraph(name, address) {
+			const existing = senderGraph.get(name) ?? [];
+			const idx = existing.findIndex((r) => r.sender_address === address);
+			if (idx === -1) {
+				senderGraph.set(name, [...existing, { sender_address: address, message_count: 1 }]);
+			} else {
+				const updated = [...existing];
+				updated[idx] = { ...updated[idx], message_count: updated[idx].message_count + 1 };
+				senderGraph.set(name, updated);
+			}
+		},
 	};
 
-	return { stub, reputation, verdicts, urls, moves, feedState };
+	return { stub, reputation, verdicts, urls, moves, feedState, senderGraph };
 }
 
 export interface FakeEnvParts {
