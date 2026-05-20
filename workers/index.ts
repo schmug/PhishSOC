@@ -365,6 +365,36 @@ app.get("/api/v1/org/overview", async (c) => {
 	return c.json(overview);
 });
 
+// -- Org ACL overview (#292) ----------------------------------------
+
+/**
+ * Org-level ACL audit surface (#292). Returns every mailbox with its
+ * acl_status, owner, and member list so operators can audit who can access
+ * what across the fleet without inspecting R2 blobs by hand.
+ *
+ * Authz: any CF-Access-admitted caller. No org-admin role exists today, so the
+ * policy is identical to GET /api/v1/org/overview — all callers admitted past
+ * the main CF Access policy may view the overview. In dev mode (no callerEmail)
+ * the endpoint is also accessible. Owner and member emails of scoped mailboxes
+ * are visible to all admitted callers — this is an operator audit surface.
+ */
+app.get("/api/v1/org/acl-overview", async (c) => {
+	const allMailboxes = await listMailboxes(c.env.BUCKET);
+	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
+
+	return c.json(
+		allMailboxes.map((m, i) => {
+			const acl = acls[i];
+			return {
+				email: m.id,
+				acl_status: acl ? "scoped" : "unscoped",
+				owner: acl?.owner ?? null,
+				members: acl?.members ?? [],
+			};
+		}),
+	);
+});
+
 // -- Org-scope search (#197) ----------------------------------------
 
 /** Per-mailbox cap for org-search fan-out. We pull at most this many rows

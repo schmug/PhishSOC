@@ -155,6 +155,10 @@ const api = {
 	// Org-level settings (#106). Backed by R2 key org/settings.json behind a
 	// module-scope ETag cache; the GET returns the raw blob (or {} if missing),
 	// PUT validates through the OrgSettings Zod schema worker-side.
+	getAclOverview: () =>
+		get<Array<{ email: string; acl_status: "scoped" | "unscoped"; owner: string | null; members: string[] }>>(
+			"/api/v1/org/acl-overview",
+		),
 	getOrgSettings: () =>
 		get<{ settings: Record<string, unknown> }>("/api/v1/org/settings"),
 	updateOrgSettings: (settings: unknown) =>
