@@ -7,6 +7,7 @@ import {
 	GlobeIcon,
 	GraphIcon,
 	ListIcon,
+	LockKeyIcon,
 	MagnifyingGlassIcon,
 	MoonIcon,
 	SparkleIcon,
@@ -207,6 +208,11 @@ function NavContents({
 					end
 					icon={<GearSixIcon size={16} />}
 					label="Org settings"
+				/>
+				<NavItem
+					to="/acl-overview"
+					icon={<LockKeyIcon size={16} />}
+					label="Access overview"
 				/>
 				{mailboxId && (
 					<>

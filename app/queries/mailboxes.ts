@@ -124,3 +124,17 @@ export function useTransferAclOwnership(mailboxId: string) {
 		},
 	});
 }
+
+export function useOrgAclOverview() {
+	return useQuery<{
+		mailboxes: Array<{
+			email: string;
+			acl_status: "scoped" | "unscoped";
+			owner: string | null;
+			members: string[];
+		}>;
+	}>({
+		queryKey: queryKeys.org.aclOverview,
+		queryFn: () => api.getOrgAclOverview(),
+	});
+}

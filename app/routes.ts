@@ -16,6 +16,7 @@ export default [
 	route("domains/:domain", "routes/domain-detail.tsx"),
 	route("domains/:domain/settings", "routes/domain-settings.tsx"),
 	route("search", "routes/search-results-org.tsx"),
+	route("acl-overview", "routes/org-acl-overview.tsx"),
 	route("mailbox/:mailboxId", "routes/mailbox.tsx", [
 		index("routes/mailbox-index.tsx"),
 		route("dashboard", "routes/dashboard.tsx"),

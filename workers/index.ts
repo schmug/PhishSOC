@@ -365,6 +365,28 @@ app.get("/api/v1/org/overview", async (c) => {
 	return c.json(overview);
 });
 
+// -- Org ACL overview (#292) ----------------------------------------
+
+// Authz: any CF-Access-admitted caller. No org-admin role exists yet;
+// all CF-Access-admitted users can read the org access list.
+// Tighten when a RBAC / org-admin role is introduced.
+app.get("/api/v1/org/acl-overview", async (c) => {
+	const allMailboxes = await listMailboxes(c.env.BUCKET);
+	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
+
+	return c.json({
+		mailboxes: allMailboxes.map((m, i) => {
+			const acl = acls[i];
+			return {
+				email: m.id,
+				acl_status: (acl ? "scoped" : "unscoped") as "scoped" | "unscoped",
+				owner: acl?.owner ?? null,
+				members: acl?.members ?? [],
+			};
+		}),
+	});
+});
+
 // -- Org-scope search (#197) ----------------------------------------
 
 /** Per-mailbox cap for org-search fan-out. We pull at most this many rows

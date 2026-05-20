@@ -246,6 +246,10 @@ const api = {
 	getOrgOverview: (opts?: { signal?: AbortSignal }) =>
 		get<OrgOverview>("/api/v1/org/overview", { signal: opts?.signal }),
 
+	// Org ACL overview (#292)
+	getOrgAclOverview: () =>
+		get<{ mailboxes: Array<{ email: string; acl_status: "scoped" | "unscoped"; owner: string | null; members: string[] }> }>("/api/v1/org/acl-overview"),
+
 	// Domains (#85). Domain identifiers are hostname-shaped (a-z, 0-9, hyphen,
 	// dot); they don't need encodeURIComponent for those characters, but we
 	// still encode defensively in case future IDN handling lands.

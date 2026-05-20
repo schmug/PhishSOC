@@ -30,6 +30,7 @@ export const queryKeys = {
 	org: {
 		overview: ["org", "overview"] as const,
 		settings: ["org", "settings"] as const,
+		aclOverview: ["org", "acl-overview"] as const,
 	},
 	effectiveMailboxSettings: (mailboxId: string) =>
 		["mailboxes", mailboxId, "settings", "effective"] as const,
