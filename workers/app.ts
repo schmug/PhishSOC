@@ -45,6 +45,15 @@ function getAccessUrls(teamDomain: string) {
 // Main app that wraps the API and adds React Router fallback
 const app = new Hono<{ Bindings: Env }>();
 
+// Global security headers
+app.use("*", async (c, next) => {
+	await next();
+	c.header("X-Frame-Options", "DENY");
+	c.header("X-Content-Type-Options", "nosniff");
+	c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+	c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+});
+
 // Step-up confirm endpoint — mounted BEFORE the CF Access middleware so that
 // the step-up JWT (audience = STEP_UP_AUD) is not rejected by the main-app
 // POLICY_AUD check. The route validates the step-up JWT itself.
