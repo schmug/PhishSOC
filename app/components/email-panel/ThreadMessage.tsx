@@ -37,7 +37,15 @@ interface ThreadMessageProps {
 	onPreviewImage?: (url: string, filename: string) => void;
 }
 
-function Avatar({ isDraft, isSelf, sender }: { isDraft?: boolean; isSelf: boolean; sender: string }) {
+function Avatar({
+	isDraft,
+	isSelf,
+	sender,
+}: {
+	isDraft?: boolean;
+	isSelf: boolean;
+	sender: string;
+}) {
 	return (
 		<div
 			className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
@@ -71,6 +79,7 @@ export default function ThreadMessage({
 	const isSelf = email.sender === mailboxEmail;
 	const containerClassName = `${!isLast ? "border-b border-line" : ""} ${isDraft ? "border-l-2 border-l-suspect bg-suspect/[0.02]" : ""}`;
 	const senderLabel = isDraft ? "Draft reply" : isSelf ? "You" : email.sender;
+	const contentId = `thread-message-content-${email.id}`;
 
 	if (!isExpanded) {
 		return (
@@ -79,6 +88,8 @@ export default function ThreadMessage({
 					type="button"
 					onClick={onToggleExpand}
 					className="w-full flex items-center gap-3 px-4 py-3 hover:bg-paper-2 rounded-lg text-left"
+					aria-expanded={isExpanded}
+					aria-controls={contentId}
 				>
 					<Avatar isDraft={isDraft} isSelf={isSelf} sender={email.sender} />
 					<div className="flex-1 min-w-0">
@@ -110,9 +121,15 @@ export default function ThreadMessage({
 							onClick={onToggleExpand}
 							className="shrink-0"
 							aria-label="Collapse message"
+							aria-expanded={isExpanded}
+							aria-controls={contentId}
 						>
 							<div className="cursor-pointer hover:ring-2 hover:ring-accent/30 transition-shadow rounded-full">
-								<Avatar isDraft={isDraft} isSelf={isSelf} sender={email.sender} />
+								<Avatar
+									isDraft={isDraft}
+									isSelf={isSelf}
+									sender={email.sender}
+								/>
 							</div>
 						</button>
 						<div className="min-w-0">
@@ -147,6 +164,8 @@ export default function ThreadMessage({
 							onClick={onToggleExpand}
 							className="ml-1"
 							aria-label="Collapse message"
+							aria-expanded={isExpanded}
+							aria-controls={contentId}
 						>
 							<CaretUpIcon
 								size={14}
@@ -156,7 +175,7 @@ export default function ThreadMessage({
 					</div>
 				</div>
 
-				<div className="md:ml-[42px]">
+				<div id={contentId} className="md:ml-[42px]">
 					<EmailIframe
 						body={rewriteInlineImages(
 							email.body || "",
