@@ -10,7 +10,7 @@
 import { createMiddleware } from "hono/factory";
 import type { MailboxDO } from "../durableObject";
 import type { Env } from "../types";
-import { readMailboxAcl, callerInAcl } from "./mailbox-acl";
+import { readMailboxAcl, callerInAcl, callerGroupsFromJwt } from "./mailbox-acl";
 
 export type MailboxContext = {
 	Bindings: Env;
@@ -25,6 +25,8 @@ export const requireMailbox = createMiddleware<MailboxContext>(async (c, next) =
 	const mailboxId = decodeURIComponent(rawId);
 
 	const callerEmail = c.req.header("cf-access-authenticated-user-email") ?? null;
+	// Groups sourced from the verified CF Access JWT (already checked by the global middleware).
+	const callerGroups = callerGroupsFromJwt(c.req.header("cf-access-jwt-assertion"));
 	const key = `mailboxes/${mailboxId}.json`;
 
 	// Parallel: existence check + ACL read (#27)
@@ -34,7 +36,7 @@ export const requireMailbox = createMiddleware<MailboxContext>(async (c, next) =
 	]);
 
 	if (!obj) return c.json({ error: "Not found" }, 404);
-	if (!callerInAcl(acl, callerEmail)) return c.json({ error: "Forbidden" }, 403);
+	if (!callerInAcl(acl, callerEmail, callerGroups)) return c.json({ error: "Forbidden" }, 403);
 
 	const ns = c.env.MAILBOX;
 	const id = ns.idFromName(mailboxId);

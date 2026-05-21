@@ -65,7 +65,7 @@ import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
 import { aggregateOrgSearch, type PerMailboxSearchResult } from "./lib/org-search";
-import { readMailboxAcl, writeMailboxAcl, deleteMailboxAcl, callerInAcl } from "./lib/mailbox-acl";
+import { readMailboxAcl, writeMailboxAcl, deleteMailboxAcl, callerInAcl, callerGroupsFromJwt } from "./lib/mailbox-acl";
 import { aclMemberRoutes } from "./routes/acl-members";
 import { fireYaraScan } from "./security/yaramail-signal";
 import { yaramailCallbackRoute } from "./routes/yaramail-callback";
@@ -254,6 +254,8 @@ app.get("/api/v1/ai/text-models", async (c) => {
 
 app.get("/api/v1/mailboxes", async (c) => {
 	const callerEmail = c.req.header("cf-access-authenticated-user-email") ?? null;
+	// Groups from the verified CF Access JWT — used for group-grant ACL checks (#295).
+	const callerGroups = callerGroupsFromJwt(c.req.header("cf-access-jwt-assertion"));
 	const allMailboxes = await listMailboxes(c.env.BUCKET);
 
 	// Read ACLs for all mailboxes — needed for acl_status (#241) in both branches.
@@ -268,10 +270,10 @@ app.get("/api/v1/mailboxes", async (c) => {
 		})));
 	}
 
-	// Filter to mailboxes the caller is allowed to see (#27).
+	// Filter to mailboxes the caller is allowed to see (#27, #295).
 	const visible = allMailboxes
 		.map((m, i) => ({ mailbox: m, acl: acls[i] }))
-		.filter(({ acl }) => callerInAcl(acl, callerEmail));
+		.filter(({ acl }) => callerInAcl(acl, callerEmail, callerGroups));
 	return c.json(visible.map(({ mailbox, acl }) => ({
 		...mailbox,
 		name: mailbox.id,
