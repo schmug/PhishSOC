@@ -16,7 +16,7 @@ import {
 } from "../lib/email-helpers";
 import { SendEmailRequestSchema } from "../lib/schemas";
 import { classifySend } from "../security/send-risk";
-import { verifyConfirmationToken, computePayloadHash } from "../lib/confirm-token";
+import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
 import { requireMailbox, type MailboxContext } from "../lib/mailbox";
 import { Folders } from "../../shared/folders";
 
@@ -50,35 +50,20 @@ sendEmailRoutes.post("/emails", async (c) => {
 		throw e;
 	}
 
-	const risk = classifySend({
-		to, cc, bcc, subject,
-		body: html || text || "",
-		attachments: attachments?.map((a) => ({ filename: a.filename })),
-		mailboxId,
-	});
-	if (risk.tier >= 1) {
-		const confirmationToken = c.req.header("x-confirmation-token");
-		if (!confirmationToken) {
-			return c.json({ error: "confirmation_required", risk }, 401);
-		}
-		const { CONFIRMATION_TOKEN_SECRET, BLOOM_KV } = c.env;
-		if (CONFIRMATION_TOKEN_SECRET && BLOOM_KV) {
-			const payloadHash = await computePayloadHash(
-				to,
-				subject,
-				html || text || "",
-				[],
-			);
-			const verified = await verifyConfirmationToken(
-				confirmationToken,
-				CONFIRMATION_TOKEN_SECRET,
-				mailboxId,
-				payloadHash,
-				BLOOM_KV,
-			);
-			if (!verified) return c.json({ error: "invalid or expired confirmation token" }, 401);
-		}
-	}
+	const gate = await enforceSendRiskConfirmation(
+		c.env,
+		c.req.header("x-confirmation-token"),
+		{
+			mailboxId,
+			to,
+			cc,
+			bcc,
+			subject,
+			body: html || text || "",
+			attachments: attachments?.map((a) => ({ filename: a.filename })),
+		},
+	);
+	if (!gate.ok) return c.json(gate.body, gate.status);
 
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 	const stub = c.var.mailboxStub;
