@@ -3,7 +3,11 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Banner, Button, Input } from "@cloudflare/kumo";
-import { FloppyDiskIcon, PaperPlaneTiltIcon, XIcon } from "@phosphor-icons/react";
+import {
+	FloppyDiskIcon,
+	PaperPlaneTiltIcon,
+	XIcon,
+} from "@phosphor-icons/react";
 import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
 import RichTextEditor from "./RichTextEditor";
@@ -41,16 +45,24 @@ export default function ComposePanel() {
 	} = useComposeForm(mailboxId, folder);
 
 	const sendTier = preflight?.tier ?? 0;
-	const sendLabel = sendTier === 2 ? "Send (verify)" : sendTier === 1 ? "Send (re-auth)" : "Send";
-	const sendTestId = sendTier === 2 ? "send-button-tier2" : sendTier === 1 ? "send-button-tier1" : "send-button-tier0";
+	const sendLabel =
+		sendTier === 2
+			? "Send (verify)"
+			: sendTier === 1
+				? "Send (re-auth)"
+				: "Send";
+	const sendTestId =
+		sendTier === 2
+			? "send-button-tier2"
+			: sendTier === 1
+				? "send-button-tier1"
+				: "send-button-tier0";
 	const primaryRecipient = to.split(/[,;]/)[0].trim();
 
 	return (
 		<div className="flex flex-col h-full bg-paper">
 			<div className="flex items-center justify-between px-4 py-3 border-b border-line shrink-0 md:px-6">
-				<h2 className="text-base font-semibold text-ink">
-					{formTitle}
-				</h2>
+				<h2 className="text-base font-semibold text-ink">{formTitle}</h2>
 				<div className="flex items-center gap-1">
 					<Button
 						variant="ghost"
@@ -73,11 +85,15 @@ export default function ComposePanel() {
 
 					<div className="space-y-3">
 						<div className="flex items-center gap-2">
-							<label className="text-sm font-medium text-ink-3 w-14 shrink-0">
+							<label
+								htmlFor="compose-to"
+								className="text-sm font-medium text-ink-3 w-14 shrink-0"
+							>
 								To
 							</label>
 							<div className="flex-1 flex items-center gap-2 min-w-0">
 								<Input
+									id="compose-to"
 									type="text"
 									placeholder="recipient@example.com"
 									size="sm"
@@ -99,11 +115,15 @@ export default function ComposePanel() {
 
 						{showCcBcc && (
 							<div className="flex items-center gap-2">
-								<label className="text-sm font-medium text-ink-3 w-14 shrink-0">
+								<label
+									htmlFor="compose-cc"
+									className="text-sm font-medium text-ink-3 w-14 shrink-0"
+								>
 									CC
 								</label>
 								<div className="flex-1">
 									<Input
+										id="compose-cc"
 										type="text"
 										size="sm"
 										value={cc}
@@ -116,11 +136,15 @@ export default function ComposePanel() {
 
 						{showCcBcc && (
 							<div className="flex items-center gap-2">
-								<label className="text-sm font-medium text-ink-3 w-14 shrink-0">
+								<label
+									htmlFor="compose-bcc"
+									className="text-sm font-medium text-ink-3 w-14 shrink-0"
+								>
 									BCC
 								</label>
 								<div className="flex-1">
 									<Input
+										id="compose-bcc"
 										type="text"
 										size="sm"
 										value={bcc}
@@ -132,11 +156,15 @@ export default function ComposePanel() {
 						)}
 
 						<div className="flex items-center gap-2">
-							<label className="text-sm font-medium text-ink-3 w-14 shrink-0">
+							<label
+								htmlFor="compose-subject"
+								className="text-sm font-medium text-ink-3 w-14 shrink-0"
+							>
 								Subject
 							</label>
 							<div className="flex-1">
 								<Input
+									id="compose-subject"
 									type="text"
 									placeholder="Email subject"
 									size="sm"
@@ -149,10 +177,7 @@ export default function ComposePanel() {
 					</div>
 
 					<div className="border border-line rounded-md overflow-hidden bg-paper">
-						<RichTextEditor
-							value={body}
-							onChange={setBody}
-						/>
+						<RichTextEditor value={body} onChange={setBody} />
 					</div>
 					{sendTier >= 2 && (
 						<div className="mt-2">
@@ -171,7 +196,13 @@ export default function ComposePanel() {
 				{/* Footer actions */}
 				<div className="mt-auto px-4 py-3 border-t border-line bg-paper-3/30 shrink-0 md:px-6">
 					<div className="flex items-center justify-between">
-						<Button type="button" variant="ghost" size="sm" onClick={closeCompose} disabled={isSending}>
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							onClick={closeCompose}
+							disabled={isSending}
+						>
 							Discard
 						</Button>
 						<div className="flex items-center gap-2">
