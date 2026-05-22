@@ -420,3 +420,11 @@ export interface HubInviteResponse {
 	token: string;
 	expires_at: string;
 }
+
+/** One row in the org ACL overview (#292). */
+export interface AclOverviewEntry {
+	email: string;
+	acl_status: "scoped" | "unscoped";
+	owner: string | null;
+	members: string[];
+}

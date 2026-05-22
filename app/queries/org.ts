@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import api from "~/services/api";
-import type { OrgOverview } from "~/types";
+import type { AclOverviewEntry, OrgOverview } from "~/types";
 import { queryKeys } from "./keys";
 
 export function useOrgOverview() {
@@ -12,5 +12,13 @@ export function useOrgOverview() {
 		// Server caches the merged result for 60s, so a 30s client stale window
 		// keeps navigation snappy without ever serving data older than ~90s.
 		staleTime: 30_000,
+	});
+}
+
+export function useOrgAclOverview() {
+	return useQuery<AclOverviewEntry[]>({
+		queryKey: queryKeys.org.aclOverview,
+		queryFn: ({ signal }) =>
+			api.getOrgAclOverview({ signal }) as Promise<AclOverviewEntry[]>,
 	});
 }

@@ -29,6 +29,7 @@ export const queryKeys = {
 	dashboard: (mailboxId: string) => ["dashboard", mailboxId] as const,
 	org: {
 		overview: ["org", "overview"] as const,
+		aclOverview: ["org", "acl-overview"] as const,
 		settings: ["org", "settings"] as const,
 	},
 	effectiveMailboxSettings: (mailboxId: string) =>

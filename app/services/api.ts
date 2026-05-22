@@ -3,6 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import type {
+	AclOverviewEntry,
 	DashboardSummary,
 	DomainListEntry,
 	DomainStats,
@@ -245,6 +246,10 @@ const api = {
 	// Org overview
 	getOrgOverview: (opts?: { signal?: AbortSignal }) =>
 		get<OrgOverview>("/api/v1/org/overview", { signal: opts?.signal }),
+	// Org ACL overview (#292). Returns every mailbox with acl_status, owner,
+	// and members. Accessible to any CF-Access-admitted caller (read-only).
+	getOrgAclOverview: (opts?: { signal?: AbortSignal }) =>
+		get<AclOverviewEntry[]>("/api/v1/org/acl-overview", { signal: opts?.signal }),
 
 	// Domains (#85). Domain identifiers are hostname-shaped (a-z, 0-9, hyphen,
 	// dot); they don't need encodeURIComponent for those characters, but we

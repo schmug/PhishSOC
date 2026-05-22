@@ -365,6 +365,33 @@ app.get("/api/v1/org/overview", async (c) => {
 	return c.json(overview);
 });
 
+/**
+ * Org-wide ACL access overview (#292).
+ *
+ * Authz model: any CF-Access-admitted caller. No org-admin role exists in
+ * this system; the CF Access policy is the org boundary — everyone admitted
+ * by CF Access is an org member (or the operator). This is intentional and
+ * consistent with /api/v1/org/overview, which also returns org-wide data to
+ * any authenticated caller. Callers without a CF Access header (local dev)
+ * receive the same data — same behaviour as all other org endpoints.
+ *
+ * Read-only: this endpoint never mutates ACLs.
+ */
+app.get("/api/v1/org/acl-overview", async (c) => {
+	const mailboxes = await listMailboxes(c.env.BUCKET);
+	const acls = await Promise.all(mailboxes.map((m) => readMailboxAcl(c.env, m.id)));
+	const result = mailboxes.map((m, i) => {
+		const acl = acls[i];
+		return {
+			email: m.email,
+			acl_status: acl ? ("scoped" as const) : ("unscoped" as const),
+			owner: acl ? acl.owner : null,
+			members: acl ? acl.members : [],
+		};
+	});
+	return c.json(result);
+});
+
 // -- Org-scope search (#197) ----------------------------------------
 
 /** Per-mailbox cap for org-search fan-out. We pull at most this many rows
