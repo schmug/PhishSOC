@@ -15,6 +15,7 @@ import {
 	resolveOriginalEmail,
 } from "../lib/email-helpers";
 import { SendEmailRequestSchema } from "../lib/schemas";
+import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
 import { Folders } from "../../shared/folders";
 import type { MailboxContext } from "../lib/mailbox";
 
@@ -26,6 +27,21 @@ export async function handleReplyEmail(c: AppContext) {
 	const id = c.req.param("id") ?? "";
 	const body = SendEmailRequestSchema.parse(await c.req.json());
 	const { to, cc, bcc, from, subject, html, text, attachments } = body;
+
+	const gate = await enforceSendRiskConfirmation(
+		c.env,
+		c.req.header("x-confirmation-token"),
+		{
+			mailboxId,
+			to,
+			cc,
+			bcc,
+			subject,
+			body: html || text || "",
+			attachments: attachments?.map((a) => ({ filename: a.filename })),
+		},
+	);
+	if (!gate.ok) return c.json(gate.body, gate.status);
 
 	const stub = c.var.mailboxStub;
 	const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
@@ -117,6 +133,21 @@ export async function handleForwardEmail(c: AppContext) {
 	const id = c.req.param("id") ?? "";
 	const body = SendEmailRequestSchema.parse(await c.req.json());
 	const { to, cc, bcc, from, subject, html, text, attachments } = body;
+
+	const gate = await enforceSendRiskConfirmation(
+		c.env,
+		c.req.header("x-confirmation-token"),
+		{
+			mailboxId,
+			to,
+			cc,
+			bcc,
+			subject,
+			body: html || text || "",
+			attachments: attachments?.map((a) => ({ filename: a.filename })),
+		},
+	);
+	if (!gate.ok) return c.json(gate.body, gate.status);
 
 	const stub = c.var.mailboxStub;
 	const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
