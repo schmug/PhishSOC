@@ -3,7 +3,7 @@
 import { Button, Input, Loader } from "@cloudflare/kumo";
 import { LockIcon, UserIcon, XIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import { useLockDownMailbox, useMailboxAcl, useAddAclMember, useRemoveAclMember, useTransferAclOwnership } from "~/queries/mailboxes";
+import { useLockDownMailbox, useMailboxAcl, useAddAclMember, useRemoveAclMember, useTransferAclOwnership, useAddAclGroup, useRemoveAclGroup } from "~/queries/mailboxes";
 import { ApiError } from "~/services/api";
 
 interface AclMembersPanelProps {
@@ -16,11 +16,16 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	const addMember = useAddAclMember(mailboxId);
 	const removeMember = useRemoveAclMember(mailboxId);
 	const transferOwnership = useTransferAclOwnership(mailboxId);
+	const addGroup = useAddAclGroup(mailboxId);
+	const removeGroup = useRemoveAclGroup(mailboxId);
 
 	const [newEmail, setNewEmail] = useState("");
 	const [addError, setAddError] = useState<string | null>(null);
 	const [removeError, setRemoveError] = useState<string | null>(null);
 	const [transferError, setTransferError] = useState<string | null>(null);
+	const [newGroup, setNewGroup] = useState("");
+	const [addGroupError, setAddGroupError] = useState<string | null>(null);
+	const [removeGroupError, setRemoveGroupError] = useState<string | null>(null);
 
 	if (isLoading || acl === undefined) {
 		return (
@@ -86,6 +91,27 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 			await transferOwnership.mutateAsync(email);
 		} catch (err) {
 			setTransferError(err instanceof ApiError ? err.message : "Failed to transfer ownership");
+		}
+	};
+
+	const handleAddGroup = async () => {
+		setAddGroupError(null);
+		const group = newGroup.trim();
+		if (!group) return;
+		try {
+			await addGroup.mutateAsync(group);
+			setNewGroup("");
+		} catch (err) {
+			setAddGroupError(err instanceof ApiError ? err.message : "Failed to add group");
+		}
+	};
+
+	const handleRemoveGroup = async (group: string) => {
+		setRemoveGroupError(null);
+		try {
+			await removeGroup.mutateAsync(group);
+		} catch (err) {
+			setRemoveGroupError(err instanceof ApiError ? err.message : "Failed to remove group");
 		}
 	};
 
@@ -164,6 +190,55 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 				{addError && (
 					<p className="mt-1 text-xs text-red-600" data-testid="add-error">{addError}</p>
 				)}
+			</div>
+
+			<div>
+				<div className="text-xs text-ink-3 mb-2">Groups</div>
+				<ul className="space-y-1" data-testid="acl-groups-list">
+					{acl.groups.map((group) => (
+						<li key={group} className="flex items-center justify-between gap-2">
+							<span className="text-sm text-ink truncate">{group}</span>
+							<button
+								type="button"
+								aria-label={`Remove group ${group}`}
+								data-testid={`remove-group-${group}`}
+								className="text-ink-3 hover:text-red-600 shrink-0"
+								disabled={removeGroup.isPending}
+								onClick={() => handleRemoveGroup(group)}
+							>
+								<XIcon size={14} />
+							</button>
+						</li>
+					))}
+				</ul>
+				{removeGroupError && (
+					<p className="mt-1 text-xs text-red-600" data-testid="remove-group-error">{removeGroupError}</p>
+				)}
+				<div className="flex gap-2 mt-2">
+					<Input
+						type="text"
+						placeholder="soc-analysts"
+						value={newGroup}
+						onChange={(e) => setNewGroup(e.target.value)}
+						onKeyDown={(e) => { if (e.key === "Enter") handleAddGroup(); }}
+						data-testid="add-group-input"
+					/>
+					<Button
+						variant="secondary"
+						size="sm"
+						loading={addGroup.isPending}
+						onClick={handleAddGroup}
+						data-testid="add-group-btn"
+					>
+						Add
+					</Button>
+				</div>
+				{addGroupError && (
+					<p className="mt-1 text-xs text-red-600" data-testid="add-group-error">{addGroupError}</p>
+				)}
+				<p className="mt-1 text-xs text-ink-3" data-testid="acl-groups-note">
+					Group names must match names defined in your Cloudflare Access dashboard
+				</p>
 			</div>
 		</div>
 	);

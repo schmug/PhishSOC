@@ -145,13 +145,17 @@ const api = {
 	lockDownAllMailboxes: () =>
 		post<{ locked: number; skipped: number; errors: string[] }>("/api/v1/mailboxes/bulk-lockdown"),
 	getMailboxAcl: (mailboxId: string) =>
-		get<{ owner: string; members: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl`),
+		get<{ owner: string; members: string[]; groups: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl`),
 	addAclMember: (mailboxId: string, email: string) =>
-		post<{ owner: string; members: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl/members`, { email }),
+		post<{ owner: string; members: string[]; groups: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl/members`, { email }),
 	removeAclMember: (mailboxId: string, email: string) =>
-		del<{ owner: string; members: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl/members/${encodeURIComponent(email)}`),
+		del<{ owner: string; members: string[]; groups: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl/members/${encodeURIComponent(email)}`),
 	transferAclOwnership: (mailboxId: string, email: string) =>
-		post<{ owner: string; members: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, { email }),
+		post<{ owner: string; members: string[]; groups: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, { email }),
+	addAclGroup: (mailboxId: string, group: string) =>
+		post<{ owner: string; members: string[]; groups: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl/groups`, { group }),
+	removeAclGroup: (mailboxId: string, group: string) =>
+		del<{ owner: string; members: string[]; groups: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl/groups/${encodeURIComponent(group)}`),
 	// Org-level settings (#106). Backed by R2 key org/settings.json behind a
 	// module-scope ETag cache; the GET returns the raw blob (or {} if missing),
 	// PUT validates through the OrgSettings Zod schema worker-side.
