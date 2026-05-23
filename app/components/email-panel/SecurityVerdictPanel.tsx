@@ -44,6 +44,7 @@ export default function SecurityVerdictPanel({ email }: { email: Email }) {
 					type="button"
 					className="w-full flex items-center gap-2 px-3 py-2 text-left"
 					onClick={() => setExpanded((e) => !e)}
+					aria-expanded={expanded}
 				>
 					<span className={iconColorClass}>{icon}</span>
 					<span className="font-medium text-ink">{headline}</span>

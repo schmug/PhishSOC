@@ -79,6 +79,7 @@ export default function ThreadMessage({
 					type="button"
 					onClick={onToggleExpand}
 					className="w-full flex items-center gap-3 px-4 py-3 hover:bg-paper-2 rounded-lg text-left"
+					aria-expanded={isExpanded}
 				>
 					<Avatar isDraft={isDraft} isSelf={isSelf} sender={email.sender} />
 					<div className="flex-1 min-w-0">
@@ -110,6 +111,7 @@ export default function ThreadMessage({
 							onClick={onToggleExpand}
 							className="shrink-0"
 							aria-label="Collapse message"
+							aria-expanded={isExpanded}
 						>
 							<div className="cursor-pointer hover:ring-2 hover:ring-accent/30 transition-shadow rounded-full">
 								<Avatar isDraft={isDraft} isSelf={isSelf} sender={email.sender} />
@@ -147,6 +149,7 @@ export default function ThreadMessage({
 							onClick={onToggleExpand}
 							className="ml-1"
 							aria-label="Collapse message"
+							aria-expanded={isExpanded}
 						>
 							<CaretUpIcon
 								size={14}
