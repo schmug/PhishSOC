@@ -2,9 +2,18 @@
 
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import { callerInAcl, readMailboxAcl, writeMailboxAcl, deleteMailboxAcl } from "../../workers/lib/mailbox-acl";
+import { callerInAcl, callerGroupsFromJwt, readMailboxAcl, writeMailboxAcl, deleteMailboxAcl } from "../../workers/lib/mailbox-acl";
 import type { MailboxAcl } from "../../workers/lib/mailbox-acl";
 import { requireMailbox } from "../../workers/lib/mailbox";
+
+// Helper: build a fake (unsigned) JWT carrying the given groups claim.
+// decodeJwt from jose just base64url-decodes the payload — no sig check needed.
+function makeFakeGroupJwt(groups: string[]): string {
+	const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+	const header = b64url('{"alg":"none"}');
+	const payload = b64url(JSON.stringify({ groups }));
+	return `${header}.${payload}.`;
+}
 
 // ---------------------------------------------------------------------------
 // callerInAcl — pure function, no mocking needed
@@ -221,5 +230,159 @@ describe("requireMailbox — ACL enforcement", () => {
 		const app = makeFakeMailboxApp(store, "ALICE@EXAMPLE.COM");
 		const res = await app.fetch("/mailboxes/alice@example.com/test");
 		expect(res.status).toBe(200);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// callerInAcl — group-grant tests (#295)
+// ---------------------------------------------------------------------------
+
+describe("callerInAcl — group grants (#295)", () => {
+	const aclWithGroups: MailboxAcl = {
+		owner: "alice@example.com",
+		members: ["alice@example.com"],
+		groups: ["soc-analysts"],
+	};
+
+	it("grants access to a caller whose group is in acl.groups", () => {
+		expect(callerInAcl(aclWithGroups, "bob@example.com", ["soc-analysts"])).toBe(true);
+	});
+
+	it("denies access to a caller not in members and not in any granted group", () => {
+		expect(callerInAcl(aclWithGroups, "eve@example.com", ["other-group"])).toBe(false);
+		expect(callerInAcl(aclWithGroups, "eve@example.com", [])).toBe(false);
+	});
+
+	it("email membership still works unchanged when groups are also present", () => {
+		expect(callerInAcl(aclWithGroups, "alice@example.com", [])).toBe(true);
+	});
+
+	it("no-ACL backwards-compat path still allows anyone", () => {
+		expect(callerInAcl(null, "bob@example.com", ["soc-analysts"])).toBe(true);
+	});
+
+	it("email-only ACL (no groups field) denies a caller not in members", () => {
+		const emailOnly: MailboxAcl = { owner: "alice@example.com", members: ["alice@example.com"] };
+		expect(callerInAcl(emailOnly, "bob@example.com", ["soc-analysts"])).toBe(false);
+	});
+
+	it("empty groups array on ACL denies group callers", () => {
+		const emptyGroups: MailboxAcl = {
+			owner: "alice@example.com",
+			members: ["alice@example.com"],
+			groups: [],
+		};
+		expect(callerInAcl(emptyGroups, "bob@example.com", ["soc-analysts"])).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// callerGroupsFromJwt (#295)
+// ---------------------------------------------------------------------------
+
+describe("callerGroupsFromJwt (#295)", () => {
+	it("returns [] for null/undefined/empty token", () => {
+		expect(callerGroupsFromJwt(null)).toEqual([]);
+		expect(callerGroupsFromJwt(undefined)).toEqual([]);
+		expect(callerGroupsFromJwt("")).toEqual([]);
+	});
+
+	it("returns [] for a malformed token", () => {
+		expect(callerGroupsFromJwt("not.a.jwt")).toEqual([]);
+		expect(callerGroupsFromJwt("bad")).toEqual([]);
+	});
+
+	it("returns groups from a valid fake JWT", () => {
+		const jwt = makeFakeGroupJwt(["soc-analysts", "admins"]);
+		expect(callerGroupsFromJwt(jwt)).toEqual(["soc-analysts", "admins"]);
+	});
+
+	it("returns [] when JWT payload has no groups claim", () => {
+		const jwt = makeFakeGroupJwt([]);
+		expect(callerGroupsFromJwt(jwt)).toEqual([]);
+	});
+
+	it("filters out non-string group entries", () => {
+		const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+		const header = b64url('{"alg":"none"}');
+		const payload = b64url(JSON.stringify({ groups: ["soc", 42, null, "admins"] }));
+		const jwt = `${header}.${payload}.`;
+		expect(callerGroupsFromJwt(jwt)).toEqual(["soc", "admins"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// requireMailbox — group-grant integration (#295)
+// ---------------------------------------------------------------------------
+
+function makeFakeMailboxAppWithJwt(
+	bucketStore: Record<string, string>,
+	callerEmail: string | null,
+	jwtToken: string | null = null,
+) {
+	const bucket = makeFullR2Stub(bucketStore);
+	const mailboxStub = { id: "fake-do-id" };
+	const MAILBOX = {
+		idFromName: (_name: string) => "fake-id",
+		get: (_id: unknown) => mailboxStub,
+	};
+
+	const app = new Hono<{ Bindings: { BUCKET: typeof bucket; MAILBOX: typeof MAILBOX } }>();
+	app.use("/mailboxes/:mailboxId/*", requireMailbox as Parameters<typeof app.use>[1]);
+	app.get("/mailboxes/:mailboxId/test", (c) => c.json({ ok: true }));
+
+	return {
+		fetch: (path: string) => {
+			const headers: Record<string, string> = {};
+			if (callerEmail) headers["cf-access-authenticated-user-email"] = callerEmail;
+			if (jwtToken) headers["cf-access-jwt-assertion"] = jwtToken;
+			return app.request(
+				path,
+				{ headers },
+				{ BUCKET: bucket as unknown as R2Bucket, MAILBOX: MAILBOX as unknown as DurableObjectNamespace },
+			);
+		},
+	};
+}
+
+describe("requireMailbox — group-grant ACL (#295)", () => {
+	const mailboxKey = "mailboxes/alice@example.com.json";
+	const aclKey = "mailboxes-acl/alice@example.com.json";
+	const groupAcl: MailboxAcl = {
+		owner: "alice@example.com",
+		members: ["alice@example.com"],
+		groups: ["soc-analysts"],
+	};
+
+	it("allows a caller in a granted group (group membership from JWT)", async () => {
+		const store = {
+			[mailboxKey]: "{}",
+			[aclKey]: JSON.stringify(groupAcl),
+		};
+		const jwt = makeFakeGroupJwt(["soc-analysts"]);
+		const app = makeFakeMailboxAppWithJwt(store, "bob@example.com", jwt);
+		const res = await app.fetch("/mailboxes/alice@example.com/test");
+		expect(res.status).toBe(200);
+	});
+
+	it("denies a caller not in members and not in any granted group", async () => {
+		const store = {
+			[mailboxKey]: "{}",
+			[aclKey]: JSON.stringify(groupAcl),
+		};
+		const jwt = makeFakeGroupJwt(["other-team"]);
+		const app = makeFakeMailboxAppWithJwt(store, "eve@example.com", jwt);
+		const res = await app.fetch("/mailboxes/alice@example.com/test");
+		expect(res.status).toBe(403);
+	});
+
+	it("denies a caller with no JWT and not in members", async () => {
+		const store = {
+			[mailboxKey]: "{}",
+			[aclKey]: JSON.stringify(groupAcl),
+		};
+		const app = makeFakeMailboxAppWithJwt(store, "eve@example.com", null);
+		const res = await app.fetch("/mailboxes/alice@example.com/test");
+		expect(res.status).toBe(403);
 	});
 });

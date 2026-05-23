@@ -34,7 +34,7 @@ aclMemberRoutes.get("/", async (c) => {
 	if (callerEmail !== null && callerEmail !== acl.owner) {
 		return c.json({ error: "Forbidden" }, 403);
 	}
-	return c.json({ owner: acl.owner, members: acl.members });
+	return c.json({ owner: acl.owner, members: acl.members, groups: acl.groups ?? [] });
 });
 
 /**
@@ -134,7 +134,57 @@ aclMemberRoutes.delete("/members/:memberEmail", async (c) => {
 	const updated = {
 		owner: acl.owner,
 		members: acl.members.filter((m) => m !== memberEmail),
+		groups: acl.groups,
 	};
 	await writeMailboxAcl(c.env, mailboxId, updated);
-	return c.json({ owner: updated.owner, members: updated.members });
+	return c.json({ owner: updated.owner, members: updated.members, groups: updated.groups ?? [] });
+});
+
+/**
+ * Add a CF Access group name to the mailbox ACL (#295). Idempotent.
+ * The group name must match the name shown in the Cloudflare Access dashboard.
+ * Owner-only.
+ */
+aclMemberRoutes.post("/groups", async (c) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const callerEmail =
+		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+
+	const acl = await readMailboxAcl(c.env, mailboxId);
+	if (!acl || callerEmail !== acl.owner) {
+		return c.json({ error: "Forbidden" }, 403);
+	}
+
+	const body = (await c.req.json().catch(() => ({}))) as { group?: unknown };
+	const rawGroup = typeof body.group === "string" ? body.group.trim() : "";
+	if (!rawGroup) return c.json({ error: "Group name required" }, 400);
+
+	const existingGroups = acl.groups ?? [];
+	if (existingGroups.includes(rawGroup)) {
+		return c.json({ owner: acl.owner, members: acl.members, groups: existingGroups });
+	}
+
+	const updated = { ...acl, groups: [...existingGroups, rawGroup] };
+	await writeMailboxAcl(c.env, mailboxId, updated);
+	return c.json({ owner: updated.owner, members: updated.members, groups: updated.groups });
+});
+
+/** Remove a CF Access group name from the mailbox ACL. Owner-only. */
+aclMemberRoutes.delete("/groups/:groupName", async (c) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const callerEmail =
+		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+	const groupName = decodeURIComponent(c.req.param("groupName")!);
+
+	const acl = await readMailboxAcl(c.env, mailboxId);
+	if (!acl || callerEmail !== acl.owner) {
+		return c.json({ error: "Forbidden" }, 403);
+	}
+
+	const updated = {
+		...acl,
+		groups: (acl.groups ?? []).filter((g) => g !== groupName),
+	};
+	await writeMailboxAcl(c.env, mailboxId, updated);
+	return c.json({ owner: updated.owner, members: updated.members, groups: updated.groups ?? [] });
 });
