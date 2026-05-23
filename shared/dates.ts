@@ -15,11 +15,52 @@ function safeParse(dateStr: string | undefined | null): Date | null {
 	if (!dateStr) return null;
 	try {
 		const d = new Date(dateStr);
-		return isNaN(d.getTime()) ? null : d;
+		return Number.isNaN(d.getTime()) ? null : d;
 	} catch {
 		return null;
 	}
 }
+
+// ⚡ Bolt: Cache Intl.DateTimeFormat instances to prevent expensive instantiations
+// inside loops (e.g. mapping over a large list of emails).
+const listTimeFormatter = new Intl.DateTimeFormat(undefined, {
+	hour: "numeric",
+	minute: "2-digit",
+});
+
+const listDateThisYearFormatter = new Intl.DateTimeFormat(undefined, {
+	month: "short",
+	day: "numeric",
+});
+
+const listDateOlderFormatter = new Intl.DateTimeFormat(undefined, {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+});
+
+const detailDateFormatter = new Intl.DateTimeFormat(undefined, {
+	weekday: "short",
+	month: "short",
+	day: "numeric",
+	hour: "numeric",
+	minute: "2-digit",
+});
+
+const shortDateFormatter = new Intl.DateTimeFormat(undefined, {
+	hour: "numeric",
+	minute: "2-digit",
+});
+
+const quotedDateFormatter = new Intl.DateTimeFormat("en-US", {
+	weekday: "short",
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+	hour: "numeric",
+	minute: "2-digit",
+	hour12: true,
+});
 
 /**
  * Email list rows.
@@ -33,22 +74,12 @@ export function formatListDate(dateStr: string): string {
 
 	const now = new Date();
 	if (date.toDateString() === now.toDateString()) {
-		return date.toLocaleTimeString(undefined, {
-			hour: "numeric",
-			minute: "2-digit",
-		});
+		return listTimeFormatter.format(date);
 	}
 	if (date.getFullYear() === now.getFullYear()) {
-		return date.toLocaleDateString(undefined, {
-			month: "short",
-			day: "numeric",
-		});
+		return listDateThisYearFormatter.format(date);
 	}
-	return date.toLocaleDateString(undefined, {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	});
+	return listDateOlderFormatter.format(date);
 }
 
 /**
@@ -59,13 +90,7 @@ export function formatDetailDate(dateStr: string): string {
 	const date = safeParse(dateStr);
 	if (!date) return dateStr;
 
-	return date.toLocaleDateString(undefined, {
-		weekday: "short",
-		month: "short",
-		day: "numeric",
-		hour: "numeric",
-		minute: "2-digit",
-	});
+	return detailDateFormatter.format(date);
 }
 
 /**
@@ -76,10 +101,7 @@ export function formatShortDate(dateStr: string): string {
 	const date = safeParse(dateStr);
 	if (!date) return dateStr;
 
-	return date.toLocaleTimeString(undefined, {
-		hour: "numeric",
-		minute: "2-digit",
-	});
+	return shortDateFormatter.format(date);
 }
 
 /**
@@ -94,13 +116,5 @@ export function formatQuotedDate(dateStr: string | undefined): string {
 	const date = safeParse(dateStr);
 	if (!date) return dateStr;
 
-	return date.toLocaleString("en-US", {
-		weekday: "short",
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-		hour: "numeric",
-		minute: "2-digit",
-		hour12: true,
-	});
+	return quotedDateFormatter.format(date);
 }
