@@ -62,6 +62,19 @@ export interface FolderPolicy {
 	treat_as_verified?: boolean;
 }
 
+/**
+ * Per-detector enable/disable controls (issue #26). Absent key = enabled
+ * (matches the absent-key-inherits convention for security features whose
+ * default is "on" for new mailboxes where false-positive risk is low).
+ */
+export interface DetectorSettings {
+	sender_graph?: {
+		/** When false, the BEC / display-name impersonation detector is
+		 *  disabled for this mailbox. Defaults to true. */
+		enabled?: boolean;
+	};
+}
+
 export interface MailboxSecuritySettings {
 	enabled: boolean;
 	thresholds: VerdictThresholds;
@@ -119,6 +132,8 @@ export interface MailboxSecuritySettings {
 	 * mailbox never silently ingests forensic reports.
 	 */
 	ruf_ingestion: RufIngestionSettings;
+	/** Issue #26: per-mailbox detector on/off controls. */
+	detectors: DetectorSettings;
 }
 
 /**
@@ -153,6 +168,10 @@ export const DEFAULT_RUF_INGESTION_SETTINGS: RufIngestionSettings = {
 	retain_raw: false,
 };
 
+export const DEFAULT_DETECTOR_SETTINGS: DetectorSettings = {
+	sender_graph: { enabled: true },
+};
+
 export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	enabled: false, // opt-in — existing mailboxes are unaffected until the user flips this
 	thresholds: DEFAULT_THRESHOLDS,
@@ -169,4 +188,5 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	min_confidence_for_quarantine: 0.6,
 	mitigations: DEFAULT_MITIGATION_CONFIG,
 	ruf_ingestion: DEFAULT_RUF_INGESTION_SETTINGS,
+	detectors: DEFAULT_DETECTOR_SETTINGS,
 };

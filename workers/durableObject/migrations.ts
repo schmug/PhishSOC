@@ -479,4 +479,23 @@ export const mailboxMigrations: Migration[] = [
 		name: "21_emails_created_by",
 		sql: `ALTER TABLE emails ADD COLUMN created_by TEXT DEFAULT 'user';`,
 	},
+	{
+		// Per-mailbox sender graph for BEC / display-name impersonation
+		// detection (issue #26). Tracks (display_name, sender_address) pairs
+		// so the SenderGraphDetector can flag new addresses claiming a display
+		// name already associated with a different address in this mailbox.
+		// Per-DO scope keeps tenant isolation intact.
+		name: "22_sender_graph",
+		sql: `
+            CREATE TABLE IF NOT EXISTS sender_graph (
+                sender_name TEXT NOT NULL,
+                sender_address TEXT NOT NULL,
+                message_count INTEGER NOT NULL DEFAULT 1,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                PRIMARY KEY (sender_name, sender_address)
+            );
+            CREATE INDEX IF NOT EXISTS idx_sender_graph_name ON sender_graph(sender_name);
+        `,
+	},
 ];

@@ -102,6 +102,25 @@ export const senderReputation = sqliteTable("sender_reputation", {
 	flagged: integer("flagged").notNull().default(0),
 });
 
+// Per-mailbox sender graph for BEC / display-name impersonation detection
+// (issue #26). Each row records how many times a given display name was
+// seen arriving from a particular email address. The detector flags when a
+// new address claims a display name that already has history from different
+// addresses.
+export const senderGraph = sqliteTable(
+	"sender_graph",
+	{
+		sender_name: text("sender_name").notNull(),
+		sender_address: text("sender_address").notNull(),
+		message_count: integer("message_count").notNull().default(1),
+		first_seen: text("first_seen").notNull(),
+		last_seen: text("last_seen").notNull(),
+	},
+	(t) => ({
+		pk: primaryKey({ columns: [t.sender_name, t.sender_address] }),
+	}),
+);
+
 // ── Threat intel ─────────────────────────────────────────────────
 
 export const intelFeedState = sqliteTable("intel_feed_state", {
