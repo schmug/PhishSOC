@@ -65,6 +65,13 @@ export async function enforceSendRiskConfirmation(
 		if (!verified) {
 			return { ok: false, status: 401, body: { error: "invalid or expired confirmation token" } };
 		}
+		if (verified.tier < risk.tier) {
+			return {
+				ok: false,
+				status: 401,
+				body: { error: "confirmation_tier_insufficient", risk },
+			};
+		}
 	}
 
 	return { ok: true, risk };
