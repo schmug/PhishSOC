@@ -11,6 +11,7 @@ import EmailPanelToolbar from "~/components/email-panel/EmailPanelToolbar";
 import SingleMessageView from "~/components/email-panel/SingleMessageView";
 import ThreadMessage from "~/components/email-panel/ThreadMessage";
 import { useFeedback } from "~/lib/feedback";
+import { requestStepUpConfirmation } from "~/lib/step-up-confirm";
 import { htmlToPlainText, splitEmailList, toEmailListValue } from "~/lib/utils";
 import api from "~/services/api";
 import { useDeleteEmail, useEmail, useMoveEmail, useReplyToEmail, useSendEmail, useThreadReplies, useUpdateEmail } from "~/queries/emails";
@@ -127,7 +128,31 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 				html: target.body || "",
 				text: target.body ? htmlToPlainText(target.body) : "",
 			};
-			if (originalEmail) await replyMut.mutateAsync({ mailboxId, emailId: originalEmail.id, email: emailData }); else await sendEmailMut.mutateAsync({ mailboxId, email: emailData });
+			let sendTier: 0 | 1 | 2 = 0;
+			try {
+				const preflight = await api.preflightEmail(mailboxId, {
+					to: target.recipient,
+					from: mailboxId,
+					subject: emailData.subject,
+					text: htmlToPlainText(emailData.html) || " ",
+				});
+				sendTier = preflight.tier;
+			} catch {
+				// Network error — fall through as Tier 0, matching composer policy.
+			}
+			let confirmationToken: string | undefined;
+			if (sendTier >= 1) {
+				feedback.info("Verifying step-up authentication…");
+				confirmationToken = await requestStepUpConfirmation({
+					tier: sendTier,
+					mailboxId,
+					to: emailData.to ?? "",
+					subject: emailData.subject,
+					body: emailData.html || emailData.text || "",
+					attachmentIds: [],
+				});
+			}
+			if (originalEmail) await replyMut.mutateAsync({ mailboxId, emailId: originalEmail.id, email: emailData, confirmationToken }); else await sendEmailMut.mutateAsync({ mailboxId, email: emailData, confirmationToken });
 			await deleteEmailMut.mutateAsync({ mailboxId, id: target.id });
 			feedback.success("Email sent!");
 			if (isDraftFolder) closePanel();
