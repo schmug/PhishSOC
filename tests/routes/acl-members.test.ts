@@ -334,3 +334,125 @@ describe("POST /acl/transfer — ownership transfer", () => {
 		expect(stored.owner).toBe("bob@example.com");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/mailboxes/:mailboxId/acl/groups — add group (#307)
+// ---------------------------------------------------------------------------
+
+describe("POST /acl/groups — add group", () => {
+	it("owner adds a new group → 200 with updated ACL including the group", async () => {
+		const { fetch, bucket } = makeApp(storeWithAcl(aliceOnlyAcl), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/groups`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ group: "soc-analysts" }),
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		expect(body.groups).toContain("soc-analysts");
+		// Persisted to R2
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.groups).toContain("soc-analysts");
+	});
+
+	it("idempotent: POST with already-present group → 200, no duplicate in groups", async () => {
+		const aclWithGroup: MailboxAcl = {
+			owner: "alice@example.com",
+			members: ["alice@example.com"],
+			groups: ["soc-analysts"],
+		};
+		const { fetch, bucket } = makeApp(storeWithAcl(aclWithGroup), "alice@example.com");
+		const before = bucket._store[aclKey];
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/groups`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ group: "soc-analysts" }),
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		const count = body.groups?.filter((g) => g === "soc-analysts").length ?? 0;
+		expect(count).toBe(1);
+		// R2 was not written (no change)
+		expect(bucket._store[aclKey]).toBe(before);
+	});
+
+	it("non-owner admitted caller → 403", async () => {
+		// Bob is in members (requireMailbox passes) but is not the owner.
+		const { fetch } = makeApp(storeWithAcl(aliceAndBobAcl), "bob@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/groups`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ group: "soc-analysts" }),
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it("missing group field → 400", async () => {
+		const { fetch } = makeApp(storeWithAcl(aliceOnlyAcl), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/groups`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(res.status).toBe(400);
+		const body = await res.json() as { error: string };
+		expect(body.error).toBeTruthy();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/v1/mailboxes/:mailboxId/acl/groups/:groupName — remove group (#307)
+// ---------------------------------------------------------------------------
+
+describe("DELETE /acl/groups/:groupName — remove group", () => {
+	it("owner removes an existing group → 200 with updated ACL", async () => {
+		const aclWithGroup: MailboxAcl = {
+			owner: "alice@example.com",
+			members: ["alice@example.com"],
+			groups: ["soc-analysts"],
+		};
+		const { fetch, bucket } = makeApp(storeWithAcl(aclWithGroup), "alice@example.com");
+		const res = await fetch(
+			`/api/v1/mailboxes/${mailboxId}/acl/groups/soc-analysts`,
+			{ method: "DELETE" },
+		);
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		expect(body.groups).not.toContain("soc-analysts");
+		// Persisted to R2
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.groups).not.toContain("soc-analysts");
+	});
+
+	it("non-owner admitted caller → 403", async () => {
+		// Bob is in members (requireMailbox passes) but is not the owner.
+		const aclWithGroup: MailboxAcl = {
+			owner: "alice@example.com",
+			members: ["alice@example.com", "bob@example.com"],
+			groups: ["soc-analysts"],
+		};
+		const { fetch } = makeApp(storeWithAcl(aclWithGroup), "bob@example.com");
+		const res = await fetch(
+			`/api/v1/mailboxes/${mailboxId}/acl/groups/soc-analysts`,
+			{ method: "DELETE" },
+		);
+		expect(res.status).toBe(403);
+	});
+
+	it("group name is URL-decoded from path param", async () => {
+		const aclWithGroup: MailboxAcl = {
+			owner: "alice@example.com",
+			members: ["alice@example.com"],
+			groups: ["soc analysts"],
+		};
+		const { fetch, bucket } = makeApp(storeWithAcl(aclWithGroup), "alice@example.com");
+		const encoded = encodeURIComponent("soc analysts");
+		const res = await fetch(
+			`/api/v1/mailboxes/${mailboxId}/acl/groups/${encoded}`,
+			{ method: "DELETE" },
+		);
+		expect(res.status).toBe(200);
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.groups).not.toContain("soc analysts");
+	});
+});

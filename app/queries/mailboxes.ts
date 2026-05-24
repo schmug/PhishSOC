@@ -81,11 +81,12 @@ export function useLockDownAllMailboxes() {
 }
 
 export function useMailboxAcl(mailboxId: string | undefined) {
-	return useQuery<{ owner: string; members: string[] } | null>({
+	return useQuery<{ owner: string; members: string[]; groups: string[] } | null>({
 		queryKey: mailboxId ? queryKeys.mailboxes.acl(mailboxId) : ["mailboxes", "_acl_disabled"],
 		queryFn: async () => {
 			try {
-				return await api.getMailboxAcl(mailboxId!) as { owner: string; members: string[] };
+				const result = await api.getMailboxAcl(mailboxId!);
+				return { ...result, groups: result.groups ?? [] };
 			} catch (err) {
 				if (err instanceof ApiError && err.status === 404) return null;
 				throw err;
@@ -119,6 +120,26 @@ export function useTransferAclOwnership(mailboxId: string) {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (email: string) => api.transferAclOwnership(mailboxId, email),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.acl(mailboxId) });
+		},
+	});
+}
+
+export function useAddAclGroup(mailboxId: string) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (group: string) => api.addAclGroup(mailboxId, group),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.acl(mailboxId) });
+		},
+	});
+}
+
+export function useRemoveAclGroup(mailboxId: string) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (group: string) => api.removeAclGroup(mailboxId, group),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.acl(mailboxId) });
 		},

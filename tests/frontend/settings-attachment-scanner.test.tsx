@@ -28,6 +28,8 @@ vi.mock("~/queries/mailboxes", () => ({
 	useAddAclMember: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useRemoveAclMember: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useTransferAclOwnership: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useAddAclGroup: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useRemoveAclGroup: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock("~/queries/org-settings", () => ({
