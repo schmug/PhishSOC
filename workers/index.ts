@@ -138,6 +138,9 @@ app.use("/api/*", cors({
 // without being rejected by the mailbox ACL check.
 app.route("/api/v1/mailboxes/:mailboxId/yaramail-callback", yaramailCallbackRoute);
 
+// Exact mailbox path (GET/PUT/DELETE settings) must be covered — Hono's `/*`
+// wildcard does not match when there is no trailing segment after :mailboxId.
+app.use("/api/v1/mailboxes/:mailboxId", requireMailbox);
 app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 
 // -- Config ---------------------------------------------------------

@@ -53,6 +53,7 @@ function makeApp(bucketStore: Record<string, string>, callerEmail: string | null
 
 	const app = new Hono<MailboxContext>();
 	// Wire the same middleware chain the production app uses.
+	app.use("/api/v1/mailboxes/:mailboxId", requireMailbox as Parameters<typeof app.use>[1]);
 	app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox as Parameters<typeof app.use>[1]);
 	app.route("/api/v1/mailboxes/:mailboxId/acl", aclMemberRoutes);
 
@@ -206,6 +207,22 @@ describe("POST /acl/members — add member", () => {
 		expect(stored.members).toContain("bob@example.com");
 		expect(stored.members).not.toContain("BOB@EXAMPLE.COM");
 	});
+
+	it("preserves group grants when adding a member", async () => {
+		const aclWithGroup: MailboxAcl = {
+			...aliceOnlyAcl,
+			groups: ["soc-analysts"],
+		};
+		const { fetch, bucket } = makeApp(storeWithAcl(aclWithGroup), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/members`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "bob@example.com" }),
+		});
+		expect(res.status).toBe(200);
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.groups).toEqual(["soc-analysts"]);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -332,6 +349,22 @@ describe("POST /acl/transfer — ownership transfer", () => {
 		expect(res.status).toBe(200);
 		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
 		expect(stored.owner).toBe("bob@example.com");
+	});
+
+	it("preserves group grants on ownership transfer", async () => {
+		const aclWithGroup: MailboxAcl = {
+			...aliceAndBobAcl,
+			groups: ["soc-analysts"],
+		};
+		const { fetch, bucket } = makeApp(storeWithAcl(aclWithGroup), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "bob@example.com" }),
+		});
+		expect(res.status).toBe(200);
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.groups).toEqual(["soc-analysts"]);
 	});
 });
 
