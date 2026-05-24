@@ -29,6 +29,7 @@ import {
 import { verifyDraft } from "./ai";
 import { resolveMailboxSettings } from "./mailbox-settings";
 import { sendEmail } from "../email-sender";
+import { enforceSendRiskConfirmation } from "./send-risk-gate";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 
@@ -428,10 +429,12 @@ export async function toolSendReply(
 		to: string;
 		subject: string;
 		bodyHtml: string;
+		/** Optional step-up confirmation token required for tier ≥ 1 sends. */
+		confirmationToken?: string;
 	},
 ): Promise<
 	| { status: "sent"; messageId: string; message: string }
-	| { error: string }
+	| { error: string; confirmation_required?: true; risk?: { tier: number; reasons: string[] } }
 > {
 	const stub = getMailboxStub(env, mailboxId);
 
@@ -439,6 +442,25 @@ export async function toolSendReply(
 	const rateLimitError = await (stub as unknown as RateLimitStub).checkSendRateLimit();
 	if (rateLimitError) {
 		return { error: rateLimitError };
+	}
+
+	// Enforce send-risk step-up confirmation gate
+	const gate = await enforceSendRiskConfirmation(
+		env,
+		params.confirmationToken,
+		{
+			mailboxId,
+			to: params.to,
+			subject: params.subject,
+			body: params.bodyHtml,
+		},
+	);
+	if (!gate.ok) {
+		const body = gate.body;
+		if (body.error === "confirmation_required") {
+			return { error: body.error, confirmation_required: true, risk: body.risk };
+		}
+		return { error: body.error };
 	}
 
 	const originalEmail = (await stub.getEmail(params.originalEmailId)) as EmailFull | null;
@@ -516,10 +538,12 @@ export async function toolSendEmail(
 		subject: string;
 		bodyHtml: string;
 		attachments?: ToolAttachment[];
+		/** Optional step-up confirmation token required for tier ≥ 1 sends. */
+		confirmationToken?: string;
 	},
 ): Promise<
 	| { status: "sent"; messageId: string; message: string }
-	| { error: string }
+	| { error: string; confirmation_required?: true; risk?: { tier: number; reasons: string[] } }
 > {
 	const stub = getMailboxStub(env, mailboxId);
 
@@ -527,6 +551,26 @@ export async function toolSendEmail(
 	const rateLimitError = await (stub as unknown as RateLimitStub).checkSendRateLimit();
 	if (rateLimitError) {
 		return { error: rateLimitError };
+	}
+
+	// Enforce send-risk step-up confirmation gate
+	const gate = await enforceSendRiskConfirmation(
+		env,
+		params.confirmationToken,
+		{
+			mailboxId,
+			to: params.to,
+			subject: params.subject,
+			body: params.bodyHtml,
+			attachments: params.attachments?.map((a) => ({ filename: a.filename })),
+		},
+	);
+	if (!gate.ok) {
+		const body = gate.body;
+		if (body.error === "confirmation_required") {
+			return { error: body.error, confirmation_required: true, risk: body.risk };
+		}
+		return { error: body.error };
 	}
 
 	const fromDomain = mailboxId.split("@")[1];

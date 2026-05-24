@@ -347,8 +347,12 @@ export class EmailMCP extends McpAgent<Env> {
 				to: z.string().email().describe("Recipient email address"),
 				subject: z.string().describe("Subject line"),
 				bodyHtml: z.string().describe("The HTML body of the reply"),
+				confirmationToken: z
+					.string()
+					.optional()
+					.describe("Step-up confirmation token required for tier ≥ 1 sends (external recipients, BEC keywords, etc.)"),
 			},
-			async ({ mailboxId, originalEmailId, to, subject, bodyHtml }) => {
+			async ({ mailboxId, originalEmailId, to, subject, bodyHtml, confirmationToken }) => {
 				const denied = await verifyMailbox(mailboxId);
 				if (denied) return denied;
 				const result = await toolSendReply(env, mailboxId, {
@@ -356,6 +360,7 @@ export class EmailMCP extends McpAgent<Env> {
 					to,
 					subject,
 					bodyHtml,
+					confirmationToken,
 				});
 				if ("error" in result) {
 					// Preserve the original MCP error format for send failures
@@ -400,8 +405,12 @@ export class EmailMCP extends McpAgent<Env> {
 					)
 					.optional()
 					.describe("Optional file attachments"),
+				confirmationToken: z
+					.string()
+					.optional()
+					.describe("Step-up confirmation token required for tier ≥ 1 sends (external recipients, BEC keywords, etc.)"),
 			},
-			async ({ mailboxId, to, subject, bodyHtml, attachments }) => {
+			async ({ mailboxId, to, subject, bodyHtml, attachments, confirmationToken }) => {
 				const denied = await verifyMailbox(mailboxId);
 				if (denied) return denied;
 				const result = await toolSendEmail(env, mailboxId, {
@@ -409,6 +418,7 @@ export class EmailMCP extends McpAgent<Env> {
 					subject,
 					bodyHtml,
 					...(attachments && attachments.length > 0 ? { attachments } : {}),
+					confirmationToken,
 				});
 				if ("error" in result) {
 					if (typeof result.error === "string" && result.error.startsWith("Failed to send")) {
