@@ -29,6 +29,8 @@ import {
 import { verifyDraft } from "./ai";
 import { resolveMailboxSettings } from "./mailbox-settings";
 import { sendEmail } from "../email-sender";
+import { enforceSendRiskConfirmation } from "./send-risk-gate";
+import type { SendRisk } from "../security/send-risk";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 
@@ -428,11 +430,21 @@ export async function toolSendReply(
 		to: string;
 		subject: string;
 		bodyHtml: string;
+		confirmationToken?: string;
 	},
 ): Promise<
 	| { status: "sent"; messageId: string; message: string }
-	| { error: string }
+	| { error: string; risk?: SendRisk }
 > {
+	const gate = await enforceSendRiskConfirmation(env, params.confirmationToken, {
+		mailboxId,
+		to: params.to,
+		subject: params.subject,
+		body: params.bodyHtml,
+		createdBy: "agent",
+	});
+	if (!gate.ok) return gate.body;
+
 	const stub = getMailboxStub(env, mailboxId);
 
 	// Check send rate limit
@@ -516,11 +528,22 @@ export async function toolSendEmail(
 		subject: string;
 		bodyHtml: string;
 		attachments?: ToolAttachment[];
+		confirmationToken?: string;
 	},
 ): Promise<
 	| { status: "sent"; messageId: string; message: string }
-	| { error: string }
+	| { error: string; risk?: SendRisk }
 > {
+	const gate = await enforceSendRiskConfirmation(env, params.confirmationToken, {
+		mailboxId,
+		to: params.to,
+		subject: params.subject,
+		body: params.bodyHtml,
+		attachments: params.attachments?.map((a) => ({ filename: a.filename })),
+		createdBy: "agent",
+	});
+	if (!gate.ok) return gate.body;
+
 	const stub = getMailboxStub(env, mailboxId);
 
 	// Check send rate limit

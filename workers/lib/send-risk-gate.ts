@@ -12,6 +12,8 @@ export type SendRiskGateInput = {
 	subject: string;
 	body: string;
 	attachments?: Array<{ filename?: string | null }>;
+	/** Passed through to classifySend for the agent-authored tier bump (#266). */
+	createdBy?: "agent" | "user";
 };
 
 type GateEnv = Pick<Env, "CONFIRMATION_TOKEN_SECRET" | "BLOOM_KV">;
@@ -37,6 +39,7 @@ export async function enforceSendRiskConfirmation(
 		body: input.body,
 		attachments: input.attachments,
 		mailboxId: input.mailboxId,
+		createdBy: input.createdBy,
 	});
 
 	if (risk.tier < 1) {
