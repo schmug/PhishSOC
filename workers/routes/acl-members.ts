@@ -81,9 +81,13 @@ aclMemberRoutes.post("/members", async (c) => {
 		return c.json({ owner: acl.owner, members: acl.members });
 	}
 
-	const updated = { owner: acl.owner, members: [...acl.members, memberEmail] };
+	const updated = { ...acl, members: [...acl.members, memberEmail] };
 	await writeMailboxAcl(c.env, mailboxId, updated);
-	return c.json({ owner: updated.owner, members: updated.members });
+	return c.json({
+		owner: updated.owner,
+		members: updated.members,
+		groups: updated.groups ?? [],
+	});
 });
 
 /**
@@ -110,9 +114,13 @@ aclMemberRoutes.post("/transfer", async (c) => {
 		return c.json({ error: "Target must already be a member" }, 400);
 	}
 
-	const updated = { owner: targetEmail, members: acl.members };
+	const updated = { ...acl, owner: targetEmail };
 	await writeMailboxAcl(c.env, mailboxId, updated);
-	return c.json({ owner: updated.owner, members: updated.members });
+	return c.json({
+		owner: updated.owner,
+		members: updated.members,
+		groups: updated.groups ?? [],
+	});
 });
 
 /** Remove a member from the mailbox ACL. The owner cannot remove themselves. */

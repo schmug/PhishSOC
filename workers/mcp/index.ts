@@ -22,7 +22,7 @@ import {
 } from "../lib/tools";
 import { Folders, FOLDER_TOOL_DESCRIPTION, MOVE_FOLDER_TOOL_DESCRIPTION } from "../../shared/folders";
 import type { Env } from "../types";
-import { readMailboxAcl, callerInAcl } from "../lib/mailbox-acl";
+import { readMailboxAcl, callerInAcl, callerGroupsFromJwt } from "../lib/mailbox-acl";
 
 /** Wrap a plain result object into MCP content format. */
 function mcpText(result: unknown) {
@@ -72,9 +72,13 @@ export class EmailMCP extends McpAgent<Env> {
 	// request. Each McpAgent DO instance handles exactly one session so
 	// this instance field is safe to use across tool calls (#27).
 	#callerEmail: string | null = null;
+	#callerGroups: string[] = [];
 
 	async fetch(request: Request): Promise<Response> {
 		this.#callerEmail = request.headers.get("cf-access-authenticated-user-email");
+		this.#callerGroups = callerGroupsFromJwt(
+			request.headers.get("cf-access-jwt-assertion"),
+		);
 		return super.fetch(request);
 	}
 
@@ -93,7 +97,7 @@ export class EmailMCP extends McpAgent<Env> {
 			if (!obj) {
 				return mcpError(`Mailbox "${mailboxId}" not found. Use list_mailboxes to see available mailboxes.`);
 			}
-			if (!callerInAcl(acl, this.#callerEmail)) {
+			if (!callerInAcl(acl, this.#callerEmail, this.#callerGroups)) {
 				return mcpError(`Access denied for mailbox "${mailboxId}".`);
 			}
 			return null;
@@ -112,7 +116,7 @@ export class EmailMCP extends McpAgent<Env> {
 					(all as Array<{ id: string }>).map((m) => readMailboxAcl(env, m.id)),
 				);
 				const filtered = (all as Array<{ id: string }>).filter((_, i) =>
-					callerInAcl(acls[i], callerEmail),
+					callerInAcl(acls[i], callerEmail, this.#callerGroups),
 				);
 				return mcpText(filtered);
 			},

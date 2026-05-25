@@ -206,6 +206,25 @@ describe("POST /acl/members — add member", () => {
 		expect(stored.members).toContain("bob@example.com");
 		expect(stored.members).not.toContain("BOB@EXAMPLE.COM");
 	});
+
+	it("preserves existing groups when adding a member (#295)", async () => {
+		const aclWithGroup: MailboxAcl = {
+			owner: "alice@example.com",
+			members: ["alice@example.com"],
+			groups: ["soc-analysts"],
+		};
+		const { fetch, bucket } = makeApp(storeWithAcl(aclWithGroup), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/members`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "bob@example.com" }),
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		expect(body.groups).toContain("soc-analysts");
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.groups).toContain("soc-analysts");
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -332,6 +351,25 @@ describe("POST /acl/transfer — ownership transfer", () => {
 		expect(res.status).toBe(200);
 		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
 		expect(stored.owner).toBe("bob@example.com");
+	});
+
+	it("preserves existing groups when transferring ownership (#295)", async () => {
+		const aclWithGroup: MailboxAcl = {
+			owner: "alice@example.com",
+			members: ["alice@example.com", "bob@example.com"],
+			groups: ["soc-analysts"],
+		};
+		const { fetch, bucket } = makeApp(storeWithAcl(aclWithGroup), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "bob@example.com" }),
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		expect(body.groups).toContain("soc-analysts");
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.groups).toContain("soc-analysts");
 	});
 });
 
