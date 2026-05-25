@@ -61,6 +61,7 @@ import { emptyBimiPosture, fetchBimiPosture } from "./dmarc/bimi";
 import { emptySpfPosture, fetchSpfPosture } from "./spf/posture";
 import { emptyTlsRptPosture, fetchTlsRptPosture } from "./tlsrpt/posture";
 import { emptyDkimPosture, fetchDkimPosture } from "./dkim/posture";
+import { emptyDnssecPosture, fetchDnssecPosture } from "./dnssec/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
@@ -569,6 +570,9 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	const tlsRptPromise = fetchTlsRptPosture(domain, {
 		kv: c.env.BLOOM_KV ?? null,
 	});
+	const dnssecPromise = fetchDnssecPosture(domain, {
+		kv: c.env.BLOOM_KV ?? null,
+	});
 
 	const [
 		settledSummaries,
@@ -579,6 +583,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		settledBimi,
 		settledSpf,
 		settledTlsRpt,
+		settledDnssec,
 	] = await Promise.all([
 		Promise.allSettled(summaryPromises),
 		Promise.allSettled(alignmentPromises),
@@ -588,6 +593,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		Promise.allSettled([bimiPromise]),
 		Promise.allSettled([spfPromise]),
 		Promise.allSettled([tlsRptPromise]),
+		Promise.allSettled([dnssecPromise]),
 	]);
 
 	const summaries: Array<DomainMailboxSummary | null> = settledSummaries.map((r) => {
@@ -642,6 +648,11 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 			? settledTlsRpt[0].value
 			: emptyTlsRptPosture();
 
+	const dnssecPosture =
+		settledDnssec[0].status === "fulfilled"
+			? settledDnssec[0].value
+			: emptyDnssecPosture();
+
 	// Union the per-mailbox selector lists. A failed DO call contributes
 	// nothing rather than blocking the whole DKIM tile — same degradation
 	// model as `getDmarcAlignmentTotals`.
@@ -687,6 +698,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		spfPosture,
 		tlsRptPosture,
 		dkimPosture,
+		dnssec: dnssecPosture,
 	});
 	// `aggregateDomainStats` only returns null when `mailboxes.length === 0`,
 	// which we already guarded above with the 404 — but narrow the type

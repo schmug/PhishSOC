@@ -12,6 +12,7 @@ import Shell from "~/components/phishsoc/Shell";
 import { useDomainStats, useRufRecords } from "~/queries/domains";
 import type {
 	DmarcRufRecord,
+	DnssecPosture,
 	DomainStats,
 	OrgVerdictMix,
 } from "~/types";
@@ -107,6 +108,7 @@ function DomainBody({ data, rufData }: { data: DomainStats; rufData: import("~/q
 			<div className="grid gap-4 lg:grid-cols-3">
 				<TlsRptPostureCard posture={data.tlsRptPosture} />
 				<DkimPostureCard posture={data.dkimPosture} />
+				<DnssecPostureCard posture={data.dnssec} />
 			</div>
 			<MailboxList mailboxes={data.mailboxes} />
 			{data.recentCases.length > 0 && <RecentCasesList cases={data.recentCases} />}
@@ -503,6 +505,28 @@ function RufFailuresTable({ records }: { records: DmarcRufRecord[] }) {
 					</tbody>
 				</table>
 			</div>
+		</div>
+	);
+}
+
+function DnssecPostureCard({ posture }: { posture: DnssecPosture }) {
+	let statusText: string;
+	if (!posture.signed) {
+		statusText = "not signed";
+	} else if (posture.hasDsAtParent) {
+		statusText = "signed (DS at parent)";
+	} else {
+		statusText = "signed (no DS at parent — broken chain)";
+	}
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<ShieldCheckIcon size={12} />
+				DNSSEC
+			</div>
+			<p className={`text-[12.5px] ${posture.signed ? "text-ink" : "text-ink-3"}`}>
+				{statusText}
+			</p>
 		</div>
 	);
 }
