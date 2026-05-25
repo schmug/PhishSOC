@@ -92,6 +92,9 @@ const populated: DomainStats = {
 	dkimPosture: {
 		selectors: [],
 	},
+	dnssec: {
+		signed: false as const,
+	},
 	recentCases: [
 		{
 			id: "C1",

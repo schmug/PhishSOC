@@ -488,6 +488,15 @@ export interface DkimPostureView {
 	}>;
 }
 
+/** DNSSEC posture (#324, part of #156).
+ *
+ * `{ signed: false }` — resolver did not set AD=true, or any lookup failed.
+ * `{ signed: true, hasDsAtParent: boolean }` — AD=true; hasDsAtParent
+ *   reflects whether a DS record (type=43) exists at the apex label. */
+export type DnssecPostureView =
+	| { signed: false }
+	| { signed: true; hasDsAtParent: boolean };
+
 export interface DomainListEntry {
 	domain: string;
 	mailboxesCount: number;
@@ -527,6 +536,9 @@ export interface DomainStats {
 	 * 30-day inbound-mail observation window. Empty `selectors` is the natural
 	 * state for a domain that's never received DKIM-signed inbound mail. */
 	dkimPosture: DkimPostureView;
+	/** DNSSEC posture (#324). `signed: false` when unsigned or lookup failed;
+	 * `signed: true` when the resolver's AD bit is set, with DS-at-parent. */
+	dnssec: DnssecPostureView;
 	recentCases: DomainRecentCase[];
 }
 
@@ -600,6 +612,13 @@ export function emptyTlsRptPostureView(): TlsRptPostureView {
  * as "no DKIM selectors observed in the last 30 days". */
 export function emptyDkimPostureView(): DkimPostureView {
 	return { selectors: [] };
+}
+
+/** Empty DNSSEC posture sentinel — `signed: false` surfaces the same
+ * "not configured" affordance whether the lookup failed or the domain is
+ * genuinely unsigned. */
+export function emptyDnssecPostureView(): DnssecPostureView {
+	return { signed: false };
 }
 
 /** Per-mailbox alignment totals harvested from `dmarc_records` by the DO.
@@ -748,6 +767,11 @@ interface AggregateDomainStatsInput {
 	 * sentinel (no selectors observed).
 	 */
 	dkimPosture?: DkimPostureView;
+	/**
+	 * DNSSEC posture (#324) from the resolver AD-bit query plus DS-record
+	 * check. Omitted defaults to the not-signed sentinel.
+	 */
+	dnssec?: DnssecPostureView;
 }
 
 /**
@@ -810,6 +834,7 @@ export function aggregateDomainStats(
 		spfPosture: input.spfPosture ?? emptySpfPostureView(),
 		tlsRptPosture: input.tlsRptPosture ?? emptyTlsRptPostureView(),
 		dkimPosture: input.dkimPosture ?? emptyDkimPostureView(),
+		dnssec: input.dnssec ?? emptyDnssecPostureView(),
 		recentCases: recentCases.slice(0, 5),
 	};
 }

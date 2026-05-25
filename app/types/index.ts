@@ -342,6 +342,14 @@ export interface DkimPosture {
 	}>;
 }
 
+/** DNSSEC posture (#324, part of #156).
+ * `{ signed: false }` — unsigned or lookup unavailable.
+ * `{ signed: true, hasDsAtParent: boolean }` — resolver AD-bit set;
+ * `hasDsAtParent` reflects whether a DS record exists at the parent zone. */
+export type DnssecPosture =
+	| { signed: false }
+	| { signed: true; hasDsAtParent: boolean };
+
 /** One row in the `/api/v1/domains` list. */
 export interface DomainListEntry {
 	domain: string;
@@ -373,6 +381,7 @@ export interface DomainStats {
 	spfPosture: SpfPosture;
 	tlsRptPosture: TlsRptPosture;
 	dkimPosture: DkimPosture;
+	dnssec: DnssecPosture;
 	recentCases: DashboardCase[];
 }
 
