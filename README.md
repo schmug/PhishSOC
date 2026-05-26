@@ -161,7 +161,7 @@ Weekends: flagged when weekdays_only is on
 | Sender reputation | ms | Rolling avg score per mailbox; flagged-sender fast path |
 | Threat-intel bloom lookup | ms | Against [workers/intel/feeds.ts](workers/intel/feeds.ts) (URLhaus, PhishDestroy, configurable; Spamhaus DROP/EDROP CIDR feeds consumed in deep-scan) |
 | Triage short-circuits | µs | Hard-block on confirmed intel / flagged sender; hard-allow on DMARC pass + allowlist or trusted history |
-| LLM classifier | seconds (5s cap) | Workers AI; fail-closed to `suspicious` on timeout |
+| LLM classifier | seconds (5s cap) | Workers AI; timeout → contributes 0 to score (skipped); parse/other error → fail-closed to `suspicious` (see [SECURITY_SPEC.md Rule 5](SECURITY_SPEC.md)) |
 | Verdict aggregation | µs | Pure scoring function; thresholds configurable per mailbox |
 | Off-hours boost | µs | Optional, scoring-only |
 | **Async deep-scan** | seconds–tens-of-seconds | `ctx.waitUntil`; see below |
