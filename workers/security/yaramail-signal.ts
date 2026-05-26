@@ -14,9 +14,12 @@
  *   - `fireYaraScan` fires the fire-and-forget enrichment request via
  *     ctx.waitUntil when the mailbox has the scanner enabled.
  *
- * Wiring `fireYaraScan` into the email-receive pipeline, the callback route
- * that accepts sidecar responses, and the DO methods for storing results are
- * tracked in the follow-up issue filed against #256.
+ * All three wiring points are in place: `fireYaraScan` is called from
+ * `receiveEmail` at `workers/index.ts:1464`; the callback route is mounted at
+ * `workers/index.ts:140` and handled by `workers/routes/yaramail-callback.ts`;
+ * the DO methods `MailboxDO.insertYaraScanResult` (line 1928) and
+ * `MailboxDO.applyYaraSignal` (line 1955) live in
+ * `workers/durableObject/index.ts`.
  */
 
 import { resolveMailboxSettings } from "../lib/mailbox-settings";
