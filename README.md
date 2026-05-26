@@ -6,7 +6,7 @@
 
 PhishSOC is a self-hosted phishing-detection layer wrapped around a complete Cloudflare-native email client. Mail arrives via [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/), each mailbox is isolated in its own [Durable Object](https://developers.cloudflare.com/durable-objects/) with a SQLite database, and attachments are stored in [R2](https://developers.cloudflare.com/r2/). When the security pipeline is enabled per mailbox, every inbound message is scored — SPF/DKIM/DMARC parse, URL/homograph heuristics, an LLM classifier, threat-intel feed matching, and an async deep-scan stage (redirect-chain resolution, RDAP domain age, attachment checks) — before it ever reaches the inbox.
 
-An **AI agent** runs alongside the inbox: it reads incoming mail, auto-drafts replies (always requiring explicit send-confirmation), and exposes 9 email tools — usable in-app or over [MCP](https://modelcontextprotocol.io/) so external clients like Claude Code or Cursor can act on any mailbox. Built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and [Workers AI](https://developers.cloudflare.com/workers-ai/).
+An **AI agent** runs alongside the inbox: it reads incoming mail, auto-drafts replies (always requiring explicit send-confirmation), and exposes 9 agent tools in-app and 13 tools over [MCP](https://modelcontextprotocol.io/) so external clients like Claude Code or Cursor can act on any mailbox. Built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and [Workers AI](https://developers.cloudflare.com/workers-ai/).
 
 ![PhishSOC screenshot](./demo_app.png)
 
@@ -42,7 +42,8 @@ https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
 
 - **Full email client** — Send and receive emails via Cloudflare Email Routing with a rich text composer, reply/forward threading, folder organization, search, and attachments
 - **Per-mailbox isolation** — Each mailbox runs in its own Durable Object with SQLite storage and R2 for attachments
-- **Built-in AI agent** — Side panel with 9 email tools for reading, searching, drafting, and sending
+- **Built-in AI agent** — Side panel with 9 agent tools for reading, searching, drafting, and sending
+- **MCP server** — 13 tools at `/mcp` so external AI clients (Claude Code, Cursor) can act on any mailbox
 - **Auto-draft on new email** — Agent automatically reads inbound emails and generates draft replies, always requiring explicit confirmation before sending
 - **Configurable and persistent** — Custom system prompts per mailbox, persistent chat history, streaming markdown responses, and tool call visibility
 - **Security pipeline** — Opt-in SPF/DKIM/DMARC parsing, URL homograph detection, LLM classifier, sender reputation, threat-intel feed matching, and async deep-scan (redirect-chain resolution, RDAP domain age, attachment heuristics). See [Security](#security) below
