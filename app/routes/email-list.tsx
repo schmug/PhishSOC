@@ -220,6 +220,7 @@ export default function EmailListRoute() {
 	}, [folders, folder]);
 
 	const isPanelOpen = selectedEmailId !== null || isComposing;
+	const showCompose = !!(folder && FOLDER_EMPTY_STATES[folder]?.showCompose);
 
 	// Track folder identity to detect folder changes vs page changes
 	const prevFolderRef = useRef<string | undefined>(undefined);
@@ -318,6 +319,18 @@ export default function EmailListRoute() {
 							<span className="text-sm text-ink-3 mr-2 hidden sm:inline">
 								{totalCount} conversation{totalCount !== 1 ? "s" : ""}
 							</span>
+						)}
+						{showCompose && (
+							<Tooltip content="Compose" side="bottom" asChild>
+								<Button
+									variant="ghost"
+									shape="square"
+									size="sm"
+									icon={<PencilSimpleIcon size={18} />}
+									onClick={() => startCompose()}
+									aria-label="Compose"
+								/>
+							</Tooltip>
 						)}
 						<Tooltip
 							content={isRefreshing ? "Refreshing..." : "Refresh"}
