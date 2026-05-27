@@ -12,6 +12,8 @@ export type SendRiskGateInput = {
 	subject: string;
 	body: string;
 	attachments?: Array<{ filename?: string | null }>;
+	/** From draft row `created_by` when sending an existing draft (#266). */
+	createdBy?: "agent" | "user";
 };
 
 type GateEnv = Pick<Env, "CONFIRMATION_TOKEN_SECRET" | "BLOOM_KV">;
@@ -37,6 +39,7 @@ export async function enforceSendRiskConfirmation(
 		body: input.body,
 		attachments: input.attachments,
 		mailboxId: input.mailboxId,
+		createdBy: input.createdBy,
 	});
 
 	if (risk.tier < 1) {
@@ -64,6 +67,13 @@ export async function enforceSendRiskConfirmation(
 		);
 		if (!verified) {
 			return { ok: false, status: 401, body: { error: "invalid or expired confirmation token" } };
+		}
+		if (verified.tier < risk.tier) {
+			return {
+				ok: false,
+				status: 401,
+				body: { error: "confirmation_required", risk },
+			};
 		}
 	}
 

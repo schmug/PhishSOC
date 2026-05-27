@@ -17,6 +17,7 @@ import {
 import { SendEmailRequestSchema } from "../lib/schemas";
 import { classifySend } from "../security/send-risk";
 import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
+import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
 import { requireMailbox, type MailboxContext } from "../lib/mailbox";
 import { Folders } from "../../shared/folders";
 
@@ -27,12 +28,14 @@ sendEmailRoutes.use("*", requireMailbox);
 sendEmailRoutes.post("/emails/preflight", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, subject, html, text, attachments } = body;
+	const { to, cc, bcc, subject, html, text, attachments, draft_id } = body;
+	const createdBy = await resolveCreatedByFromDraft(c.var.mailboxStub, draft_id);
 	const risk = classifySend({
 		to, cc, bcc, subject,
 		body: html || text || "",
 		attachments: attachments?.map((a) => ({ filename: a.filename })),
 		mailboxId,
+		createdBy,
 	});
 	return c.json(risk);
 });
@@ -40,7 +43,7 @@ sendEmailRoutes.post("/emails/preflight", async (c) => {
 sendEmailRoutes.post("/emails", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments, in_reply_to, references, thread_id } = body;
+	const { to, cc, bcc, from, subject, html, text, attachments, in_reply_to, references, thread_id, draft_id } = body;
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
@@ -50,6 +53,7 @@ sendEmailRoutes.post("/emails", async (c) => {
 		throw e;
 	}
 
+	const createdBy = await resolveCreatedByFromDraft(c.var.mailboxStub, draft_id);
 	const gate = await enforceSendRiskConfirmation(
 		c.env,
 		c.req.header("x-confirmation-token"),
@@ -61,6 +65,7 @@ sendEmailRoutes.post("/emails", async (c) => {
 			subject,
 			body: html || text || "",
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
+			createdBy,
 		},
 	);
 	if (!gate.ok) return c.json(gate.body, gate.status);

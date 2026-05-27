@@ -84,6 +84,8 @@ export const SendEmailRequestSchema = z
 		in_reply_to: z.string().optional(),
 		references: z.array(z.string()).optional(),
 		thread_id: z.string().optional(),
+		/** When sending a saved draft, used to load `created_by` for send-risk (#266). */
+		draft_id: z.string().optional(),
 	})
 	.refine((data) => data.html || data.text, {
 		message: "Either 'html' or 'text' must be provided",

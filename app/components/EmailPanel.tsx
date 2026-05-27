@@ -2,6 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import { Input } from "@cloudflare/kumo";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 import { Folders } from "shared/folders";
@@ -48,6 +49,8 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 	const { closePanel, startCompose } = useUIStore();
 	const feedback = useFeedback();
 	const [isSending, setIsSending] = useState(false);
+	const [draftPreflight, setDraftPreflight] = useState<{ tier: 0 | 1 | 2; reasons: string[] } | null>(null);
+	const [confirmPhrase, setConfirmPhrase] = useState("");
 	const [sourceViewEmail, setSourceViewEmail] = useState<Email | null>(null);
 	const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
 	const [previewImage, setPreviewImage] = useState<{ url: string; filename: string } | null>(null);
@@ -86,7 +89,34 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 
 	const moveToFolders = useMemo(() => { const cur = folder || email?.folder_id; return folders.filter((f) => f.id !== cur); }, [folders, folder, email?.folder_id]);
 
+	useEffect(() => {
+		if (!isDraftFolder || !mailboxId || !email?.recipient) {
+			setDraftPreflight(null);
+			return;
+		}
+		const timer = setTimeout(async () => {
+			try {
+				const result = await api.preflightEmail(mailboxId, {
+					to: email.recipient!,
+					from: mailboxId,
+					subject: email.subject || ".",
+					text: htmlToPlainText(email.body || "") || " ",
+					draft_id: email.id,
+				});
+				setDraftPreflight(result);
+			} catch {
+				setDraftPreflight(null);
+			}
+		}, 600);
+		return () => clearTimeout(timer);
+	}, [isDraftFolder, mailboxId, email?.id, email?.recipient, email?.subject, email?.body]);
+
 	if (!email) return <EmailPanelSkeleton />;
+
+	const draftSendTier = draftPreflight?.tier ?? 0;
+	const draftPrimaryRecipient = email.recipient
+		? splitEmailList(email.recipient)[0]?.trim()
+		: "";
 
 	const toggleStar = () => { if (mailboxId) updateEmail.mutate({ mailboxId, id: email.id, data: { starred: !email.starred } }, { onError: () => feedback.error("Couldn't update email.") }); };
 	const handleMove = (folderId: string) => { if (mailboxId) { moveEmailMut.mutate({ mailboxId, id: email.id, folderId }, { onError: () => feedback.error("Couldn't move email.") }); closePanel(); } };
@@ -127,6 +157,7 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 				subject: target.subject || "(no subject)",
 				html: target.body || "",
 				text: target.body ? htmlToPlainText(target.body) : "",
+				draft_id: target.id,
 			};
 			let sendTier: 0 | 1 | 2 = 0;
 			try {
@@ -135,10 +166,18 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 					from: mailboxId,
 					subject: emailData.subject,
 					text: htmlToPlainText(emailData.html) || " ",
+					draft_id: target.id,
 				});
 				sendTier = preflight.tier;
 			} catch {
 				// Network error — fall through as Tier 0, matching composer policy.
+			}
+			if (sendTier >= 2) {
+				const primary = toRecipients[0]?.trim().toLowerCase();
+				if (confirmPhrase.trim().toLowerCase() !== primary) {
+					feedback.error(`Type "${toRecipients[0]}" to confirm before sending.`);
+					return;
+				}
 			}
 			let confirmationToken: string | undefined;
 			if (sendTier >= 1) {
@@ -166,6 +205,18 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 
 	return (
 		<div className="flex flex-col h-full">
+			{isDraftFolder && draftSendTier >= 2 && draftPrimaryRecipient ? (
+				<div className="px-4 py-2 border-b border-line shrink-0">
+					<Input
+						label={`Type "${draftPrimaryRecipient}" to confirm`}
+						type="text"
+						size="sm"
+						value={confirmPhrase}
+						onChange={(e) => setConfirmPhrase(e.target.value)}
+						data-testid="draft-confirm-phrase-input"
+					/>
+				</div>
+			) : null}
 			<EmailPanelToolbar
 				email={email}
 				mailboxId={mailboxId}
