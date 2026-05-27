@@ -8,7 +8,7 @@ PhishSOC is a self-hosted phishing-detection layer wrapped around a complete Clo
 
 An **AI agent** runs alongside the inbox: it reads incoming mail, auto-drafts replies (always requiring explicit send-confirmation), and exposes 9 agent tools in-app and 13 tools over [MCP](https://modelcontextprotocol.io/) so external clients like Claude Code or Cursor can act on any mailbox. Built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and [Workers AI](https://developers.cloudflare.com/workers-ai/).
 
-![PhishSOC screenshot](./demo_app.png)
+![PhishSOC screenshot](./docs/img/demo_app.webp)
 
 
 Read the blog post to learn more about Cloudflare Email Service and how to use it with the Agents SDK, MCP, and from the Wrangler CLI: [Email for Agents](https://blog.cloudflare.com/email-for-agents/).
