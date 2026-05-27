@@ -71,6 +71,42 @@ export function stripHtml(html: string): string {
 // of the email list. This acts as a simple LRU to bound memory while optimizing hot paths.
 const snippetCache = new Map<string, string>();
 
+// ⚡ Bolt: Cache participant parsing to prevent expensive split/map/filter operations on every re-render
+const participantsCache = new Map<string, string>();
+
+export function formatParticipants(email: { participants?: string | null; sender: string }): string {
+	if (!email.participants) {
+		return email.sender.split("@")[0];
+	}
+
+	const cacheKey = email.participants;
+	if (participantsCache.has(cacheKey)) {
+		const cached = participantsCache.get(cacheKey);
+		if (cached !== undefined) return cached;
+	}
+
+	const names = email.participants
+		.split(",")
+		.map((p) => p.trim().split("@")[0])
+		.filter((name, idx, arr) => arr.indexOf(name) === idx);
+
+	let result: string;
+	if (names.length <= 3) {
+		result = names.join(", ");
+	} else {
+		result = `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+	}
+
+	if (participantsCache.size >= 1000) {
+		const firstKey = participantsCache.keys().next().value;
+		if (firstKey !== undefined) {
+			participantsCache.delete(firstKey);
+		}
+	}
+	participantsCache.set(cacheKey, result);
+	return result;
+}
+
 export function getSnippetText(
 	snippet?: string | null,
 	maxLength = 100,

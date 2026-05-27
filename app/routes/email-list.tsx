@@ -47,7 +47,7 @@ function EmailVerdictPill({
 	);
 }
 import { useFeedback } from "~/lib/feedback";
-import { getSnippetText } from "~/lib/utils";
+import { getSnippetText, formatParticipants } from "~/lib/utils";
 import {
 	useDeleteEmail,
 	useEmails,
@@ -301,18 +301,6 @@ export default function EmailListRoute() {
 				);
 			}
 		}
-	};
-
-	const formatParticipants = (email: Email): string => {
-		if (email.participants) {
-			const names = email.participants
-				.split(",")
-				.map((p) => p.trim().split("@")[0])
-				.filter((name, idx, arr) => arr.indexOf(name) === idx);
-			if (names.length <= 3) return names.join(", ");
-			return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
-		}
-		return email.sender.split("@")[0];
 	};
 
 	return (
