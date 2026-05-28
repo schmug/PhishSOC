@@ -30,10 +30,17 @@
  * returned non-200, or returned malformed JSON. The dashboard renders this
  * with the same affordance as `false` (per Constraints in #170) but the
  * cache layer keeps them separate so a transient blip doesn't poison the
- * cache for an hour. */
+ * cache for an hour.
+ *
+ * `source` is present on results from `mergeDkimPosture` (#358):
+ *   - `"observed"` — selector lifted from inbound `Authentication-Results` headers.
+ *   - `"probed"` — found by the active well-known-selector probe with `published=true`.
+ *   - `"both"` — observed inbound AND confirmed by the active probe.
+ */
 export interface DkimSelectorPosture {
 	selector: string;
 	published: boolean | null;
+	source?: "observed" | "probed" | "both";
 }
 
 /** Whole-domain DKIM posture surface — the list of observed selectors with
@@ -47,6 +54,98 @@ export interface DkimPosture {
 /** Sentinel for "no observations yet" — same shape as a degenerate result. */
 export function emptyDkimPosture(): DkimPosture {
 	return { selectors: [] };
+}
+
+/**
+ * Well-known DKIM selector names used by the active probe (#358). Keeping
+ * this list in one place ensures callers share the same candidate set.
+ *
+ * The list covers the most widely deployed ESPs and mail platforms. Per-domain
+ * custom selectors remain out of scope for now.
+ */
+export const DKIM_PROBE_SELECTORS: ReadonlyArray<string> = [
+	"google",
+	"selector1",
+	"selector2",
+	"k1",
+	"k2",
+	"default",
+	"mandrill",
+	"s1",
+	"s2",
+	"dkim",
+	"mail",
+	"smtp",
+];
+
+/**
+ * Actively probe `DKIM_PROBE_SELECTORS` against `domain` and return only the
+ * selectors confirmed as published (i.e. `published === true`). Each returned
+ * row is tagged `source: "probed"`.
+ *
+ * Absent selectors (`published === false`) are silently dropped — surfacing
+ * them would flood the card with 12 "missing" entries for a domain that
+ * happens not to use any well-known name. Transient failures (`published ===
+ * null`) are also dropped; the caller receives `emptyDkimPosture()` on any
+ * uncaught error from the underlying resolver.
+ */
+export async function probeDkimSelectors(
+	domain: string,
+	options: {
+		kv?: DkimPostureKv | null;
+		fetchImpl?: DkimPostureFetch;
+	} = {},
+): Promise<DkimPosture> {
+	let result: DkimPosture;
+	try {
+		result = await fetchDkimPosture(domain, DKIM_PROBE_SELECTORS, options);
+	} catch {
+		return emptyDkimPosture();
+	}
+	return {
+		selectors: result.selectors
+			.filter((s) => s.published === true)
+			.map((s) => ({ selector: s.selector, published: true, source: "probed" as const })),
+	};
+}
+
+/**
+ * Merge an observed posture (from per-mailbox `getDkimSelectorsObserved`
+ * fan-out + `fetchDkimPosture`) with a probed posture (from
+ * `probeDkimSelectors`).
+ *
+ * Rules:
+ *   - Observed-only selectors keep their `published` status and get
+ *     `source: "observed"`.
+ *   - Probed-only selectors (always `published: true`) get `source: "probed"`.
+ *   - Selectors present in both get the observed `published` value (the
+ *     inbound observation is authoritative for whether the record is still
+ *     live) and `source: "both"`.
+ *
+ * Output is alphabetically sorted for stable UI rendering.
+ */
+export function mergeDkimPosture(
+	observed: DkimPosture,
+	probed: DkimPosture,
+): DkimPosture {
+	const out = new Map<string, DkimSelectorPosture>();
+
+	for (const s of observed.selectors) {
+		out.set(s.selector, { selector: s.selector, published: s.published, source: "observed" });
+	}
+
+	for (const s of probed.selectors) {
+		const existing = out.get(s.selector);
+		if (existing) {
+			out.set(s.selector, { selector: s.selector, published: existing.published, source: "both" });
+		} else {
+			out.set(s.selector, { selector: s.selector, published: s.published, source: "probed" });
+		}
+	}
+
+	const rows = [...out.values()];
+	rows.sort((a, b) => a.selector.localeCompare(b.selector));
+	return { selectors: rows };
 }
 
 /** Number of days an observed selector remains in the rollup before the

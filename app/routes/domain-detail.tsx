@@ -101,7 +101,7 @@ function DomainBody({ data, rufData }: { data: DomainStats; rufData: import("~/q
 				<DmarcPostureCard posture={data.dmarcPosture} />
 			</div>
 			<div className="grid gap-4 lg:grid-cols-3">
-				<MtaStsPostureCard posture={data.mtaStsPosture} />
+				<MtaStsPostureCard posture={data.mtaStsPosture} domain={data.domain} />
 				<BimiPostureCard posture={data.bimiPosture} />
 				<SpfPostureCard posture={data.spfPosture} />
 			</div>
@@ -258,12 +258,18 @@ function DmarcPostureCard({
 
 function MtaStsPostureCard({
 	posture,
-}: { posture: DomainStats["mtaStsPosture"] }) {
+	domain,
+}: { posture: DomainStats["mtaStsPosture"]; domain: string }) {
 	const allNull =
 		posture.mode === null &&
 		posture.mx === null &&
 		posture.maxAge === null &&
 		posture.id === null;
+	const txtPublishedPolicyAbsent =
+		posture.id !== null &&
+		posture.mode === null &&
+		posture.mx === null &&
+		posture.maxAge === null;
 	return (
 		<div className="pp-card p-5">
 			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
@@ -275,6 +281,15 @@ function MtaStsPostureCard({
 					MTA-STS isn't published for this domain (or the lookup failed). Operators
 					configure it by publishing a `_mta-sts` TXT record plus a policy file at
 					`mta-sts.&lt;domain&gt;/.well-known/mta-sts.txt`.
+				</p>
+			) : txtPublishedPolicyAbsent ? (
+				<p className="text-[12.5px] text-ink-3">
+					TXT record present (id: <span className="pp-mono">{posture.id}</span>) but
+					policy file unreachable — check that{" "}
+					<span className="pp-mono">
+						mta-sts.{domain}/.well-known/mta-sts.txt
+					</span>{" "}
+					resolves and returns 200.
 				</p>
 			) : (
 				<dl className="space-y-1.5 text-[12.5px]">
@@ -420,6 +435,16 @@ function TlsRptPostureCard({
 	);
 }
 
+function DkimSourceBadge({ source }: { source?: "observed" | "probed" | "both" }) {
+	if (!source || source === "observed") return null;
+	const label = source === "both" ? "observed+probed" : "probed";
+	return (
+		<span className="ml-1.5 inline-block text-[10px] px-1.5 py-0.5 rounded bg-surface-2 text-ink-3 pp-mono leading-none">
+			{label}
+		</span>
+	);
+}
+
 function DkimPostureCard({
 	posture,
 }: { posture: DomainStats["dkimPosture"] }) {
@@ -436,20 +461,26 @@ function DkimPostureCard({
 			</div>
 			{selectors.length === 0 ? (
 				<p className="text-[12.5px] text-ink-3">
-					No DKIM selectors observed on inbound mail in the last 30 days.
-					Selectors are lifted from `Authentication-Results.dkim header.s=`
-					on inbound messages, then resolved at
+					No DKIM selectors observed signing as this domain (`d=`) in the
+					last 30 days. Selectors are lifted from messages where
+					`header.d=` matches this domain — mail your mailboxes receive
+					from other senders is signed under their own `d=`, so those
+					selectors don't appear here. Each selector is resolved at
 					`&lt;selector&gt;._domainkey.&lt;domain&gt;` to confirm the
 					record is still published.
 				</p>
 			) : (
 				<dl className="space-y-1.5 text-[12.5px]">
 					{selectors.map((s) => (
-						<PostureRow
-							key={s.selector}
-							label={s.selector}
-							value={s.published === true ? "published" : "missing"}
-						/>
+						<div key={s.selector} className="flex items-baseline justify-between gap-3">
+							<dt className="text-ink-3 flex items-center">
+								{s.selector}
+								<DkimSourceBadge source={s.source} />
+							</dt>
+							<dd className="pp-mono text-ink-2 tabular-nums">
+								{s.published === true ? "published" : "missing"}
+							</dd>
+						</div>
 					))}
 				</dl>
 			)}

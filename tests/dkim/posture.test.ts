@@ -3,12 +3,15 @@
 import { describe, expect, it } from "vitest";
 import {
 	DKIM_OBSERVATION_WINDOW_DAYS,
+	DKIM_PROBE_SELECTORS,
 	dkimObservationCutoffIso,
 	emptyDkimPosture,
 	fetchDkimPosture,
 	isAnyPublished,
 	isPublishedDkimRecord,
+	mergeDkimPosture,
 	normalizeDohTxtData,
+	probeDkimSelectors,
 	type DkimPostureKv,
 } from "../../workers/dkim/posture";
 
@@ -385,5 +388,191 @@ describe("fetchDkimPosture", () => {
 		expect(u.pathname).toBe("/dns-query");
 		expect(u.searchParams.get("name")).toBe("googleapis._domainkey.acme.com");
 		expect(u.searchParams.get("type")).toBe("TXT");
+	});
+});
+
+// ── probeDkimSelectors (#358) ─────────────────────────────────────────
+
+describe("DKIM_PROBE_SELECTORS", () => {
+	it("contains the expected well-known names", () => {
+		expect(DKIM_PROBE_SELECTORS).toContain("google");
+		expect(DKIM_PROBE_SELECTORS).toContain("selector1");
+		expect(DKIM_PROBE_SELECTORS).toContain("selector2");
+		expect(DKIM_PROBE_SELECTORS).toContain("mail");
+	});
+
+	it("has no duplicates", () => {
+		const unique = new Set(DKIM_PROBE_SELECTORS);
+		expect(unique.size).toBe(DKIM_PROBE_SELECTORS.length);
+	});
+});
+
+describe("probeDkimSelectors", () => {
+	it("returns only published selectors tagged source:'probed'", async () => {
+		const fetchImpl = async (url: string) => {
+			const name = new URL(url).searchParams.get("name") ?? "";
+			if (name === "google._domainkey.send-only.example") {
+				return dohTxtResponse(['"v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQ"']);
+			}
+			return dohNxdomainResponse();
+		};
+		const result = await probeDkimSelectors("send-only.example", { fetchImpl });
+		expect(result.selectors).toHaveLength(1);
+		expect(result.selectors[0]).toEqual({
+			selector: "google",
+			published: true,
+			source: "probed",
+		});
+	});
+
+	it("returns empty posture when no well-known selectors are published", async () => {
+		const fetchImpl = async () => dohNxdomainResponse();
+		const result = await probeDkimSelectors("no-dkim.example", { fetchImpl });
+		expect(result).toEqual(emptyDkimPosture());
+	});
+
+	it("silently drops absent selectors (no false positives in the output)", async () => {
+		const fetchImpl = async (url: string) => {
+			const name = new URL(url).searchParams.get("name") ?? "";
+			// selector1 is published; all others are NXDOMAIN
+			if (name === "selector1._domainkey.acme.com") {
+				return dohTxtResponse(['"v=DKIM1; p=AAA"']);
+			}
+			return dohNxdomainResponse();
+		};
+		const result = await probeDkimSelectors("acme.com", { fetchImpl });
+		// Only the published selector should appear; absent probes are dropped.
+		expect(result.selectors.every((s) => s.published === true)).toBe(true);
+		expect(result.selectors.every((s) => s.source === "probed")).toBe(true);
+	});
+
+	it("degrades to emptyDkimPosture when DoH times out (probe failure → not probed, not absent)", async () => {
+		const fetchImpl = async (): Promise<Response> => {
+			throw new Error("AbortError: signal timed out");
+		};
+		const result = await probeDkimSelectors("timeout.example", { fetchImpl });
+		// Timeout should produce published:null for each selector but probeDkimSelectors
+		// filters to published===true only, so the result is empty — not an error.
+		expect(result).toEqual(emptyDkimPosture());
+	});
+
+	it("does not include published:null (transient unavailable) selectors in output", async () => {
+		// SERVFAIL returns published:null — should not appear as a published selector.
+		const fetchImpl = async () =>
+			new Response(JSON.stringify({ Status: 2 }), { status: 200 });
+		const result = await probeDkimSelectors("servfail.example", { fetchImpl });
+		expect(result.selectors).toHaveLength(0);
+	});
+
+	it("probes against the well-known candidate list, not observed selectors", async () => {
+		const probed: string[] = [];
+		const fetchImpl = async (url: string) => {
+			const name = new URL(url).searchParams.get("name") ?? "";
+			probed.push(name.split("._domainkey.")[0] ?? "");
+			return dohNxdomainResponse();
+		};
+		await probeDkimSelectors("acme.com", { fetchImpl });
+		// Every probed selector should be in the well-known list.
+		for (const sel of probed) {
+			expect(DKIM_PROBE_SELECTORS).toContain(sel);
+		}
+		expect(probed).toHaveLength(DKIM_PROBE_SELECTORS.length);
+	});
+});
+
+// ── mergeDkimPosture (#358) ─────────────────────────────────────────
+
+describe("mergeDkimPosture", () => {
+	it("tags observed-only selectors as source:'observed'", () => {
+		const observed = {
+			selectors: [{ selector: "s1", published: true }],
+		};
+		const probed = emptyDkimPosture();
+		const result = mergeDkimPosture(observed, probed);
+		expect(result.selectors).toEqual([
+			{ selector: "s1", published: true, source: "observed" },
+		]);
+	});
+
+	it("tags probed-only selectors as source:'probed'", () => {
+		const probed = {
+			selectors: [{ selector: "google", published: true, source: "probed" as const }],
+		};
+		const result = mergeDkimPosture(emptyDkimPosture(), probed);
+		expect(result.selectors).toEqual([
+			{ selector: "google", published: true, source: "probed" },
+		]);
+	});
+
+	it("tags selectors present in both as source:'both' without duplication", () => {
+		const observed = {
+			selectors: [{ selector: "google", published: true }],
+		};
+		const probed = {
+			selectors: [{ selector: "google", published: true, source: "probed" as const }],
+		};
+		const result = mergeDkimPosture(observed, probed);
+		expect(result.selectors).toHaveLength(1);
+		expect(result.selectors[0]).toEqual({
+			selector: "google",
+			published: true,
+			source: "both",
+		});
+	});
+
+	it("uses observed published status for overlap (observed is authoritative)", () => {
+		// Observed has published:false (revoked key), probe has published:true.
+		// The observed value should win.
+		const observed = {
+			selectors: [{ selector: "old", published: false }],
+		};
+		const probed = {
+			selectors: [{ selector: "old", published: true, source: "probed" as const }],
+		};
+		const result = mergeDkimPosture(observed, probed);
+		expect(result.selectors[0]).toEqual({
+			selector: "old",
+			published: false,
+			source: "both",
+		});
+	});
+
+	it("merges multiple selectors with correct provenance", () => {
+		const observed = {
+			selectors: [
+				{ selector: "custom-sel", published: true },
+				{ selector: "google", published: true },
+			],
+		};
+		const probed = {
+			selectors: [
+				{ selector: "google", published: true, source: "probed" as const },
+				{ selector: "selector1", published: true, source: "probed" as const },
+			],
+		};
+		const result = mergeDkimPosture(observed, probed);
+		// Alphabetical order: custom-sel, google, selector1
+		expect(result.selectors).toEqual([
+			{ selector: "custom-sel", published: true, source: "observed" },
+			{ selector: "google", published: true, source: "both" },
+			{ selector: "selector1", published: true, source: "probed" },
+		]);
+	});
+
+	it("returns empty posture when both inputs are empty", () => {
+		expect(mergeDkimPosture(emptyDkimPosture(), emptyDkimPosture())).toEqual(
+			emptyDkimPosture(),
+		);
+	});
+
+	it("output is alphabetically sorted for stable rendering", () => {
+		const observed = {
+			selectors: [
+				{ selector: "zebra", published: true },
+				{ selector: "alpha", published: true },
+			],
+		};
+		const result = mergeDkimPosture(observed, emptyDkimPosture());
+		expect(result.selectors.map((s) => s.selector)).toEqual(["alpha", "zebra"]);
 	});
 });
