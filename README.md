@@ -8,7 +8,7 @@ PhishSOC is a self-hosted phishing-detection layer wrapped around a complete Clo
 
 An **AI agent** runs alongside the inbox: it reads incoming mail, auto-drafts replies (always requiring explicit send-confirmation), and exposes 9 agent tools in-app and 13 tools over [MCP](https://modelcontextprotocol.io/) so external clients like Claude Code or Cursor can act on any mailbox. Built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and [Workers AI](https://developers.cloudflare.com/workers-ai/).
 
-![PhishSOC screenshot](./demo_app.png)
+![PhishSOC screenshot](./docs/img/demo_app.webp)
 
 
 Read the blog post to learn more about Cloudflare Email Service and how to use it with the Agents SDK, MCP, and from the Wrangler CLI: [Email for Agents](https://blog.cloudflare.com/email-for-agents/).
@@ -118,6 +118,8 @@ Any user who passes the shared Cloudflare Access policy can access all mailboxes
 
 See also: [SECURITY_SPEC.md](./SECURITY_SPEC.md) — "Rules for Agent-Safe Email Pipelines", a vendor-neutral codification of the prompt-injection and async-pipeline invariants this codebase ships.
 
+[Security Policies](./docs/security-policies.md) — SCA (Dependabot) and SAST (CodeQL) remediation SLAs, merge-gate policies, and waiver processes (OSPS-VM-05.01, VM-05.02, VM-06.01).
+
 The security pipeline is **opt-in per mailbox** — existing mailboxes are unaffected until you flip the toggle in **Settings → Security**. When enabled, every inbound email runs through a synchronous scoring pipeline (SPF/DKIM/DMARC parse → URL heuristics → LLM classifier → sender reputation → threat-intel feed match → aggregate verdict), then an async deep-scan stage layered on top.
 
 ### Recommended configuration after enabling
@@ -206,6 +208,22 @@ The per-domain page (`/domains/:domain`) surfaces published email-auth posture a
                      │                  │────>│  Workers AI     │
                      └──────────────────┘     └─────────────────┘
 ```
+
+## Versioning and Support
+
+PhishSOC uses [Semantic Versioning](https://semver.org/). Changes are tracked
+in [`CHANGELOG.md`](CHANGELOG.md) (auto-maintained by
+[git-cliff](https://git-cliff.org/) from conventional commits).
+
+For the full release support policy — which branches receive security fixes,
+expected support windows per release, and EOL policy for older releases — see
+[docs/support.md](docs/support.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the fork→branch→PR flow, how to run tests, commit-format rules, and DCO sign-off requirement.
+
+For project governance, maintainer contacts, and the solo-maintainer review waiver, see [MAINTAINERS.md](MAINTAINERS.md).
 
 ## License
 

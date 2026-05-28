@@ -47,7 +47,7 @@ function EmailVerdictPill({
 	);
 }
 import { useFeedback } from "~/lib/feedback";
-import { getSnippetText } from "~/lib/utils";
+import { getSnippetText, formatParticipants } from "~/lib/utils";
 import {
 	useDeleteEmail,
 	useEmails,
@@ -220,6 +220,7 @@ export default function EmailListRoute() {
 	}, [folders, folder]);
 
 	const isPanelOpen = selectedEmailId !== null || isComposing;
+	const showCompose = !!(folder && FOLDER_EMPTY_STATES[folder]?.showCompose);
 
 	// Track folder identity to detect folder changes vs page changes
 	const prevFolderRef = useRef<string | undefined>(undefined);
@@ -303,18 +304,6 @@ export default function EmailListRoute() {
 		}
 	};
 
-	const formatParticipants = (email: Email): string => {
-		if (email.participants) {
-			const names = email.participants
-				.split(",")
-				.map((p) => p.trim().split("@")[0])
-				.filter((name, idx, arr) => arr.indexOf(name) === idx);
-			if (names.length <= 3) return names.join(", ");
-			return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
-		}
-		return email.sender.split("@")[0];
-	};
-
 	return (
 		<MailboxSplitView
 			selectedEmailId={selectedEmailId}
@@ -330,6 +319,18 @@ export default function EmailListRoute() {
 							<span className="text-sm text-ink-3 mr-2 hidden sm:inline">
 								{totalCount} conversation{totalCount !== 1 ? "s" : ""}
 							</span>
+						)}
+						{showCompose && (
+							<Tooltip content="Compose" side="bottom" asChild>
+								<Button
+									variant="ghost"
+									shape="square"
+									size="sm"
+									icon={<PencilSimpleIcon size={18} />}
+									onClick={() => startCompose()}
+									aria-label="Compose"
+								/>
+							</Tooltip>
 						)}
 						<Tooltip
 							content={isRefreshing ? "Refreshing..." : "Refresh"}

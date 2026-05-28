@@ -467,9 +467,10 @@ export interface TlsRptPostureView {
 	endpoints: readonly string[] | null;
 }
 
-/** DKIM published-record posture (#170). Per-selector list of selectors
- * observed over the last 30 days on inbound mail to this domain, each with
- * its current published-at-`<selector>._domainkey.<domain>` status.
+/** DKIM published-record posture (#170, #358). Per-selector list of selectors
+ * observed over the last 30 days on inbound mail to this domain OR found by
+ * the active well-known-selector probe, each with its published status and
+ * provenance.
  *
  * `published: true` — DoH returned a TXT entry that's a valid DKIM record.
  * `published: false` — durable "no record" (NXDOMAIN, NOERROR-no-data, or
@@ -479,12 +480,20 @@ export interface TlsRptPostureView {
  *   affordance as `false` per the #170 Constraints, but the cache layer
  *   keeps them separate.
  *
+ * `source` (#358) records how the selector was discovered:
+ *   - `"observed"` — lifted from inbound `Authentication-Results` headers.
+ *   - `"probed"` — found by the active well-known-selector probe (always `published=true`).
+ *   - `"both"` — observed inbound AND confirmed by the active probe.
+ *   - absent (legacy / pre-#358 payloads) — treat as `"observed"`.
+ *
  * Empty `selectors` is the natural state for a domain that's never sent
- * inbound DKIM-signed mail; the UI shows the empty-state affordance. */
+ * inbound DKIM-signed mail AND none of the well-known selectors are published;
+ * the UI shows the empty-state affordance. */
 export interface DkimPostureView {
 	selectors: ReadonlyArray<{
 		selector: string;
 		published: boolean | null;
+		source?: "observed" | "probed" | "both";
 	}>;
 }
 

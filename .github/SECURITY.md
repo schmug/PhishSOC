@@ -31,3 +31,7 @@ Out of scope:
 ## Disclosure
 
 We prefer coordinated disclosure. After a fix ships and operators have had a reasonable window to upgrade, we will publish a GitHub Security Advisory crediting the reporter (unless anonymity is requested).
+
+## Internal security policies
+
+Remediation SLAs and merge-gate policies for automated findings (Dependabot / CodeQL) are documented in [`docs/security-policies.md`](../docs/security-policies.md). The timelines there are consistent with the acknowledgement and fix windows stated above.
