@@ -207,6 +207,16 @@ The per-domain page (`/domains/:domain`) surfaces published email-auth posture a
                      └──────────────────┘     └─────────────────┘
 ```
 
+## Versioning and Support
+
+PhishSOC uses [Semantic Versioning](https://semver.org/). Changes are tracked
+in [`CHANGELOG.md`](CHANGELOG.md) (auto-maintained by
+[git-cliff](https://git-cliff.org/) from conventional commits).
+
+For the full release support policy — which branches receive security fixes,
+expected support windows per release, and EOL policy for older releases — see
+[docs/support.md](docs/support.md).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the fork→branch→PR flow, how to run tests, commit-format rules, and DCO sign-off requirement.
