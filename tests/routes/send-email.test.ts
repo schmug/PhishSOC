@@ -42,10 +42,12 @@ import type { MailboxContext } from "../../workers/lib/mailbox";
 
 // ── fake stub ────────────────────────────────────────────────────────────────
 
-function makeStub() {
+function makeStub(overrides: Record<string, unknown> = {}) {
 	return {
 		async checkSendRateLimit() { return null; },
 		async createEmail() { return {}; },
+		async getEmail() { return null; },
+		...overrides,
 	};
 }
 
@@ -198,6 +200,29 @@ describe("POST /emails/preflight", () => {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(
 					sendBody({ text: "I need gift card codes urgently" }),
+				),
+			},
+		);
+		expect(res.status).toBe(200);
+		const json = await res.json() as { tier: number };
+		expect(json.tier).toBe(2);
+	});
+
+	it("returns tier 2 for agent-authored external draft via draft_id (#266)", async () => {
+		currentStub = makeStub({
+			async getEmail(id: string) {
+				if (id === "draft-agent-1") return { created_by: "agent" };
+				return null;
+			},
+		});
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails/preflight`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(
+					sendBody({ to: "vendor@external.com", draft_id: "draft-agent-1" }),
 				),
 			},
 		);

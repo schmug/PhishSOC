@@ -16,6 +16,7 @@ import {
 } from "../lib/email-helpers";
 import { SendEmailRequestSchema } from "../lib/schemas";
 import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
+import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
 import { Folders } from "../../shared/folders";
 import type { MailboxContext } from "../lib/mailbox";
 
@@ -26,8 +27,10 @@ export async function handleReplyEmail(c: AppContext) {
 	const mailboxId = c.req.param("mailboxId") ?? "";
 	const id = c.req.param("id") ?? "";
 	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments } = body;
+	const { to, cc, bcc, from, subject, html, text, attachments, draft_id } = body;
 
+	const stub = c.var.mailboxStub;
+	const createdBy = await resolveCreatedByFromDraft(stub, draft_id);
 	const gate = await enforceSendRiskConfirmation(
 		c.env,
 		c.req.header("x-confirmation-token"),
@@ -39,11 +42,10 @@ export async function handleReplyEmail(c: AppContext) {
 			subject,
 			body: html || text || "",
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
+			createdBy,
 		},
 	);
 	if (!gate.ok) return c.json(gate.body, gate.status);
-
-	const stub = c.var.mailboxStub;
 	const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
 
 	if (!rawOriginal) {
@@ -132,8 +134,10 @@ export async function handleForwardEmail(c: AppContext) {
 	const mailboxId = c.req.param("mailboxId") ?? "";
 	const id = c.req.param("id") ?? "";
 	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments } = body;
+	const { to, cc, bcc, from, subject, html, text, attachments, draft_id } = body;
 
+	const stub = c.var.mailboxStub;
+	const createdBy = await resolveCreatedByFromDraft(stub, draft_id);
 	const gate = await enforceSendRiskConfirmation(
 		c.env,
 		c.req.header("x-confirmation-token"),
@@ -145,11 +149,10 @@ export async function handleForwardEmail(c: AppContext) {
 			subject,
 			body: html || text || "",
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
+			createdBy,
 		},
 	);
 	if (!gate.ok) return c.json(gate.body, gate.status);
-
-	const stub = c.var.mailboxStub;
 	const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
 
 	if (!rawOriginal) {

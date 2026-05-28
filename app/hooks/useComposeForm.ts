@@ -236,6 +236,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 					from: mailboxId,
 					subject: latestSubjectRef.current || ".",
 					text: htmlToPlainText(latestBodyRef.current) || " ",
+					draft_id: composeOptions.draftEmail?.id,
 				});
 				setPreflight(result);
 			} catch {
@@ -288,6 +289,9 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		const ccRecipients = splitEmailList(cc); const bccRecipients = splitEmailList(bcc);
 		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
 		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
+		const draftId = composeOptions.draftEmail?.id;
+		const mode = composeOptions.mode;
+		const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
 		const emailData = {
 			to: toEmailListValue(toRecipients),
 			cc: toEmailListValue(ccRecipients),
@@ -296,8 +300,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			subject,
 			html: body,
 			text: htmlToPlainText(body),
+			draft_id: draftId,
 		};
-		const draftId = composeOptions.draftEmail?.id; const mode = composeOptions.mode; const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
 		setIsSending(true);
 		try {
 			let confirmationToken: string | undefined;
