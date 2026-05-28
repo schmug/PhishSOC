@@ -211,6 +211,8 @@ The per-domain page (`/domains/:domain`) surfaces published email-auth posture a
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the fork→branch→PR flow, how to run tests, commit-format rules, and DCO sign-off requirement.
 
+For project governance, maintainer contacts, and the solo-maintainer review waiver, see [MAINTAINERS.md](MAINTAINERS.md).
+
 ## License
 
 Apache 2.0 -- see [LICENSE](LICENSE).
