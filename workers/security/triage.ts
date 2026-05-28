@@ -190,6 +190,12 @@ function evaluateHardAllow(inputs: TriageInputs): TriageShortCircuit | null {
 	// CRITICAL INVARIANT: require DMARC pass. Without it, anyone can spoof
 	// the From: address of a trusted domain.
 	if (inputs.auth.dmarc !== "pass") return null;
+	// CRITICAL INVARIANT: the DMARC pass must come from a trusted authserv-id.
+	// `auth.trusted` is only set when an operator-configured allowlist matched
+	// (see parseAuthResults). Without this, a forged Authentication-Results
+	// header would trigger hard-allow and skip the whole pipeline on any
+	// deployment that has not configured trustedAuthservIds.
+	if (!inputs.auth.trusted) return null;
 
 	const senderMatch = inputs.settings.allowlist_senders.includes(inputs.sender);
 	const domain = inputs.sender.split("@")[1] ?? "";

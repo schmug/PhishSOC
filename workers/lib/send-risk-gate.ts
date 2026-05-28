@@ -51,35 +51,40 @@ export async function enforceSendRiskConfirmation(
 	}
 
 	const { CONFIRMATION_TOKEN_SECRET, BLOOM_KV } = env;
-	if (CONFIRMATION_TOKEN_SECRET && BLOOM_KV) {
-		const attachmentIds = (input.attachments ?? [])
-			.map((a) => a.filename?.trim() ?? "")
-			.filter(Boolean);
-		const payloadHash = await computePayloadHash(
-			input.to,
-			input.subject,
-			input.body,
-			attachmentIds,
-			input.cc,
-			input.bcc,
-		);
-		const verified = await verifyConfirmationToken(
-			confirmationToken,
-			CONFIRMATION_TOKEN_SECRET,
-			input.mailboxId,
-			payloadHash,
-			BLOOM_KV,
-		);
-		if (!verified) {
-			return { ok: false, status: 401, body: { error: "invalid or expired confirmation token" } };
-		}
-		if (verified.tier < risk.tier) {
-			return {
-				ok: false,
-				status: 401,
-				body: { error: "confirmation_required", risk },
-			};
-		}
+	// Fail closed: a tier >= 1 send must never proceed when the step-up
+	// verification primitives are unavailable. Skipping verification here (the
+	// previous behaviour when either binding was missing) accepted any token —
+	// including a forged or replayed one — for a high-risk send.
+	if (!CONFIRMATION_TOKEN_SECRET || !BLOOM_KV) {
+		return { ok: false, status: 401, body: { error: "confirmation_unavailable", risk } };
+	}
+	const attachmentIds = (input.attachments ?? [])
+		.map((a) => a.filename?.trim() ?? "")
+		.filter(Boolean);
+	const payloadHash = await computePayloadHash(
+		input.to,
+		input.subject,
+		input.body,
+		attachmentIds,
+		input.cc,
+		input.bcc,
+	);
+	const verified = await verifyConfirmationToken(
+		confirmationToken,
+		CONFIRMATION_TOKEN_SECRET,
+		input.mailboxId,
+		payloadHash,
+		BLOOM_KV,
+	);
+	if (!verified) {
+		return { ok: false, status: 401, body: { error: "invalid or expired confirmation token" } };
+	}
+	if (verified.tier < risk.tier) {
+		return {
+			ok: false,
+			status: 401,
+			body: { error: "confirmation_required", risk },
+		};
 	}
 
 	return { ok: true, risk };

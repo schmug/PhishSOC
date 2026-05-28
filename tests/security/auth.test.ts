@@ -109,12 +109,17 @@ describe("parseAuthResults — authserv-id gating", () => {
 		expect(v).toEqual(emptyVerdict());
 	});
 
-	it("treats an empty trusted list as 'trust any' (back-compat)", () => {
+	it("parses results with an empty trusted list but does NOT mark them trusted", () => {
+		// Back-compat: with no allowlist configured we still parse spf/dkim/dmarc
+		// so scoring keeps working. But verdict.trusted stays falsy (F-004): a
+		// forged header on an unconfigured deployment must not be treated as
+		// authserv-trusted, so it cannot reach the hard-allow short-circuit.
 		const v = parseAuthResults(
 			[header("Authentication-Results", "anywhere; spf=pass; dkim=pass; dmarc=pass")],
 			{ trustedAuthservIds: [] },
 		);
 		expect(v).toMatchObject({ spf: "pass", dkim: "pass", dmarc: "pass" });
+		expect(v.trusted).toBeFalsy();
 	});
 
 	it("preserves 'first set wins' — legitimate dkim=none is not overwritten by later headers", () => {

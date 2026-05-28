@@ -108,3 +108,45 @@ describe("enforceSendRiskConfirmation — agent tier and tier downgrade", () => 
 		expect(result.body.risk?.tier).toBe(2);
 	});
 });
+
+describe("enforceSendRiskConfirmation — fail closed on missing bindings", () => {
+	const SECRET = "test-confirm-secret";
+	const MAILBOX_ID = "operator@internal.example";
+	type GateEnv = Parameters<typeof enforceSendRiskConfirmation>[0];
+
+	// A high-risk send must NOT be accepted when the step-up verification
+	// primitives are unavailable. Previously, a falsy BLOOM_KV (or secret)
+	// skipped verification and returned ok:true, accepting any token.
+	it("rejects a tier >= 1 send when BLOOM_KV is unconfigured", async () => {
+		const result = await enforceSendRiskConfirmation(
+			{ CONFIRMATION_TOKEN_SECRET: SECRET, BLOOM_KV: undefined } as unknown as GateEnv,
+			"any-token-value",
+			{
+				mailboxId: MAILBOX_ID,
+				to: "vendor@external.com",
+				subject: "Please wire transfer $10,000",
+				body: "Urgent.",
+			},
+		);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.status).toBe(401);
+		expect(result.body.error).toBe("confirmation_unavailable");
+	});
+
+	it("rejects a tier >= 1 send when CONFIRMATION_TOKEN_SECRET is unconfigured", async () => {
+		const result = await enforceSendRiskConfirmation(
+			{ CONFIRMATION_TOKEN_SECRET: undefined, BLOOM_KV: makeKv() } as unknown as GateEnv,
+			"any-token-value",
+			{
+				mailboxId: MAILBOX_ID,
+				to: "vendor@external.com",
+				subject: "Please wire transfer $10,000",
+				body: "Urgent.",
+			},
+		);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.body.error).toBe("confirmation_unavailable");
+	});
+});

@@ -111,6 +111,16 @@ function makeApp(seedDomains: string, orgStore: ReturnType<typeof makeR2Stub>) {
 		return c.json({ domains: (stripped.domains as string[] | undefined) ?? [] });
 	});
 
+	// Mirror of PUT /api/v1/org/settings — must strip default-equal fields
+	// before persisting (F-001), the same as the domain and mailbox PUT paths.
+	app.put("/api/v1/org/settings", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as { settings?: unknown };
+		const incoming = (body.settings ?? {}) as Record<string, unknown>;
+		const stripped = stripDefaultEqual(incoming);
+		await (c.env.BUCKET as typeof orgStore).put("org/settings.json", JSON.stringify(stripped));
+		return c.json({ settings: stripped });
+	});
+
 	return app;
 }
 
@@ -231,5 +241,28 @@ describe("stripDefaultEqual — domains field (#181)", () => {
 		const stored = bucket._read("org/settings.json");
 		const parsed = JSON.parse(stored) as Record<string, unknown>;
 		expect(parsed).not.toHaveProperty("domains");
+	});
+});
+
+describe("PUT /api/v1/org/settings — strips rendered defaults before persist (F-001)", () => {
+	it("does not persist a default-equal field as an explicit org-tier override", async () => {
+		const bucket = makeR2Stub();
+		const app = makeApp("", bucket);
+		const res = await app.request(
+			"/api/v1/org/settings",
+			{
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				// `domains: []` equals the system default; a real save with rendered
+				// defaults must not pin it as an explicit override that shadows
+				// inheritance. A genuine non-default value is preserved.
+				body: JSON.stringify({ settings: { domains: [], agentModel: "custom-model" } }),
+			},
+			{ DOMAINS: "", BUCKET: bucket },
+		);
+		expect(res.status).toBe(200);
+		const stored = JSON.parse(bucket._read("org/settings.json")) as Record<string, unknown>;
+		expect(stored).not.toHaveProperty("domains");
+		expect(stored.agentModel).toBe("custom-model");
 	});
 });

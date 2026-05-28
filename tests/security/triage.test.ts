@@ -3,7 +3,13 @@ import { evaluateTriage } from "../../workers/security/triage";
 import { DEFAULT_SECURITY_SETTINGS } from "../../workers/security/settings";
 import type { AuthVerdict } from "../../workers/security/auth";
 
-const dmarcPass: AuthVerdict = { spf: "pass", dkim: "pass", dmarc: "pass" };
+// A DMARC pass from a trusted authserv-id (verdict.trusted set by
+// parseAuthResults when a configured allowlist matched). Hard-allow requires
+// this; see the F-004 regression test below.
+const dmarcPass: AuthVerdict = { spf: "pass", dkim: "pass", dmarc: "pass", trusted: true };
+// A DMARC pass that is NOT from a trusted authserv-id (e.g. a forged header on
+// a deployment with no trustedAuthservIds configured).
+const dmarcPassUntrusted: AuthVerdict = { spf: "pass", dkim: "pass", dmarc: "pass" };
 const dmarcFail: AuthVerdict = { spf: "fail", dkim: "fail", dmarc: "fail" };
 
 const baseSettings = {
@@ -103,6 +109,21 @@ describe("evaluateTriage — hard allow", () => {
 		});
 		expect(r.shortcircuit?.tier).toBe("hard_allow");
 		expect(r.shortcircuit?.verdict.action).toBe("allow");
+	});
+
+	it("does NOT hard-allow a forged/untrusted DMARC pass, even with an allowlist match", () => {
+		// F-004: with no trustedAuthservIds configured, parseAuthResults leaves
+		// verdict.trusted falsy. A forged Authentication-Results header claiming
+		// dmarc=pass must not reach hard-allow and skip the rest of the pipeline.
+		const r = evaluateTriage({
+			...baseInputs,
+			sender: "ceo@trusted.com",
+			auth: dmarcPassUntrusted,
+			reputation: null,
+			intelMatch: null,
+			settings: { ...baseSettings, allowlist_senders: ["ceo@trusted.com"] },
+		});
+		expect(r.shortcircuit).toBeUndefined();
 	});
 
 	it("allows on explicit domain allowlist + DMARC pass (exact)", () => {

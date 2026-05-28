@@ -153,7 +153,12 @@ export function parseAuthResults(rawHeaders: unknown, options: ParseAuthOptions 
 			if (!matchesTrusted(authservId, trusted)) continue;
 		}
 		if (!verdict.authservId && authservId) verdict.authservId = authservId;
-		if (!verdict.trusted) verdict.trusted = true;
+		// Only mark the verdict trusted when an operator-configured authserv-id
+		// actually matched (gating === true). With no allowlist configured we
+		// still parse results so scoring keeps working, but `trusted` stays
+		// false — so a forged Authentication-Results header on a default
+		// deployment cannot satisfy the hard-allow short-circuit downstream.
+		if (gating && !verdict.trusted) verdict.trusted = true;
 
 		for (const match of raw.matchAll(RESULT_RE)) {
 			const method = match[1].toLowerCase() as "spf" | "dkim" | "dmarc";
