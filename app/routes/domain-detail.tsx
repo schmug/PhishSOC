@@ -101,7 +101,7 @@ function DomainBody({ data, rufData }: { data: DomainStats; rufData: import("~/q
 				<DmarcPostureCard posture={data.dmarcPosture} />
 			</div>
 			<div className="grid gap-4 lg:grid-cols-3">
-				<MtaStsPostureCard posture={data.mtaStsPosture} />
+				<MtaStsPostureCard posture={data.mtaStsPosture} domain={data.domain} />
 				<BimiPostureCard posture={data.bimiPosture} />
 				<SpfPostureCard posture={data.spfPosture} />
 			</div>
@@ -258,12 +258,18 @@ function DmarcPostureCard({
 
 function MtaStsPostureCard({
 	posture,
-}: { posture: DomainStats["mtaStsPosture"] }) {
+	domain,
+}: { posture: DomainStats["mtaStsPosture"]; domain: string }) {
 	const allNull =
 		posture.mode === null &&
 		posture.mx === null &&
 		posture.maxAge === null &&
 		posture.id === null;
+	const txtPublishedPolicyAbsent =
+		posture.id !== null &&
+		posture.mode === null &&
+		posture.mx === null &&
+		posture.maxAge === null;
 	return (
 		<div className="pp-card p-5">
 			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
@@ -275,6 +281,15 @@ function MtaStsPostureCard({
 					MTA-STS isn't published for this domain (or the lookup failed). Operators
 					configure it by publishing a `_mta-sts` TXT record plus a policy file at
 					`mta-sts.&lt;domain&gt;/.well-known/mta-sts.txt`.
+				</p>
+			) : txtPublishedPolicyAbsent ? (
+				<p className="text-[12.5px] text-ink-3">
+					TXT record present (id: <span className="pp-mono">{posture.id}</span>) but
+					policy file unreachable — check that{" "}
+					<span className="pp-mono">
+						mta-sts.{domain}/.well-known/mta-sts.txt
+					</span>{" "}
+					resolves and returns 200.
 				</p>
 			) : (
 				<dl className="space-y-1.5 text-[12.5px]">

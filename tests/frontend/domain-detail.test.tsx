@@ -209,6 +209,82 @@ describe("DomainDetailRoute", () => {
 		expect(within(dkimCard).getAllByText("missing")).toHaveLength(2);
 	});
 
+	it("renders 'policy file unreachable' when _mta-sts TXT id is present but policy fields are null (#359)", () => {
+		queryState = {
+			data: {
+				...populated,
+				mtaStsPosture: {
+					mode: null,
+					mx: null,
+					maxAge: null,
+					id: "20260331",
+				},
+			},
+			isLoading: false,
+			isError: false,
+		};
+		renderDomainDetail("acme.com");
+		const mtaCard = screen
+			.getByText(/mta-sts posture/i)
+			.closest(".pp-card") as HTMLElement;
+		expect(
+			within(mtaCard).getByText(/policy file unreachable/i),
+		).toBeInTheDocument();
+		expect(within(mtaCard).getByText("20260331")).toBeInTheDocument();
+		expect(
+			within(mtaCard).getByText("mta-sts.acme.com/.well-known/mta-sts.txt"),
+		).toBeInTheDocument();
+		// Must not render bare dashes for the missing fields.
+		expect(within(mtaCard).queryByText("—")).not.toBeInTheDocument();
+	});
+
+	it("renders 'isn't published' empty state when MTA-STS posture is all-null (#359)", () => {
+		queryState = {
+			data: {
+				...populated,
+				mtaStsPosture: { mode: null, mx: null, maxAge: null, id: null },
+			},
+			isLoading: false,
+			isError: false,
+		};
+		renderDomainDetail("acme.com");
+		const mtaCard = screen
+			.getByText(/mta-sts posture/i)
+			.closest(".pp-card") as HTMLElement;
+		expect(
+			within(mtaCard).getByText(/mta-sts isn't published/i),
+		).toBeInTheDocument();
+		expect(
+			within(mtaCard).queryByText(/policy file unreachable/i),
+		).not.toBeInTheDocument();
+	});
+
+	it("renders the MTA-STS dl rows when fully configured (#359)", () => {
+		queryState = {
+			data: {
+				...populated,
+				mtaStsPosture: {
+					mode: "enforce",
+					mx: ["mail.acme.com"],
+					maxAge: 604800,
+					id: "20260101",
+				},
+			},
+			isLoading: false,
+			isError: false,
+		};
+		renderDomainDetail("acme.com");
+		const mtaCard = screen
+			.getByText(/mta-sts posture/i)
+			.closest(".pp-card") as HTMLElement;
+		expect(within(mtaCard).getByText("enforce")).toBeInTheDocument();
+		expect(within(mtaCard).getByText("604800s")).toBeInTheDocument();
+		expect(within(mtaCard).getByText("mail.acme.com")).toBeInTheDocument();
+		expect(
+			within(mtaCard).queryByText(/policy file unreachable/i),
+		).not.toBeInTheDocument();
+	});
+
 	it("renders the DMARC fields when posture data is present (forward-compatible)", () => {
 		queryState = {
 			data: {
