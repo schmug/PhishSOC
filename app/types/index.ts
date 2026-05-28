@@ -327,18 +327,21 @@ export interface TlsRptPosture {
 	endpoints: readonly string[] | null;
 }
 
-/** DKIM published-record posture (#170). Per-selector list of selectors
- * observed over a 30-day inbound-mail window, each with current
- * `<selector>._domainkey.<domain>` published-yes/no/unavailable status.
+/** DKIM published-record posture (#170, #358). Per-selector list from the
+ * 30-day inbound-mail observation window AND/OR the active well-known-selector
+ * probe, each with published status and provenance.
  *
- * Empty `selectors` is the natural state for a domain that's never sent
- * inbound DKIM-signed mail. `published: null` is the transient "lookup
- * unavailable" sentinel; the UI renders it identically to `false` (per
- * #170 Constraints) but the cache layer keeps them separate. */
+ * `published: null` is the transient "lookup unavailable" sentinel; the UI
+ * renders it identically to `false` but the cache layer keeps them separate.
+ *
+ * `source` (#358): `"observed"` — from inbound mail headers; `"probed"` —
+ * found by active probe; `"both"` — observed and probed; absent — treat as
+ * `"observed"` (pre-#358 payload). */
 export interface DkimPosture {
 	selectors: ReadonlyArray<{
 		selector: string;
 		published: boolean | null;
+		source?: "observed" | "probed" | "both";
 	}>;
 }
 
