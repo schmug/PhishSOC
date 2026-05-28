@@ -229,7 +229,7 @@ describe("DomainDetailRoute", () => {
 		).toBeInTheDocument();
 		expect(within(mtaCard).getByText("20260331")).toBeInTheDocument();
 		expect(
-			within(mtaCard).getByText(/mta-sts\.acme\.com\/.well-known\/mta-sts\.txt/),
+			within(mtaCard).getByText("mta-sts.acme.com/.well-known/mta-sts.txt"),
 		).toBeInTheDocument();
 		// Must not render bare dashes for the missing fields.
 		expect(within(mtaCard).queryByText("—")).not.toBeInTheDocument();
