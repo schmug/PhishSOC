@@ -132,6 +132,8 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 			try {
 				const preflight = await api.preflightEmail(mailboxId, {
 					to: target.recipient,
+					cc: emailData.cc,
+					bcc: emailData.bcc,
 					from: mailboxId,
 					subject: emailData.subject,
 					text: htmlToPlainText(emailData.html) || " ",
@@ -147,6 +149,8 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 					tier: sendTier,
 					mailboxId,
 					to: emailData.to ?? "",
+					cc: emailData.cc,
+					bcc: emailData.bcc,
 					subject: emailData.subject,
 					body: emailData.html || emailData.text || "",
 					attachmentIds: [],

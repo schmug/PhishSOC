@@ -49,11 +49,16 @@ export async function enforceSendRiskConfirmation(
 
 	const { CONFIRMATION_TOKEN_SECRET, BLOOM_KV } = env;
 	if (CONFIRMATION_TOKEN_SECRET && BLOOM_KV) {
+		const attachmentIds = (input.attachments ?? [])
+			.map((a) => a.filename?.trim() ?? "")
+			.filter(Boolean);
 		const payloadHash = await computePayloadHash(
 			input.to,
 			input.subject,
 			input.body,
-			[],
+			attachmentIds,
+			input.cc,
+			input.bcc,
 		);
 		const verified = await verifyConfirmationToken(
 			confirmationToken,

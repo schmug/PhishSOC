@@ -10,16 +10,18 @@
  * preflighted payload back to the same path (Access injects the step-up
  * JWT), then `postMessage`s the one-shot confirmation token to this opener.
  *
- * The token is bound server-side to a SHA-256 hash of {to, subject, body,
- * attachmentIds}. Callers MUST pass the exact values the email send will
- * use — do not re-normalize between preflight, confirm, and send or the
- * server payloadHash check rejects the token.
+ * The token is bound server-side to a SHA-256 hash of
+ * {to, cc, bcc, subject, body, attachmentIds}. Callers MUST pass the exact
+ * values the email send will use — do not re-normalize between preflight,
+ * confirm, and send or the server payloadHash check rejects the token.
  */
 
 export interface StepUpPayload {
 	tier: 0 | 1 | 2;
 	mailboxId: string;
 	to: string | string[];
+	cc?: string | string[];
+	bcc?: string | string[];
 	subject: string;
 	/** Exactly `html || text || ""` of the outgoing message. */
 	body: string;

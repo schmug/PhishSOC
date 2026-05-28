@@ -3,13 +3,24 @@
 /**
  * Pure aggregator for the org-scope search endpoint (#197).
  *
- * The endpoint fans out across every mailbox the caller can see (today: every
- * mailbox in the org, since #27 isn't closed yet), collects per-mailbox
- * `searchEmails` + `countSearchResults` results, then merges them into a
- * single date-ordered, page-sliced response. Keeping the merge as a pure
- * function lets us unit-test ordering, pagination, and per-mailbox tagging
+ * The HTTP handler fans out only across mailboxes the caller may access
+ * (`callerInAcl`, #27/#295), collects per-mailbox `searchEmails` +
+ * `countSearchResults` results, then merges them here. Keeping the merge as a
+ * pure function lets us unit-test ordering, pagination, and per-mailbox tagging
  * without having to mock R2 + every Durable Object stub.
  */
+
+import { callerInAcl, type MailboxAcl } from "./mailbox-acl";
+
+/** Restrict org-search fan-out to mailboxes the caller is permitted to access. */
+export function mailboxesForOrgSearch<T extends { id: string }>(
+	mailboxes: T[],
+	acls: Array<MailboxAcl | null>,
+	callerEmail: string | null | undefined,
+	callerGroups: string[],
+): T[] {
+	return mailboxes.filter((_, i) => callerInAcl(acls[i], callerEmail, callerGroups));
+}
 
 export type OrgSearchEmailRow = {
 	id: string;

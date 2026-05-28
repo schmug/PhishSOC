@@ -231,6 +231,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			try {
 				const result = await api.preflightEmail(mailboxId, {
 					to,
+					cc: cc || undefined,
+					bcc: bcc || undefined,
 					from: mailboxId,
 					subject: latestSubjectRef.current || ".",
 					text: htmlToPlainText(latestBodyRef.current) || " ",
@@ -244,7 +246,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			}
 		}, 600);
 		return () => clearTimeout(timer);
-	}, [to, mailboxId]);
+	}, [to, cc, bcc, mailboxId]);
 
 	const handleSaveDraft = async () => {
 		if (!mailboxId || isSending) return; setIsSavingDraft(true); setError(null);
@@ -309,6 +311,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 					tier: sendTier,
 					mailboxId,
 					to: emailData.to ?? toEmailListValue(toRecipients) ?? "",
+					cc: emailData.cc,
+					bcc: emailData.bcc,
 					subject: emailData.subject,
 					body: emailData.html || emailData.text || "",
 					attachmentIds: [],
