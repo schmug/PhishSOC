@@ -436,9 +436,11 @@ function DkimPostureCard({
 			</div>
 			{selectors.length === 0 ? (
 				<p className="text-[12.5px] text-ink-3">
-					No DKIM selectors observed on inbound mail in the last 30 days.
-					Selectors are lifted from `Authentication-Results.dkim header.s=`
-					on inbound messages, then resolved at
+					No DKIM selectors observed signing as this domain (`d=`) in the
+					last 30 days. Selectors are lifted from messages where
+					`header.d=` matches this domain — mail your mailboxes receive
+					from other senders is signed under their own `d=`, so those
+					selectors don't appear here. Each selector is resolved at
 					`&lt;selector&gt;._domainkey.&lt;domain&gt;` to confirm the
 					record is still published.
 				</p>
