@@ -420,6 +420,16 @@ function TlsRptPostureCard({
 	);
 }
 
+function DkimSourceBadge({ source }: { source?: "observed" | "probed" | "both" }) {
+	if (!source || source === "observed") return null;
+	const label = source === "both" ? "observed+probed" : "probed";
+	return (
+		<span className="ml-1.5 inline-block text-[10px] px-1.5 py-0.5 rounded bg-surface-2 text-ink-3 pp-mono leading-none">
+			{label}
+		</span>
+	);
+}
+
 function DkimPostureCard({
 	posture,
 }: { posture: DomainStats["dkimPosture"] }) {
@@ -445,11 +455,15 @@ function DkimPostureCard({
 			) : (
 				<dl className="space-y-1.5 text-[12.5px]">
 					{selectors.map((s) => (
-						<PostureRow
-							key={s.selector}
-							label={s.selector}
-							value={s.published === true ? "published" : "missing"}
-						/>
+						<div key={s.selector} className="flex items-baseline justify-between gap-3">
+							<dt className="text-ink-3 flex items-center">
+								{s.selector}
+								<DkimSourceBadge source={s.source} />
+							</dt>
+							<dd className="pp-mono text-ink-2 tabular-nums">
+								{s.published === true ? "published" : "missing"}
+							</dd>
+						</div>
 					))}
 				</dl>
 			)}
