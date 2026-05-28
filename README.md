@@ -120,6 +120,8 @@ See also: [SECURITY_SPEC.md](./SECURITY_SPEC.md) — "Rules for Agent-Safe Email
 
 [Security Policies](./docs/security-policies.md) — SCA (Dependabot) and SAST (CodeQL) remediation SLAs, merge-gate policies, and waiver processes (OSPS-VM-05.01, VM-05.02, VM-06.01).
 
+For secrets management (storage locations, access scope, and rotation policy for every Worker and CI secret), see [docs/secrets.md](./docs/secrets.md).
+
 The security pipeline is **opt-in per mailbox** — existing mailboxes are unaffected until you flip the toggle in **Settings → Security**. When enabled, every inbound email runs through a synchronous scoring pipeline (SPF/DKIM/DMARC parse → URL heuristics → LLM classifier → sender reputation → threat-intel feed match → aggregate verdict), then an async deep-scan stage layered on top.
 
 ### Recommended configuration after enabling
