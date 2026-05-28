@@ -60,7 +60,7 @@ import { emptyMtaStsPosture, fetchMtaStsPosture } from "./mta-sts/posture";
 import { emptyBimiPosture, fetchBimiPosture } from "./dmarc/bimi";
 import { emptySpfPosture, fetchSpfPosture } from "./spf/posture";
 import { emptyTlsRptPosture, fetchTlsRptPosture } from "./tlsrpt/posture";
-import { emptyDkimPosture, fetchDkimPosture } from "./dkim/posture";
+import { emptyDkimPosture, fetchDkimPosture, mergeDkimPosture, probeDkimSelectors } from "./dkim/posture";
 import { emptyDnssecPosture, fetchDnssecPosture } from "./dnssec/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
@@ -576,6 +576,11 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	const dnssecPromise = fetchDnssecPosture(domain, {
 		kv: c.env.BLOOM_KV ?? null,
 	});
+	// Active DKIM probe (#358): probe well-known selectors concurrently with
+	// the rest of the posture fan-out so it doesn't add sequential latency.
+	const dkimProbePromise = probeDkimSelectors(domain, {
+		kv: c.env.BLOOM_KV ?? null,
+	});
 
 	const [
 		settledSummaries,
@@ -587,6 +592,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		settledSpf,
 		settledTlsRpt,
 		settledDnssec,
+		settledDkimProbe,
 	] = await Promise.all([
 		Promise.allSettled(summaryPromises),
 		Promise.allSettled(alignmentPromises),
@@ -597,6 +603,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		Promise.allSettled([spfPromise]),
 		Promise.allSettled([tlsRptPromise]),
 		Promise.allSettled([dnssecPromise]),
+		Promise.allSettled([dkimProbePromise]),
 	]);
 
 	const summaries: Array<DomainMailboxSummary | null> = settledSummaries.map((r) => {
@@ -673,7 +680,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		}
 	}
 
-	const dkimPosture = observedSelectors.size === 0
+	const observedDkimPosture = observedSelectors.size === 0
 		? emptyDkimPosture()
 		: await fetchDkimPosture(domain, [...observedSelectors], {
 			kv: c.env.BLOOM_KV ?? null,
@@ -684,6 +691,13 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 			);
 			return emptyDkimPosture();
 		});
+
+	const probedDkimPosture =
+		settledDkimProbe[0]?.status === "fulfilled"
+			? settledDkimProbe[0].value
+			: emptyDkimPosture();
+
+	const dkimPosture = mergeDkimPosture(observedDkimPosture, probedDkimPosture);
 
 	const mailboxRefs: DomainMailboxRef[] = scoped.map((m) => ({
 		id: m.id,

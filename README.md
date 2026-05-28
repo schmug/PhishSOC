@@ -6,9 +6,9 @@
 
 PhishSOC is a self-hosted phishing-detection layer wrapped around a complete Cloudflare-native email client. Mail arrives via [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/), each mailbox is isolated in its own [Durable Object](https://developers.cloudflare.com/durable-objects/) with a SQLite database, and attachments are stored in [R2](https://developers.cloudflare.com/r2/). When the security pipeline is enabled per mailbox, every inbound message is scored — SPF/DKIM/DMARC parse, URL/homograph heuristics, an LLM classifier, threat-intel feed matching, and an async deep-scan stage (redirect-chain resolution, RDAP domain age, attachment checks) — before it ever reaches the inbox.
 
-An **AI agent** runs alongside the inbox: it reads incoming mail, auto-drafts replies (always requiring explicit send-confirmation), and exposes 9 email tools — usable in-app or over [MCP](https://modelcontextprotocol.io/) so external clients like Claude Code or Cursor can act on any mailbox. Built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and [Workers AI](https://developers.cloudflare.com/workers-ai/).
+An **AI agent** runs alongside the inbox: it reads incoming mail, auto-drafts replies (always requiring explicit send-confirmation), and exposes 9 agent tools in-app and 13 tools over [MCP](https://modelcontextprotocol.io/) so external clients like Claude Code or Cursor can act on any mailbox. Built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and [Workers AI](https://developers.cloudflare.com/workers-ai/).
 
-![PhishSOC screenshot](./demo_app.png)
+![PhishSOC screenshot](./docs/img/demo_app.webp)
 
 
 Read the blog post to learn more about Cloudflare Email Service and how to use it with the Agents SDK, MCP, and from the Wrangler CLI: [Email for Agents](https://blog.cloudflare.com/email-for-agents/).
@@ -42,7 +42,8 @@ https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
 
 - **Full email client** — Send and receive emails via Cloudflare Email Routing with a rich text composer, reply/forward threading, folder organization, search, and attachments
 - **Per-mailbox isolation** — Each mailbox runs in its own Durable Object with SQLite storage and R2 for attachments
-- **Built-in AI agent** — Side panel with 9 email tools for reading, searching, drafting, and sending
+- **Built-in AI agent** — Side panel with 9 agent tools for reading, searching, drafting, and sending
+- **MCP server** — 13 tools at `/mcp` so external AI clients (Claude Code, Cursor) can act on any mailbox
 - **Auto-draft on new email** — Agent automatically reads inbound emails and generates draft replies, always requiring explicit confirmation before sending
 - **Configurable and persistent** — Custom system prompts per mailbox, persistent chat history, streaming markdown responses, and tool call visibility
 - **Security pipeline** — Opt-in SPF/DKIM/DMARC parsing, URL homograph detection, LLM classifier, sender reputation, threat-intel feed matching, and async deep-scan (redirect-chain resolution, RDAP domain age, attachment heuristics). See [Security](#security) below
@@ -117,6 +118,8 @@ Any user who passes the shared Cloudflare Access policy can access all mailboxes
 
 See also: [SECURITY_SPEC.md](./SECURITY_SPEC.md) — "Rules for Agent-Safe Email Pipelines", a vendor-neutral codification of the prompt-injection and async-pipeline invariants this codebase ships.
 
+[Security Policies](./docs/security-policies.md) — SCA (Dependabot) and SAST (CodeQL) remediation SLAs, merge-gate policies, and waiver processes (OSPS-VM-05.01, VM-05.02, VM-06.01).
+
 The security pipeline is **opt-in per mailbox** — existing mailboxes are unaffected until you flip the toggle in **Settings → Security**. When enabled, every inbound email runs through a synchronous scoring pipeline (SPF/DKIM/DMARC parse → URL heuristics → LLM classifier → sender reputation → threat-intel feed match → aggregate verdict), then an async deep-scan stage layered on top.
 
 ### Recommended configuration after enabling
@@ -161,7 +164,7 @@ Weekends: flagged when weekdays_only is on
 | Sender reputation | ms | Rolling avg score per mailbox; flagged-sender fast path |
 | Threat-intel bloom lookup | ms | Against [workers/intel/feeds.ts](workers/intel/feeds.ts) (URLhaus, PhishDestroy, configurable; Spamhaus DROP/EDROP CIDR feeds consumed in deep-scan) |
 | Triage short-circuits | µs | Hard-block on confirmed intel / flagged sender; hard-allow on DMARC pass + allowlist or trusted history |
-| LLM classifier | seconds (5s cap) | Workers AI; fail-closed to `suspicious` on timeout |
+| LLM classifier | seconds (5s cap) | Workers AI; timeout → contributes 0 to score (skipped); parse/other error → fail-closed to `suspicious` (see [SECURITY_SPEC.md Rule 5](SECURITY_SPEC.md)) |
 | Verdict aggregation | µs | Pure scoring function; thresholds configurable per mailbox |
 | Off-hours boost | µs | Optional, scoring-only |
 | **Async deep-scan** | seconds–tens-of-seconds | `ctx.waitUntil`; see below |
@@ -205,6 +208,22 @@ The per-domain page (`/domains/:domain`) surfaces published email-auth posture a
                      │                  │────>│  Workers AI     │
                      └──────────────────┘     └─────────────────┘
 ```
+
+## Versioning and Support
+
+PhishSOC uses [Semantic Versioning](https://semver.org/). Changes are tracked
+in [`CHANGELOG.md`](CHANGELOG.md) (auto-maintained by
+[git-cliff](https://git-cliff.org/) from conventional commits).
+
+For the full release support policy — which branches receive security fixes,
+expected support windows per release, and EOL policy for older releases — see
+[docs/support.md](docs/support.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the fork→branch→PR flow, how to run tests, commit-format rules, and DCO sign-off requirement.
+
+For project governance, maintainer contacts, and the solo-maintainer review waiver, see [MAINTAINERS.md](MAINTAINERS.md).
 
 ## License
 

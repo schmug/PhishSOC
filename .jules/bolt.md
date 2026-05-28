@@ -6,3 +6,6 @@
 ## 2026-05-24 - Optimize Search Highlight Parsing
 **Learning:** `highlightTerms` repeatedly recompiles `RegExp` objects and executes string replacements on every single render iteration across search results, causing UI jank on larger search result batches.
 **Action:** Implemented a bounded `Map` cache (size 100) to memoize the string parsing and `RegExp` instantiation inside `highlightTerms`. This resulted in a ~15x speedup for the function on synthetic benchmarks.
+## 2026-05-27 - Optimize Participant Parsing
+**Learning:** `formatParticipants` repeated `split()`, `map()`, and `filter()` on strings repeatedly for each row item during list view rendering. This becomes computationally expensive as the size of the list increases, especially when parsing identical threads.
+**Action:** Implemented a bounded `Map` cache inside `formatParticipants` in `app/lib/utils.ts` to memoize the parsed result for unique participant lists.
