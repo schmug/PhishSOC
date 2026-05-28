@@ -65,7 +65,11 @@ import { emptyDnssecPosture, fetchDnssecPosture } from "./dnssec/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
-import { aggregateOrgSearch, type PerMailboxSearchResult } from "./lib/org-search";
+import {
+	aggregateOrgSearch,
+	mailboxesForOrgSearch,
+	type PerMailboxSearchResult,
+} from "./lib/org-search";
 import { readMailboxAcl, writeMailboxAcl, deleteMailboxAcl, callerInAcl, callerGroupsFromJwt } from "./lib/mailbox-acl";
 import { aclMemberRoutes } from "./routes/acl-members";
 import { fireYaraScan } from "./security/yaramail-signal";
@@ -139,6 +143,9 @@ app.use("/api/*", cors({
 // without being rejected by the mailbox ACL check.
 app.route("/api/v1/mailboxes/:mailboxId/yaramail-callback", yaramailCallbackRoute);
 
+// Exact mailbox path (GET/PUT/DELETE settings) must be covered — Hono's `/*`
+// wildcard does not match when there is no trailing segment after :mailboxId.
+app.use("/api/v1/mailboxes/:mailboxId", requireMailbox);
 app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 
 // -- Config ---------------------------------------------------------
@@ -407,6 +414,10 @@ app.get("/api/v1/org/acl-overview", async (c) => {
 const ORG_SEARCH_PER_MAILBOX_CAP = 200;
 
 app.get("/api/v1/org/search", async (c) => {
+	const callerEmail =
+		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+	const callerGroups = callerGroupsFromJwt(c.req.header("cf-access-jwt-assertion"));
+
 	const searchOpts = {
 		query: c.req.query("query") || "",
 		folder: c.req.query("folder"),
@@ -422,7 +433,10 @@ app.get("/api/v1/org/search", async (c) => {
 	const page = Math.max(1, intQuery(c, "page") ?? 1);
 	const limit = Math.min(Math.max(intQuery(c, "limit") ?? 25, 1), 100);
 
-	const mailboxes = await listMailboxes(c.env.BUCKET);
+	const allMailboxes = await listMailboxes(c.env.BUCKET);
+	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
+	const mailboxes = mailboxesForOrgSearch(allMailboxes, acls, callerEmail, callerGroups);
+
 	const settled = await Promise.allSettled(
 		mailboxes.map(async (m) => {
 			const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(m.id)) as any;

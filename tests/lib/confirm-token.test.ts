@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
 	signConfirmationToken,
 	verifyConfirmationToken,
+	computePayloadHash,
 	type ConfirmationTokenPayload,
 } from "../../workers/lib/confirm-token";
 
@@ -190,5 +191,85 @@ describe("verifyConfirmationToken", () => {
 			kv as unknown as KVNamespace,
 		);
 		expect(result).toBeNull();
+	});
+});
+
+describe("computePayloadHash", () => {
+	it("includes cc and bcc in the hash so undisclosed recipients cannot be added after confirm", async () => {
+		const base = await computePayloadHash(
+			"victim@acme.com",
+			"Pay invoice",
+			"wire transfer details",
+			[],
+		);
+		const withBcc = await computePayloadHash(
+			"victim@acme.com",
+			"Pay invoice",
+			"wire transfer details",
+			[],
+			undefined,
+			"exfil@evil.com",
+		);
+		expect(withBcc).not.toBe(base);
+	});
+
+	it("normalizes recipient list order for to, cc, and bcc", async () => {
+		const h1 = await computePayloadHash(
+			["a@x.com", "b@x.com"],
+			"s",
+			"b",
+			[],
+			"c@x.com, d@x.com",
+			"e@x.com",
+		);
+		const h2 = await computePayloadHash(
+			["b@x.com", "a@x.com"],
+			"s",
+			"b",
+			[],
+			"d@x.com, c@x.com",
+			"e@x.com",
+		);
+		expect(h1).toBe(h2);
+	});
+});
+
+describe("computePayloadHash", () => {
+	it("includes cc and bcc in the hash so undisclosed recipients cannot be added after confirm", async () => {
+		const base = await computePayloadHash(
+			"victim@acme.com",
+			"Pay invoice",
+			"wire transfer details",
+			[],
+		);
+		const withBcc = await computePayloadHash(
+			"victim@acme.com",
+			"Pay invoice",
+			"wire transfer details",
+			[],
+			undefined,
+			"exfil@evil.com",
+		);
+		expect(withBcc).not.toBe(base);
+	});
+
+	it("normalizes recipient list order for to, cc, and bcc", async () => {
+		const h1 = await computePayloadHash(
+			["a@x.com", "b@x.com"],
+			"s",
+			"b",
+			[],
+			"c@x.com, d@x.com",
+			"e@x.com",
+		);
+		const h2 = await computePayloadHash(
+			["b@x.com", "a@x.com"],
+			"s",
+			"b",
+			[],
+			"d@x.com, c@x.com",
+			"e@x.com",
+		);
+		expect(h1).toBe(h2);
 	});
 });

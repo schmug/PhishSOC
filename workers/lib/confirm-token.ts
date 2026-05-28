@@ -13,15 +13,28 @@ export type ConfirmationTokenPayload = {
 
 const JTI_KV_PREFIX = "confirm-jti:";
 
+/** Normalize RFC-5322 recipient field(s) to a sorted, deduped address list. */
+function normalizeRecipients(field: string | string[] | null | undefined): string[] {
+	if (!field) return [];
+	const addresses = Array.isArray(field) ? field : [field];
+	return addresses
+		.flatMap((a) => a.split(",").map((s) => s.trim()))
+		.filter(Boolean)
+		.sort();
+}
+
 export async function computePayloadHash(
 	to: string | string[],
 	subject: string,
 	body: string,
 	attachmentIds: string[],
+	cc?: string | string[] | null,
+	bcc?: string | string[] | null,
 ): Promise<string> {
-	const toArr = (Array.isArray(to) ? [...to] : [to]).sort();
 	const canonical = JSON.stringify({
-		to: toArr,
+		to: normalizeRecipients(to),
+		cc: normalizeRecipients(cc),
+		bcc: normalizeRecipients(bcc),
 		subject,
 		body,
 		attachmentIds: [...attachmentIds].sort(),

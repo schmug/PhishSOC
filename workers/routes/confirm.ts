@@ -24,6 +24,8 @@ const ConfirmBodySchema = z.object({
 	tier: z.number().int().min(0).max(2),
 	mailboxId: z.string().min(1),
 	to: z.union([z.string(), z.array(z.string())]),
+	cc: z.union([z.string(), z.array(z.string())]).optional(),
+	bcc: z.union([z.string(), z.array(z.string())]).optional(),
 	subject: z.string().optional().default(""),
 	body: z.string().optional().default(""),
 	attachmentIds: z.array(z.string()).optional().default([]),
@@ -122,8 +124,8 @@ confirmRoute.post("/", async (c) => {
 		return c.json({ error: "invalid request body" }, 400);
 	}
 
-	const { tier, mailboxId, to, subject, body, attachmentIds } = parseResult.data;
-	const payloadHash = await computePayloadHash(to, subject, body, attachmentIds);
+	const { tier, mailboxId, to, cc, bcc, subject, body, attachmentIds } = parseResult.data;
+	const payloadHash = await computePayloadHash(to, subject, body, attachmentIds, cc, bcc);
 	const jti = crypto.randomUUID();
 
 	const confirmToken = await signConfirmationToken(
