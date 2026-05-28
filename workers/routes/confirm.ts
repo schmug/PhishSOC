@@ -100,7 +100,7 @@ confirmRoute.get("/", (c) =>
 confirmRoute.post("/", async (c) => {
 	const { STEP_UP_AUD, TEAM_DOMAIN, CONFIRMATION_TOKEN_SECRET, BLOOM_KV } = c.env;
 
-	if (!STEP_UP_AUD || !CONFIRMATION_TOKEN_SECRET || !TEAM_DOMAIN) {
+	if (!STEP_UP_AUD || !CONFIRMATION_TOKEN_SECRET || !TEAM_DOMAIN || !BLOOM_KV) {
 		return c.json({ error: "step-up auth not configured" }, 503);
 	}
 

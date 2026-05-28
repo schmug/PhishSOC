@@ -115,6 +115,23 @@ describe("POST /api/v1/confirm — configuration guard", () => {
 		const res = await fetch("/api/v1/confirm", { method: "POST" });
 		expect(res.status).toBe(503);
 	});
+
+	it("returns a clean 503 (not a 500) when BLOOM_KV is not bound", async () => {
+		// Without the guard, a valid step-up JWT would proceed to BLOOM_KV.put
+		// on an undefined binding and throw an unhandled TypeError → 500.
+		const { fetch } = makeApp(FULL_ENV);
+		const res = await fetch("/api/v1/confirm", {
+			method: "POST",
+			headers: {
+				"cf-access-jwt-assertion": "valid-step-up-token",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(VALID_BODY),
+		});
+		expect(res.status).toBe(503);
+		const body = await res.json() as { error: string };
+		expect(body.error).toContain("not configured");
+	});
 });
 
 describe("POST /api/v1/confirm — JWT validation", () => {
