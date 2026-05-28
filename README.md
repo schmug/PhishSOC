@@ -118,6 +118,8 @@ Any user who passes the shared Cloudflare Access policy can access all mailboxes
 
 See also: [SECURITY_SPEC.md](./SECURITY_SPEC.md) — "Rules for Agent-Safe Email Pipelines", a vendor-neutral codification of the prompt-injection and async-pipeline invariants this codebase ships.
 
+To report a vulnerability or review the disclosure policy, see [SECURITY.md](.github/SECURITY.md).
+
 [Security Policies](./docs/security-policies.md) — SCA (Dependabot) and SAST (CodeQL) remediation SLAs, merge-gate policies, and waiver processes (OSPS-VM-05.01, VM-05.02, VM-06.01).
 
 For secrets management (storage locations, access scope, and rotation policy for every Worker and CI secret), see [docs/secrets.md](./docs/secrets.md).
