@@ -171,6 +171,11 @@ describe("triage short-circuits", () => {
 			settings: settings({
 				allowlist_senders: ["newsletter@acme-example.com"],
 				trusted_auto_allow: true,
+				// Hard-allow requires a DMARC pass from a TRUSTED authserv-id
+				// (F-004). The benign-newsletter fixture's Authentication-Results
+				// authserv-id is mx.example.com; trust it so the verdict is marked
+				// trusted and the short-circuit fires.
+				trusted_authserv_ids: ["mx.example.com"],
 			}),
 		});
 		const parsed = await loadFixture("benign-newsletter.eml");

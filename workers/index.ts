@@ -763,7 +763,12 @@ app.put("/api/v1/org/settings", async (c) => {
 	if (!parsed.success) {
 		return c.json({ error: "Invalid org settings", issues: parsed.error.issues }, 400);
 	}
-	const written = await putOrgSettings(c.env, parsed.data);
+	// Symmetry with the domain (below) and mailbox PUT/POST paths: drop fields
+	// equal to the system default before persisting so a fresh form save with
+	// rendered defaults doesn't pin them as explicit org-tier overrides that
+	// shadow a future default change for every inheriting domain/mailbox.
+	const stripped = stripDefaultEqual(parsed.data);
+	const written = await putOrgSettings(c.env, stripped);
 	return c.json({ settings: written });
 });
 
