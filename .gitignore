@@ -22,3 +22,18 @@ worker-configuration.d.ts
 # local-only session state (plans, transcripts, settings.local.json) ignored.
 .claude/*
 !.claude/settings.json
+# Track the committed security-review skills (sec-* + shared _lib).
+!.claude/skills/
+
+# Security-review scratch state and raw outputs (ephemeral; not committed —
+# confirmed findings go to GitHub Security Advisories per .github/SECURITY.md).
+.threat-model-state/
+.triage-state/
+.patch-state/
+/VULN-FINDINGS.json
+/VULN-FINDINGS.md
+/TRIAGE.json
+/TRIAGE.md
+/PATCHES/
+/PATCHES.json
+/PATCHES.md
