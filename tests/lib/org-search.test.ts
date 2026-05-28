@@ -3,12 +3,38 @@
 import { describe, expect, it } from "vitest";
 import {
 	aggregateOrgSearch,
+	mailboxesForOrgSearch,
 	type PerMailboxSearchResult,
 } from "../../workers/lib/org-search";
+import type { MailboxAcl } from "../../workers/lib/mailbox-acl";
 
 function row(id: string, date: string | null, extra: Record<string, unknown> = {}) {
 	return { id, date, ...extra };
 }
+
+describe("mailboxesForOrgSearch (#27 ACL)", () => {
+	it("excludes mailboxes the caller is not permitted to access", () => {
+		const mailboxes = [
+			{ id: "alice@acme.com", email: "alice@acme.com" },
+			{ id: "bob@acme.com", email: "bob@acme.com" },
+		];
+		const acls: Array<MailboxAcl | null> = [
+			{ owner: "alice@acme.com", members: ["alice@acme.com"] },
+			{ owner: "bob@acme.com", members: ["bob@acme.com"] },
+		];
+		const visible = mailboxesForOrgSearch(mailboxes, acls, "alice@acme.com", []);
+		expect(visible.map((m) => m.id)).toEqual(["alice@acme.com"]);
+	});
+
+	it("includes mailboxes granted via CF Access group", () => {
+		const mailboxes = [{ id: "shared@acme.com", email: "shared@acme.com" }];
+		const acls: Array<MailboxAcl | null> = [
+			{ owner: "alice@acme.com", members: ["alice@acme.com"], groups: ["soc"] },
+		];
+		const visible = mailboxesForOrgSearch(mailboxes, acls, "bob@acme.com", ["soc"]);
+		expect(visible).toHaveLength(1);
+	});
+});
 
 describe("aggregateOrgSearch", () => {
 	it("merges + tags rows from each mailbox with mailbox metadata", () => {
