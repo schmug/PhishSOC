@@ -35,3 +35,7 @@ We prefer coordinated disclosure. After a fix ships and operators have had a rea
 ## Internal security policies
 
 Remediation SLAs and merge-gate policies for automated findings (Dependabot / CodeQL) are documented in [`docs/security-policies.md`](../docs/security-policies.md). The timelines there are consistent with the acknowledgement and fix windows stated above.
+
+## Secrets management
+
+For documentation of every Worker and CI secret (storage location, access scope, and rotation policy), see [docs/secrets.md](../docs/secrets.md).
