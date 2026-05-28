@@ -175,7 +175,7 @@ describe("DomainDetailRoute", () => {
 			.getByText(/dkim posture/i)
 			.closest(".pp-card") as HTMLElement;
 		expect(
-			within(dkimCard).getByText(/no dkim selectors observed on inbound mail/i),
+			within(dkimCard).getByText(/no dkim selectors observed signing as this domain/i),
 		).toBeInTheDocument();
 	});
 
