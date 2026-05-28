@@ -7,11 +7,8 @@ import {
 	signConfirmationToken,
 } from "../../workers/lib/confirm-token";
 
-const SECRET = "test-confirm-secret";
-const MAILBOX_ID = "operator@internal.example";
-
-function makeKv() {
-	const store = new Map<string, string>();
+function makeKv(initial: Record<string, string> = {}) {
+	const store = new Map(Object.entries(initial));
 	return {
 		get: vi.fn(async (key: string) => store.get(key) ?? null),
 		put: vi.fn(async (key: string, value: string) => {
@@ -23,7 +20,46 @@ function makeKv() {
 	} as unknown as KVNamespace;
 }
 
-describe("enforceSendRiskConfirmation", () => {
+describe("enforceSendRiskConfirmation — payload binding", () => {
+	const SECRET = "test-secret-at-least-32-chars-long-for-hs256!!";
+
+	it("rejects a token when BCC was added after step-up confirm", async () => {
+		const kv = makeKv();
+		const jti = "gate-bcc-jti";
+		await kv.put(`confirm-jti:${jti}`, "1");
+
+		const mailboxId = "soc@acme.com";
+		const to = "ceo@acme.com";
+		const subject = "wire transfer";
+		const body = "Please send funds today";
+		const payloadHash = await computePayloadHash(to, subject, body, []);
+		const token = await signConfirmationToken(
+			{ tier: 2, mailboxId, payloadHash, jti },
+			SECRET,
+		);
+
+		const gate = await enforceSendRiskConfirmation(
+			{ CONFIRMATION_TOKEN_SECRET: SECRET, BLOOM_KV: kv },
+			token,
+			{
+				mailboxId,
+				to,
+				subject,
+				body,
+				bcc: "exfil@evil.com",
+			},
+		);
+
+		expect(gate.ok).toBe(false);
+		if (!gate.ok) {
+			expect(gate.status).toBe(401);
+		}
+	});
+});
+
+describe("enforceSendRiskConfirmation — agent tier and tier downgrade", () => {
+	const SECRET = "test-confirm-secret";
+	const MAILBOX_ID = "operator@internal.example";
 	let kv: KVNamespace;
 
 	beforeEach(() => {
