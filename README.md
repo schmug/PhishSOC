@@ -124,6 +124,8 @@ To report a vulnerability or review the disclosure policy, see [SECURITY.md](.gi
 
 For secrets management (storage locations, access scope, and rotation policy for every Worker and CI secret), see [docs/secrets.md](./docs/secrets.md).
 
+For the step-up confirmation flow (two-Access-app topology, shared-hostname caveat, required secrets, and testing guide), see [docs/step-up-auth.md](./docs/step-up-auth.md).
+
 The security pipeline is **opt-in per mailbox** — existing mailboxes are unaffected until you flip the toggle in **Settings → Security**. When enabled, every inbound email runs through a synchronous scoring pipeline (SPF/DKIM/DMARC parse → URL heuristics → LLM classifier → sender reputation → threat-intel feed match → aggregate verdict), then an async deep-scan stage layered on top.
 
 ### Recommended configuration after enabling
