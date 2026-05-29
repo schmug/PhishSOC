@@ -54,6 +54,8 @@ never stored in `wrangler.jsonc` or any checked-in file.
 | **Rotation cadence** | Whenever the step-up Access application is regenerated or relevant personnel change. |
 | **If missing** | The `/api/v1/confirm` endpoint returns `503`. The rest of the Worker is unaffected. |
 
+See [`docs/step-up-auth.md`](step-up-auth.md) for the full two-app topology, shared-hostname caveat, and testing guide.
+
 ### `CONFIRMATION_TOKEN_SECRET` — optional
 
 | Field | Value |
