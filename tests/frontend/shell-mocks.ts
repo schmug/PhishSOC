@@ -5,7 +5,8 @@
 // must mock every one of these so the render doesn't fan out to the real
 // fetcher. Today Shell calls `useMailbox`, `useMailboxes` (from
 // `~/queries/mailboxes`), `useDashboardSummary` (from `~/queries/dashboard`),
-// and `useDomainStats` (from `~/queries/domains`).
+// `useDomainStats` (from `~/queries/domains`), and `useFolders` (from
+// `~/queries/folders`).
 //
 // **Adding a new query to Shell?** Update the matching factory below — every
 // test that calls the factory in its `vi.mock(...)` body picks up the new
@@ -112,6 +113,34 @@ export function shellDomainsMock(
 		useAddDomain: () => ({ mutateAsync: vi.fn(), isPending: false }),
 		useRemoveDomain: () => ({ mutateAsync: vi.fn(), isPending: false }),
 		useRufRecords: () => ({ data: undefined, isLoading: false, isError: false }),
+		...overrides,
+	};
+}
+
+export interface ShellFoldersMockOverrides {
+	useFolders?: () => QueryStub<unknown[]>;
+	useCreateFolder?: () => unknown;
+	useUpdateFolder?: () => unknown;
+	useDeleteFolder?: () => unknown;
+	[key: string]: unknown;
+}
+
+/**
+ * Factory for `~/queries/folders`. Defaults: empty folder list (resolved,
+ * not loading) so Shell renders without fetching. Pass `useFolders` override
+ * per-test to exercise specific folder states.
+ *
+ * Shell uses `useFolders(mailboxId)` for the sidebar folder nav (#366).
+ * Any test that renders Shell on a mailbox route must mock this module.
+ */
+export function shellFoldersMock(
+	overrides: ShellFoldersMockOverrides = {},
+): Record<string, unknown> {
+	return {
+		useFolders: () => ({ data: [] }),
+		useCreateFolder: () => ({ mutateAsync: vi.fn(), isPending: false }),
+		useUpdateFolder: () => ({ mutateAsync: vi.fn(), isPending: false }),
+		useDeleteFolder: () => ({ mutateAsync: vi.fn(), isPending: false }),
 		...overrides,
 	};
 }

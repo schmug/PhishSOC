@@ -14,6 +14,18 @@ vi.mock("~/queries/mailboxes", () => ({
 	}),
 }));
 
+vi.mock("~/queries/dashboard", () => ({
+	useDashboardSummary: () => ({ data: undefined }),
+}));
+
+vi.mock("~/queries/domains", () => ({
+	useDomainStats: () => ({ data: undefined, isLoading: false, isError: false }),
+}));
+
+vi.mock("~/queries/folders", () => ({
+	useFolders: () => ({ data: [] }),
+}));
+
 import Shell from "~/components/phishsoc/Shell";
 import { renderWithProviders } from "./test-utils";
 

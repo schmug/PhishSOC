@@ -50,6 +50,10 @@ vi.mock("~/queries/dashboard", () => ({
 	}),
 }));
 
+vi.mock("~/queries/folders", () => ({
+	useFolders: () => ({ data: [] }),
+}));
+
 import Shell from "~/components/phishsoc/Shell";
 import { useUIStore } from "~/hooks/useUIStore";
 import { renderWithProviders } from "./test-utils";

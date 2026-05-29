@@ -38,6 +38,10 @@ vi.mock("~/queries/dashboard", () => ({
 	useDashboardSummary: () => queryState,
 }));
 
+vi.mock("~/queries/folders", () => ({
+	useFolders: () => ({ data: [] }),
+}));
+
 import Shell from "~/components/phishsoc/Shell";
 import { renderWithProviders } from "./test-utils";
 

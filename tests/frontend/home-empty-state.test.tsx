@@ -41,6 +41,10 @@ vi.mock("~/hooks/useAutoProvisionMailboxes", () => ({
 	useAutoProvisionMailboxes: () => undefined,
 }));
 
+vi.mock("~/queries/folders", () => ({
+	useFolders: () => ({ data: [] }),
+}));
+
 import HomeRoute from "~/routes/home";
 import { renderWithProviders } from "./test-utils";
 

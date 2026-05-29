@@ -39,6 +39,10 @@ vi.mock("~/queries/org", () => ({
 	useOrgOverview: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
+vi.mock("~/queries/folders", () => ({
+	useFolders: () => ({ data: [] }),
+}));
+
 import OrgSettingsRoute from "~/routes/org-settings";
 import { renderWithProviders } from "./test-utils";
 
