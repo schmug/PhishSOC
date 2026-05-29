@@ -10,6 +10,9 @@ interface EmailIframeProps {
 	body: string;
 	/** When true, iframe auto-sizes to content height instead of filling parent */
 	autoSize?: boolean;
+	/** Called when the analyst clicks a link inside the rendered email body.
+	 *  The iframe never navigates; the parent decides what to show instead. */
+	onLinkClick?: (href: string) => void;
 }
 
 // Email-body design system, intentionally distinct from the app tokens because
@@ -51,28 +54,36 @@ const EMAIL_PALETTES = {
  * - A strict CSP meta tag blocks external resource loads inside the
  *   iframe as a defense-in-depth layer.
  */
-export default function EmailIframe({ body, autoSize }: EmailIframeProps) {
+export default function EmailIframe({ body, autoSize, onLinkClick }: EmailIframeProps) {
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const [height, setHeight] = useState(autoSize ? 100 : 0);
 	const theme = useUIStore((s) => s.theme);
 
-	// Listen for height reports from the sandboxed iframe
+	// Listen for messages from the sandboxed iframe (height reports + link clicks)
 	const handleMessage = useCallback(
 		(event: MessageEvent) => {
-			if (!autoSize) return;
 			// Only accept messages from our own iframe
 			if (event.source !== iframeRef.current?.contentWindow) return;
+			if (!event.data || typeof event.data !== "object") return;
+
 			if (
-				event.data &&
-				typeof event.data === "object" &&
+				autoSize &&
 				event.data.__emailIframeHeight &&
 				typeof event.data.height === "number" &&
 				event.data.height > 0
 			) {
 				setHeight(event.data.height);
 			}
+
+			if (
+				event.data.__emailLinkClick &&
+				typeof event.data.href === "string" &&
+				event.data.href
+			) {
+				onLinkClick?.(event.data.href);
+			}
 		},
-		[autoSize],
+		[autoSize, onLinkClick],
 	);
 
 	useEffect(() => {
@@ -108,6 +119,22 @@ export default function EmailIframe({ body, autoSize }: EmailIframeProps) {
 				setTimeout(reportHeight, 400);
 			<\/script>`
 			: "";
+
+		// Link-interception script: prevents anchor navigation and posts the
+		// href to the parent so it can show the safe link inspector. The
+		// sandbox no longer grants allow-popups or
+		// allow-top-navigation-by-user-activation, so navigation is already
+		// blocked at the sandbox level — this script surfaces the clicked URL.
+		const linkScript = `<script>
+			document.addEventListener("click", function(e) {
+				var el = e.target;
+				while (el && el.tagName !== "A") el = el.parentElement;
+				if (!el) return;
+				e.preventDefault();
+				var href = el.href;
+				if (href) parent.postMessage({ __emailLinkClick: true, href: href }, "*");
+			}, true);
+		<\/script>`;
 
 		// Use srcdoc so the iframe is truly sandboxed (no same-origin access).
 		// We can't use doc.write() because that requires allow-same-origin.
@@ -161,7 +188,7 @@ h1, h2, h3 { margin: 8px 0 4px; }
 ul, ol { padding-left: 20px; margin: 4px 0; }
 </style>
 </head>
-<body>${cleanBody}${heightScript}</body>
+<body>${cleanBody}${heightScript}${linkScript}</body>
 </html>`;
 	}, [body, autoSize, theme]);
 
@@ -170,7 +197,7 @@ ul, ol { padding-left: 20px; margin: 4px 0; }
 			ref={iframeRef}
 			className="block w-full border-0"
 			style={autoSize ? { height: `${height}px` } : { height: "100%" }}
-			sandbox="allow-scripts allow-popups allow-top-navigation-by-user-activation"
+			sandbox="allow-scripts"
 			title="Email content"
 		/>
 	);

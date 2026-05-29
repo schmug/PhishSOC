@@ -4,7 +4,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "~/services/api";
-import type { Email } from "~/types";
+import type { Email, EmailUrl } from "~/types";
 import { queryKeys } from "./keys";
 
 // ---------- Types ----------
@@ -88,6 +88,19 @@ export function useThreadReplies(
 			return emails;
 		},
 		enabled: !!mailboxId && !!threadId,
+	});
+}
+
+export function useEmailUrls(
+	mailboxId: string | undefined,
+	emailId: string | undefined,
+) {
+	return useQuery<{ urls: EmailUrl[] }>({
+		queryKey: mailboxId && emailId
+			? queryKeys.emails.urls(mailboxId, emailId)
+			: ["emails", "_disabled_urls"],
+		queryFn: () => api.getEmailUrls(mailboxId!, emailId!),
+		enabled: !!mailboxId && !!emailId,
 	});
 }
 
