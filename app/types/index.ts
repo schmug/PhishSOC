@@ -197,6 +197,20 @@ export interface Attachment {
 	disposition?: string;
 }
 
+export interface EmailUrl {
+	id: string;
+	email_id: string;
+	url: string;
+	display_text: string | null;
+	is_homograph: number;
+	is_shortener: number;
+	resolved_url: string | null;
+	page_title: string | null;
+	fetch_status: string | null;
+	verdict: string | null;
+	created_at: string;
+}
+
 export interface Folder {
 	id: string;
 	name: string;

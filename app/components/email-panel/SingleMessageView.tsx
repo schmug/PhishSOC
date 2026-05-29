@@ -2,8 +2,10 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import { useState } from "react";
 import EmailAttachmentList from "~/components/EmailAttachmentList";
 import EmailIframe from "~/components/EmailIframe";
+import SafeLinkInspector from "~/components/email-panel/SafeLinkInspector";
 import SecurityVerdictPanel from "~/components/email-panel/SecurityVerdictPanel";
 import { formatDetailDate, rewriteInlineImages } from "~/lib/utils";
 import type { Email } from "~/types";
@@ -19,6 +21,8 @@ export default function SingleMessageView({
 	mailboxId,
 	onPreviewImage,
 }: SingleMessageViewProps) {
+	const [inspectedUrl, setInspectedUrl] = useState<string | null>(null);
+
 	return (
 		<div className="flex flex-col h-full">
 			<div className="px-4 py-4 border-b border-line md:px-6">
@@ -42,6 +46,17 @@ export default function SingleMessageView({
 
 			<SecurityVerdictPanel email={email} />
 
+			{inspectedUrl && mailboxId && (
+				<div className="px-4 py-3 border-b border-line md:px-6">
+					<SafeLinkInspector
+						href={inspectedUrl}
+						emailId={email.id}
+						mailboxId={mailboxId}
+						onClose={() => setInspectedUrl(null)}
+					/>
+				</div>
+			)}
+
 			<div className="flex-1 min-h-0">
 				<EmailIframe
 					body={rewriteInlineImages(
@@ -50,6 +65,7 @@ export default function SingleMessageView({
 						email.id,
 						email.attachments,
 					)}
+					onLinkClick={setInspectedUrl}
 				/>
 			</div>
 

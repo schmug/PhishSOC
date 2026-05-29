@@ -1201,6 +1201,14 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 	return c.json({ emails, totalCount });
 });
 
+// -- URL scan results -----------------------------------------------
+
+app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/urls", async (c: AppContext) => {
+	const emailId = c.req.param("emailId")!;
+	const urls = await c.var.mailboxStub.getUrlsForEmail(emailId);
+	return c.json({ urls });
+});
+
 // -- Attachments ----------------------------------------------------
 
 app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId", async (c: AppContext) => {

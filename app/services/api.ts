@@ -8,6 +8,7 @@ import type {
 	DomainStats,
 	DmarcRufRecord,
 	Email,
+	EmailUrl,
 	Folder,
 	HubContributionsResponse,
 	HubDestroylistResponse,
@@ -208,6 +209,8 @@ const api = {
 		get<Email[]>(`/api/v1/mailboxes/${mailboxId}/threads/${threadId}`, { signal: opts?.signal }),
 	markThreadRead: (mailboxId: string, threadId: string) =>
 		post<void>(`/api/v1/mailboxes/${mailboxId}/threads/${threadId}/read`),
+	getEmailUrls: (mailboxId: string, emailId: string) =>
+		get<{ urls: EmailUrl[] }>(`/api/v1/mailboxes/${mailboxId}/emails/${emailId}/urls`),
 	getAttachment: (mailboxId: string, emailId: string, attachmentId: string) =>
 		get<Blob>(`/api/v1/mailboxes/${mailboxId}/emails/${emailId}/attachments/${attachmentId}`, { responseType: "blob" }),
 	saveDraft: (

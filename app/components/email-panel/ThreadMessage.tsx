@@ -11,8 +11,10 @@ import {
 	PencilSimpleIcon,
 	TrashIcon,
 } from "@phosphor-icons/react";
+import { useState } from "react";
 import EmailAttachmentList from "~/components/EmailAttachmentList";
 import EmailIframe from "~/components/EmailIframe";
+import SafeLinkInspector from "~/components/email-panel/SafeLinkInspector";
 import {
 	formatDetailDate,
 	formatShortDate,
@@ -76,6 +78,7 @@ export default function ThreadMessage({
 	onViewSource,
 	onPreviewImage,
 }: ThreadMessageProps) {
+	const [inspectedUrl, setInspectedUrl] = useState<string | null>(null);
 	const isSelf = email.sender === mailboxEmail;
 	const containerClassName = `${!isLast ? "border-b border-line" : ""} ${isDraft ? "border-l-2 border-l-suspect bg-suspect/[0.02]" : ""}`;
 	const senderLabel = isDraft ? "Draft reply" : isSelf ? "You" : email.sender;
@@ -176,6 +179,16 @@ export default function ThreadMessage({
 				</div>
 
 				<div id={contentId} className="md:ml-[42px]">
+					{inspectedUrl && mailboxId && (
+						<div className="mb-3">
+							<SafeLinkInspector
+								href={inspectedUrl}
+								emailId={email.id}
+								mailboxId={mailboxId}
+								onClose={() => setInspectedUrl(null)}
+							/>
+						</div>
+					)}
 					<EmailIframe
 						body={rewriteInlineImages(
 							email.body || "",
@@ -184,6 +197,7 @@ export default function ThreadMessage({
 							email.attachments,
 						)}
 						autoSize
+						onLinkClick={setInspectedUrl}
 					/>
 				</div>
 
