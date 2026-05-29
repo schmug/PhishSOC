@@ -24,6 +24,14 @@ export interface Env extends Cloudflare.Env {
 	 */
 	CONFIRMATION_TOKEN_SECRET?: string;
 	/**
+	 * TEMPORARY (issue #364 criterion 1). When "1", the `/api/v1/confirm` POST
+	 * handler logs the step-up Access-JWT's numeric time claims (no identity
+	 * PII) so a `wrangler tail` can determine empirically whether `iat` /
+	 * `auth_time` distinguish a fresh MFA from a warm-session reissue. Off by
+	 * default; remove once the #364 finding is recorded.
+	 */
+	STEP_UP_CLAIM_DEBUG?: string;
+	/**
 	 * HMAC-SHA256 shared secret for authenticating yaramail sidecar callbacks.
 	 * Set with `wrangler secret put YARAMAIL_CALLBACK_SECRET`.
 	 * When absent, the yaramail callback route returns 503.

@@ -112,7 +112,29 @@ confirmRoute.post("/", async (c) => {
 	try {
 		const { issuer, certsUrl } = getAccessUrls(TEAM_DOMAIN);
 		const JWKS = createRemoteJWKSet(certsUrl);
-		await jwtVerify(token, JWKS, { issuer, audience: STEP_UP_AUD });
+		const { payload } = await jwtVerify(token, JWKS, { issuer, audience: STEP_UP_AUD });
+
+		// TEMPORARY — issue #364 acceptance criterion 1 (empirical gate).
+		// The freshness enforcement #364 proposes is only viable if some
+		// Access-JWT claim distinguishes a real MFA event from a silent
+		// warm-session reissue. This diagnostic logs ONLY the numeric time
+		// claims (never `email`/identity claims) so a `wrangler tail` can
+		// compare a fresh-MFA send against a warm-session second send within
+		// the Access session window. Off unless STEP_UP_CLAIM_DEBUG === "1";
+		// REMOVE by redeploying from clean main once the finding is recorded.
+		if (c.env.STEP_UP_CLAIM_DEBUG === "1") {
+			const claims = payload as Record<string, unknown>;
+			console.log(
+				"[#364 step-up claims] " +
+					JSON.stringify({
+						iat: claims.iat ?? null,
+						auth_time: claims.auth_time ?? null,
+						exp: claims.exp ?? null,
+						nbf: claims.nbf ?? null,
+						now: Math.floor(Date.now() / 1000),
+					}),
+			);
+		}
 	} catch {
 		return c.json({ error: "invalid step-up JWT" }, 401);
 	}
