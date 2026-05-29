@@ -1,6 +1,8 @@
 import {
 	BriefcaseIcon,
 	BuildingsIcon,
+	CaretDownIcon,
+	CaretRightIcon,
 	EnvelopeIcon,
 	GaugeIcon,
 	GearSixIcon,
@@ -10,18 +12,21 @@ import {
 	MagnifyingGlassIcon,
 	MoonIcon,
 	SparkleIcon,
+	StarIcon,
 	SunIcon,
 	TrayIcon,
 	XIcon,
 } from "@phosphor-icons/react";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, useLocation, useMatch, useNavigate, useParams } from "react-router";
 import { useUIStore } from "~/hooks/useUIStore";
 import { useDashboardSummary } from "~/queries/dashboard";
 import { useDomainStats } from "~/queries/domains";
+import { useFolders } from "~/queries/folders";
 import { useMailbox, useMailboxes } from "~/queries/mailboxes";
 import { useMe } from "~/queries/me";
-import type { DomainMailboxRef, Mailbox } from "~/types";
+import { SYSTEM_FOLDER_IDS, getFolderDisplayName } from "shared/folders";
+import type { DomainMailboxRef, Folder, Mailbox } from "~/types";
 import AccountMenu from "./AccountMenu";
 import AgentPanelSlot from "./AgentPanelSlot";
 import Breadcrumb from "./Breadcrumb";
@@ -114,6 +119,217 @@ function SectionLabel({ children }: { children: ReactNode }) {
 	);
 }
 
+// ---------------------------------------------------------------------------
+// Folder nav localStorage helpers — per-mailbox, client-side only.
+// Key format: `phishsoc-folder-nav-<mailboxId>`
+// ---------------------------------------------------------------------------
+
+interface FolderNavPrefs {
+	/** IDs of pinned/favorite folders */
+	favorites: string[];
+	/** Whether the folder section is collapsed */
+	collapsed: boolean;
+}
+
+const FOLDER_NAV_STORAGE_PREFIX = "phishsoc-folder-nav-";
+
+function loadFolderNavPrefs(mailboxId: string): FolderNavPrefs {
+	if (typeof window === "undefined") return { favorites: [], collapsed: false };
+	try {
+		const raw = localStorage.getItem(`${FOLDER_NAV_STORAGE_PREFIX}${mailboxId}`);
+		if (raw) {
+			const parsed = JSON.parse(raw) as Partial<FolderNavPrefs>;
+			return {
+				favorites: Array.isArray(parsed.favorites) ? parsed.favorites : [],
+				collapsed: typeof parsed.collapsed === "boolean" ? parsed.collapsed : false,
+			};
+		}
+	} catch {
+		/* ignore quota / private mode */
+	}
+	return { favorites: [], collapsed: false };
+}
+
+function saveFolderNavPrefs(mailboxId: string, prefs: FolderNavPrefs) {
+	if (typeof window === "undefined") return;
+	try {
+		localStorage.setItem(
+			`${FOLDER_NAV_STORAGE_PREFIX}${mailboxId}`,
+			JSON.stringify(prefs),
+		);
+	} catch {
+		/* ignore quota / private mode */
+	}
+}
+
+/**
+ * Sort folders: system folders first (per SYSTEM_FOLDER_IDS order), then
+ * custom folders alphabetically.
+ */
+function sortFolders(folders: Folder[]): Folder[] {
+	return [...folders].sort((a, b) => {
+		const ai = SYSTEM_FOLDER_IDS.indexOf(a.id as (typeof SYSTEM_FOLDER_IDS)[number]);
+		const bi = SYSTEM_FOLDER_IDS.indexOf(b.id as (typeof SYSTEM_FOLDER_IDS)[number]);
+		// Both system folders — use SYSTEM_FOLDER_IDS order
+		if (ai !== -1 && bi !== -1) return ai - bi;
+		// Only a is a system folder
+		if (ai !== -1) return -1;
+		// Only b is a system folder
+		if (bi !== -1) return 1;
+		// Both custom — alphabetical
+		return a.name.localeCompare(b.name);
+	});
+}
+
+interface FolderNavProps {
+	mailboxId: string;
+	folders: Folder[];
+	base: string;
+}
+
+function FolderNav({ mailboxId, folders, base }: FolderNavProps) {
+	const [prefs, setPrefs] = useState<FolderNavPrefs>(() =>
+		loadFolderNavPrefs(mailboxId),
+	);
+
+	// Re-load prefs when the mailboxId changes (user switches mailbox)
+	useEffect(() => {
+		setPrefs(loadFolderNavPrefs(mailboxId));
+	}, [mailboxId]);
+
+	const toggleCollapsed = useCallback(() => {
+		setPrefs((prev) => {
+			const next = { ...prev, collapsed: !prev.collapsed };
+			saveFolderNavPrefs(mailboxId, next);
+			return next;
+		});
+	}, [mailboxId]);
+
+	const toggleFavorite = useCallback(
+		(folderId: string) => {
+			setPrefs((prev) => {
+				const isFav = prev.favorites.includes(folderId);
+				const next = {
+					...prev,
+					favorites: isFav
+						? prev.favorites.filter((id) => id !== folderId)
+						: [...prev.favorites, folderId],
+				};
+				saveFolderNavPrefs(mailboxId, next);
+				return next;
+			});
+		},
+		[mailboxId],
+	);
+
+	const sorted = sortFolders(folders);
+	const favorites = sorted.filter((f) => prefs.favorites.includes(f.id));
+	const rest = sorted.filter((f) => !prefs.favorites.includes(f.id));
+
+	return (
+		<>
+			{/* Collapsible section header */}
+			<button
+				type="button"
+				onClick={toggleCollapsed}
+				className="w-full flex items-center gap-1 px-3 pt-4 pb-1.5 text-[10.5px] uppercase tracking-[0.08em] text-ink-3 hover:text-ink-2 transition-colors"
+				aria-expanded={!prefs.collapsed}
+			>
+				<span className="flex-1 text-left">Folders</span>
+				{prefs.collapsed ? (
+					<CaretRightIcon size={10} aria-hidden />
+				) : (
+					<CaretDownIcon size={10} aria-hidden />
+				)}
+			</button>
+
+			{!prefs.collapsed && (
+				<>
+					{/* Favorites pinned at top */}
+					{favorites.map((folder) => (
+						<FolderNavItem
+							key={folder.id}
+							folder={folder}
+							base={base}
+							isFavorite
+							onToggleFavorite={toggleFavorite}
+						/>
+					))}
+					{/* Rest of folders */}
+					{rest.map((folder) => (
+						<FolderNavItem
+							key={folder.id}
+							folder={folder}
+							base={base}
+							isFavorite={false}
+							onToggleFavorite={toggleFavorite}
+						/>
+					))}
+				</>
+			)}
+		</>
+	);
+}
+
+interface FolderNavItemProps {
+	folder: Folder;
+	base: string;
+	isFavorite: boolean;
+	onToggleFavorite: (id: string) => void;
+}
+
+function FolderNavItem({ folder, base, isFavorite, onToggleFavorite }: FolderNavItemProps) {
+	return (
+		<div className="group relative flex items-center">
+			<NavLink
+				to={`${base}/emails/${folder.id}`}
+				className={({ isActive }) =>
+					`flex-1 flex items-center gap-2.5 px-3 py-1.5 rounded-md text-[13px] transition-colors ${
+						isActive
+							? "bg-paper-3 text-ink"
+							: "text-ink-2 hover:bg-paper-2 hover:text-ink"
+					}`
+				}
+			>
+				{({ isActive }) => (
+					<>
+						{isActive && (
+							<span
+								aria-hidden
+								className="absolute left-[-12px] top-1/2 -translate-y-1/2 h-4 w-[2px] rounded-full bg-accent"
+							/>
+						)}
+						<span className="shrink-0 text-current">
+							<TrayIcon size={16} />
+						</span>
+						<span className="flex-1 truncate">
+							{getFolderDisplayName(folder.id)}
+						</span>
+						{folder.unreadCount > 0 && (
+							<span className="pp-mono text-[11px] text-ink-3 tabular-nums">
+								{folder.unreadCount}
+							</span>
+						)}
+					</>
+				)}
+			</NavLink>
+			{/* Favorite/pin toggle — only visible on hover */}
+			<button
+				type="button"
+				onClick={() => onToggleFavorite(folder.id)}
+				aria-label={isFavorite ? `Unpin ${getFolderDisplayName(folder.id)}` : `Pin ${getFolderDisplayName(folder.id)}`}
+				className={`absolute right-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors ${
+					isFavorite
+						? "text-accent opacity-100"
+						: "text-ink-4 opacity-0 group-hover:opacity-100 hover:text-ink-2"
+				}`}
+			>
+				<StarIcon size={12} weight={isFavorite ? "fill" : "regular"} />
+			</button>
+		</div>
+	);
+}
+
 interface NavContentsProps {
 	mailboxId: string | undefined;
 	mailbox: { name?: string | null; email?: string | null } | undefined;
@@ -137,6 +353,12 @@ interface NavContentsProps {
 	 */
 	domain: string | undefined;
 	domainMailboxes: DomainMailboxRef[] | undefined;
+	/**
+	 * Folders for the current mailbox. Undefined while the query is pending
+	 * so the sidebar can fall back gracefully rather than flashing an empty
+	 * list. Only defined when `mailboxId` is set.
+	 */
+	folders: Folder[] | undefined;
 }
 
 // Shared sidebar contents — rendered inline on `md+` and inside the mobile
@@ -155,6 +377,7 @@ function NavContents({
 	domain,
 	domainMailboxes,
 	meEmail,
+	folders,
 }: NavContentsProps) {
 	const base = mailboxId ? `/mailbox/${encodeURIComponent(mailboxId)}` : "";
 
@@ -221,11 +444,17 @@ function NavContents({
 							icon={<BriefcaseIcon size={16} />}
 							label="Cases"
 						/>
-						<NavItem
-							to={`${base}/emails/inbox`}
-							icon={<TrayIcon size={16} />}
-							label="Mail review"
-						/>
+						{/* Dynamic folder navigation section. Only rendered once
+						    the query has resolved — while pending we fall through
+						    rather than flashing an empty list (mirrors the
+						    domain-mailboxes guard above). */}
+						{mailboxId && folders && folders.length > 0 && (
+							<FolderNav
+								mailboxId={mailboxId}
+								folders={folders}
+								base={base}
+							/>
+						)}
 						<NavItem
 							to={`${base}/hub`}
 							icon={<GraphIcon size={16} />}
@@ -343,6 +572,11 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 	// the mobile drawer render — only one fetch per page, not two.
 	const { data: me } = useMe();
 
+	// Folder list for the dynamic sidebar nav (#366). Enabled only when a
+	// mailbox is active; the hook's `enabled: !!mailboxId` guard keeps other
+	// routes from paying the network cost.
+	const { data: folders } = useFolders(mailboxId);
+
 	const { data: dashboardSummary } = useDashboardSummary(mailboxId);
 	const pipelineState = computePipelineState(dashboardSummary?.pipelineSuccess);
 
@@ -421,6 +655,7 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 			domain={activeDomain}
 			domainMailboxes={domainStats?.mailboxes}
 			meEmail={me?.email}
+			folders={folders}
 		/>
 	);
 

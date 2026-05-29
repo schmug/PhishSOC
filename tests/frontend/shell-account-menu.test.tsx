@@ -39,6 +39,10 @@ vi.mock("~/queries/me", () => ({
 	useMe: () => ({ data: meFixture, isLoading: false, isError: false }),
 }));
 
+vi.mock("~/queries/folders", () => ({
+	useFolders: () => ({ data: [] }),
+}));
+
 import Shell from "~/components/phishsoc/Shell";
 import { renderWithProviders } from "./test-utils";
 

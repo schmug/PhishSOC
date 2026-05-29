@@ -34,6 +34,10 @@ vi.mock("~/queries/mailboxes", () => shellMailboxesMock());
 
 vi.mock("~/queries/dashboard", () => shellDashboardMock());
 
+vi.mock("~/queries/folders", () => ({
+	useFolders: () => ({ data: [] }),
+}));
+
 import DomainDetailRoute from "~/routes/domain-detail";
 import { renderWithProviders } from "./test-utils";
 
