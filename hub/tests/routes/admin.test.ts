@@ -35,7 +35,7 @@ describe("POST /admin/peers", () => {
 		const res = await appReq("/peers", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name: "x", base_url: "https://x", default_sharing_group_uuid: "sg-1", api_key_secret_name: "K" }),
+			body: JSON.stringify({ name: "x", base_url: "https://x", default_sharing_group_uuid: "sg-1", api_key_secret_name: "PEER_SECRET_K" }),
 		});
 		expect(res.status).toBe(401);
 	});
@@ -44,7 +44,7 @@ describe("POST /admin/peers", () => {
 		const res = await appReq("/peers", {
 			method: "POST",
 			headers: { ...adminAuth, "Content-Type": "application/json" },
-			body: JSON.stringify({ name: "x", base_url: "https://x.example", api_key_secret_name: "K" }),
+			body: JSON.stringify({ name: "x", base_url: "https://x.example", api_key_secret_name: "PEER_SECRET_K" }),
 		});
 		expect(res.status).toBe(400);
 	});
@@ -54,11 +54,26 @@ describe("POST /admin/peers", () => {
 			method: "POST",
 			headers: { ...adminAuth, "Content-Type": "application/json" },
 			body: JSON.stringify({
-				name: "x", base_url: "https://x.example", api_key_secret_name: "K",
+				name: "x", base_url: "https://x.example", api_key_secret_name: "PEER_SECRET_K",
 				default_sharing_group_uuid: "00000000-0000-0000-0000-000000000099",
 			}),
 		});
 		expect(res.status).toBe(400);
+	});
+
+	it("rejects api_key_secret_name without the PEER_SECRET_ prefix", async () => {
+		const res = await appReq("/peers", {
+			method: "POST",
+			headers: { ...adminAuth, "Content-Type": "application/json" },
+			body: JSON.stringify({
+				name: "x", base_url: "https://x.example", api_key_secret_name: "HUB_ADMIN_KEY",
+				default_sharing_group_uuid: "00000000-0000-0000-0000-000000000001",
+			}),
+		});
+		expect(res.status).toBe(400);
+		// Confused-deputy guard: arbitrary env secrets cannot be selected as peer credentials.
+		const peerCount = db.raw.prepare(`SELECT count(*) as n FROM peers`).get() as { n: number };
+		expect(peerCount.n).toBe(0);
 	});
 
 	it("creates peer + inbound_peer + synthetic org atomically", async () => {
@@ -73,7 +88,7 @@ describe("POST /admin/peers", () => {
 			body: JSON.stringify({
 				name: "CIRCL", contact: "noc@circl.lu",
 				base_url: "https://misp.circl.lu",
-				api_key_secret_name: "PEER_CIRCL_KEY",
+				api_key_secret_name: "PEER_SECRET_CIRCL_KEY",
 				default_sharing_group_uuid: "00000000-0000-0000-0000-000000000001",
 				default_trust: 0.5,
 				tag_include: "tlp:white\ntlp:green",
@@ -106,7 +121,7 @@ describe("POST /admin/peers", () => {
 			method: "POST",
 			headers: { ...adminAuth, "Content-Type": "application/json" },
 			body: JSON.stringify({
-				name: "x", base_url: "https://nope.example", api_key_secret_name: "MISSING_SECRET",
+				name: "x", base_url: "https://nope.example", api_key_secret_name: "PEER_SECRET_MISSING",
 				default_sharing_group_uuid: "00000000-0000-0000-0000-000000000001",
 			}),
 		});
@@ -114,7 +129,7 @@ describe("POST /admin/peers", () => {
 		const body = await res.json() as { error: string; probe: { stage: string; error: string; hint: string } };
 		expect(body.error).toBe("preflight_failed");
 		expect(body.probe.stage).toBe("secret");
-		expect(body.probe.hint).toContain("wrangler secret put MISSING_SECRET");
+		expect(body.probe.hint).toContain("wrangler secret put PEER_SECRET_MISSING");
 
 		// Inserts must NOT have happened.
 		const peerCount = db.raw.prepare(`SELECT count(*) as n FROM peers`).get() as { n: number };
@@ -129,14 +144,14 @@ describe("POST /admin/peers", () => {
 		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 			new Response("error code: 526", { status: 526, statusText: "" }),
 		);
-		(env as unknown as Record<string, string>).PEER_FAKE_KEY = "fake";
+		(env as unknown as Record<string, string>).PEER_SECRET_FAKE_KEY = "fake";
 
 		const res = await appReq("/peers", {
 			method: "POST",
 			headers: { ...adminAuth, "Content-Type": "application/json" },
 			body: JSON.stringify({
 				name: "broken", base_url: "https://broken-chain.example",
-				api_key_secret_name: "PEER_FAKE_KEY",
+				api_key_secret_name: "PEER_SECRET_FAKE_KEY",
 				default_sharing_group_uuid: "00000000-0000-0000-0000-000000000001",
 			}),
 		});
@@ -160,7 +175,7 @@ describe("GET /admin/peers", () => {
 			method: "POST",
 			headers: { ...adminAuth, "Content-Type": "application/json" },
 			body: JSON.stringify({
-				name: "p1", base_url: "https://p1.example", api_key_secret_name: "K1",
+				name: "p1", base_url: "https://p1.example", api_key_secret_name: "PEER_SECRET_K1",
 				default_sharing_group_uuid: "00000000-0000-0000-0000-000000000001",
 				skip_probe: true,
 			}),
@@ -184,7 +199,7 @@ describe("DELETE /admin/peers/:uuid", () => {
 			method: "POST",
 			headers: { ...adminAuth, "Content-Type": "application/json" },
 			body: JSON.stringify({
-				name: "p1", base_url: "https://p1.example", api_key_secret_name: "K1",
+				name: "p1", base_url: "https://p1.example", api_key_secret_name: "PEER_SECRET_K1",
 				default_sharing_group_uuid: "00000000-0000-0000-0000-000000000001",
 				skip_probe: true,
 			}),
