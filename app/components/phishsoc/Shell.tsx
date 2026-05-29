@@ -448,7 +448,7 @@ function NavContents({
 						    the query has resolved — while pending we fall through
 						    rather than flashing an empty list (mirrors the
 						    domain-mailboxes guard above). */}
-						{mailboxId && folders && folders.length > 0 && (
+						{folders && folders.length > 0 && (
 							<FolderNav
 								mailboxId={mailboxId}
 								folders={folders}
