@@ -118,21 +118,33 @@ discovered.
 
 ### How PhishSOC enforces this
 
-- `workers/security/auth.ts` — `parseAuthResults` (lines 99-131). When
-  `trustedAuthservIds` is non-empty, the loop at lines 112-117 skips every
-  header whose authserv-id is missing or not on the list (suffix-aware via
-  `matchesTrusted`, lines 90-97).
-- `AuthVerdict.trusted` (line 47) records whether at least one header
-  passed gating; downstream scoring uses this to penalize messages where
-  no trusted authserv-id was found.
-- The threat model is documented at the file head, lines 12-23. PhishSOC
-  ships with the list empty for back-compat; the README under
-  "Trusted authentication servers" tells operators to populate it before
-  treating verdicts as load-bearing.
+- `workers/security/auth.ts` — `parseAuthResults`. The authserv-id allowlist
+  is read at `auth.ts:141-142` (`gating = trusted.length > 0`); when gating is
+  on, the per-header loop skips every header whose authserv-id is missing or
+  not on the list (suffix-aware via `matchesTrusted`, `auth.ts:117-123`).
+- `AuthVerdict.trusted` (`auth.ts:47`) is set **only when an
+  operator-configured authserv-id actually matched** — `auth.ts:161`:
+  `if (gating && !verdict.trusted) verdict.trusted = true`. With an empty list
+  (the back-compat default) the SPF/DKIM/DMARC results are still parsed so
+  scoring keeps working, but `trusted` stays false: an unconfigured deployment
+  never treats a header as authserv-trusted.
+- **Load-bearing enforcement.** The `hard_allow` short-circuit
+  (`evaluateHardAllow`, `triage.ts:189-198`) requires `auth.trusted` in
+  addition to `dmarc === "pass"`. A forged `Authentication-Results` header on
+  a deployment with no `trusted_authserv_ids` configured therefore cannot
+  reach the allow short-circuit and skip the classifier + downstream intel.
+  (Hardened in PR #369 / advisory GHSA-j644-r34r-2m9j.)
+- The threat model is documented at the head of `auth.ts`. PhishSOC ships with
+  the list empty for back-compat; the README under "Trusted authentication
+  servers" tells operators to populate it so the *score contribution* is also
+  treated as load-bearing.
 
-> Followup worth tracking: the empty-default behavior described in
-> `auth.ts:20-23` is back-compat, not a recommended posture. A future
-> change should flip this to default-deny.
+> Followup worth tracking: PR #369 made the **load-bearing** paths
+> default-deny — the `trusted` flag and the `hard_allow` gate no longer trust
+> an unconfigured deployment. What remains back-compat is the **scoring**
+> contribution: with an empty list, parsed results still feed the score (just
+> not the trust flag). Flipping that scoring default to deny is the remaining
+> optional step.
 
 ---
 
