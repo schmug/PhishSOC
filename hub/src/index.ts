@@ -33,7 +33,20 @@ import type { Env, TriageMessage } from "./types";
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.get("/", (c) => c.text("AIS Hub — MISP-compatible threat-intel sharing. See /events, /feeds/destroylist.txt, /orgs."));
+// Global security headers
+app.use("*", async (c, next) => {
+	await next();
+	c.header("X-Frame-Options", "DENY");
+	c.header("X-Content-Type-Options", "nosniff");
+	c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+	c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+});
+
+app.get("/", (c) =>
+	c.text(
+		"AIS Hub — MISP-compatible threat-intel sharing. See /events, /feeds/destroylist.txt, /orgs.",
+	),
+);
 
 app.route("/events", eventRoutes);
 // Public (unauthenticated) feeds must be mounted before the authenticated
@@ -42,7 +55,7 @@ app.route("/events", eventRoutes);
 app.route("/feeds/public", publicFeedRoutes);
 app.route("/feeds", feedRoutes);
 app.route("/orgs", orgAcceptApp); // public /orgs/accept
-app.route("/orgs", orgRoutes);    // authed /orgs/me, /orgs/invite
+app.route("/orgs", orgRoutes); // authed /orgs/me, /orgs/invite
 app.route("/sharing_groups", sharingGroupRoutes);
 app.route("/admin", adminRoutes);
 app.route("/admin", adminStatsRoutes);
@@ -53,7 +66,11 @@ export default {
 	async queue(batch: MessageBatch<TriageMessage>, env: Env) {
 		await consumeTriageBatch(batch, env);
 	},
-	async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+	async scheduled(
+		_event: ScheduledController,
+		env: Env,
+		ctx: ExecutionContext,
+	) {
 		ctx.waitUntil(runInboundSync(env));
 	},
 };
