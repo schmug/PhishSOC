@@ -3,7 +3,6 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Button, Tooltip } from "@cloudflare/kumo";
-import { useEffect, useRef, useState } from "react";
 import {
 	ArrowBendUpLeftIcon,
 	ArrowBendUpRightIcon,
@@ -20,9 +19,10 @@ import {
 	TrashIcon,
 	XIcon,
 } from "@phosphor-icons/react";
+import { useEffect, useRef, useState } from "react";
 import { Folders } from "shared/folders";
 import ReportPhishButton from "~/components/ReportPhishButton";
-import type { Folder, Email } from "~/types";
+import type { Email, Folder } from "~/types";
 
 interface EmailPanelToolbarProps {
 	email: Email;
@@ -144,7 +144,11 @@ export default function EmailPanelToolbar({
 
 			<div className="h-5 w-px bg-paper-3 mx-0.5" />
 
-			<Tooltip content={email.starred ? "Unstar" : "Star"} side="bottom" asChild>
+			<Tooltip
+				content={email.starred ? "Unstar" : "Star"}
+				side="bottom"
+				asChild
+			>
 				<Button
 					variant="ghost"
 					shape="square"
@@ -161,12 +165,22 @@ export default function EmailPanelToolbar({
 				/>
 			</Tooltip>
 
-			<Tooltip content={email.read ? "Mark as unread" : "Mark as read"} side="bottom" asChild>
+			<Tooltip
+				content={email.read ? "Mark as unread" : "Mark as read"}
+				side="bottom"
+				asChild
+			>
 				<Button
 					variant="ghost"
 					shape="square"
 					size="sm"
-					icon={email.read ? <EnvelopeSimpleIcon size={18} /> : <EnvelopeOpenIcon size={18} />}
+					icon={
+						email.read ? (
+							<EnvelopeSimpleIcon size={18} />
+						) : (
+							<EnvelopeOpenIcon size={18} />
+						)
+					}
 					onClick={onToggleRead}
 					aria-label={email.read ? "Mark as unread" : "Mark as read"}
 				/>
@@ -213,14 +227,21 @@ export default function EmailPanelToolbar({
 	);
 }
 
-function MoveToFolderMenu({ folders, onMove }: { folders: Folder[]; onMove: (id: string) => void }) {
+function MoveToFolderMenu({
+	folders,
+	onMove,
+}: {
+	folders: Folder[];
+	onMove: (id: string) => void;
+}) {
 	const [open, setOpen] = useState(false);
 	const ref = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (!open) return;
 		const handler = (e: MouseEvent) => {
-			if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+			if (ref.current && !ref.current.contains(e.target as Node))
+				setOpen(false);
 		};
 		document.addEventListener("mousedown", handler);
 		return () => document.removeEventListener("mousedown", handler);
@@ -236,18 +257,28 @@ function MoveToFolderMenu({ folders, onMove }: { folders: Folder[]; onMove: (id:
 					icon={<FolderSimpleIcon size={18} />}
 					onClick={() => setOpen((o) => !o)}
 					aria-label="Move to folder"
+					aria-expanded={open}
+					aria-controls={open ? "move-to-folder-menu" : undefined}
 				/>
 			</Tooltip>
 			{open && (
-				<div className="absolute top-full left-0 z-50 mt-1 min-w-[160px] rounded-lg border border-line bg-paper-3 shadow-lg py-1">
-					<div className="px-3 py-1.5 text-xs font-medium text-ink-3">Move to</div>
+				<div
+					id="move-to-folder-menu"
+					className="absolute top-full left-0 z-50 mt-1 min-w-[160px] rounded-lg border border-line bg-paper-3 shadow-lg py-1"
+				>
+					<div className="px-3 py-1.5 text-xs font-medium text-ink-3">
+						Move to
+					</div>
 					<div className="h-px bg-line my-1" />
 					{folders.map((f) => (
 						<button
 							key={f.id}
 							type="button"
 							className="w-full text-left px-3 py-1.5 text-sm text-ink hover:bg-paper-3 transition-colors"
-							onClick={() => { onMove(f.id); setOpen(false); }}
+							onClick={() => {
+								onMove(f.id);
+								setOpen(false);
+							}}
 						>
 							{f.name}
 						</button>
