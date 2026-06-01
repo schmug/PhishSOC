@@ -76,6 +76,18 @@ interface DrillDownRecord {
 
 const RANGE_PRESETS = [7, 30, 90] as const;
 type RangeDays = (typeof RANGE_PRESETS)[number];
+interface DmarcRollupRow {
+	domain: string;
+	total: number;
+	aligned: number;
+	failing: number;
+}
+
+interface DmarcRollup {
+	window_days: number;
+	since: string;
+	domains: DmarcRollupRow[];
+}
 
 /**
  * DMARC aggregate-report dashboard. Shows legitimate vs forged sending
@@ -90,6 +102,7 @@ export default function DmarcRoute() {
 	const [selectedIp, setSelectedIp] = useState<string | null>(null);
 	const [drillDown, setDrillDown] = useState<DrillDownRecord[] | null>(null);
 	const [drillDownLoading, setDrillDownLoading] = useState(false);
+	const [rollup, setRollup] = useState<DmarcRollup | null>(null);
 
 	useEffect(() => {
 		if (!mailboxId) return;
@@ -143,6 +156,14 @@ export default function DmarcRoute() {
 		});
 	}, [mailboxId, selectedIp, reports, domain]);
 
+	useEffect(() => {
+		if (!mailboxId) return;
+		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/rollup`)
+			.then((r) => r.json() as Promise<DmarcRollup>)
+			.then((r) => setRollup(r))
+			.catch((e) => console.error("dmarc rollup fetch failed", e));
+	}, [mailboxId]);
+
 	const domains = useMemo(() => {
 		if (!reports) return [];
 		const set = new Set(reports.map((r) => r.domain));
@@ -181,6 +202,52 @@ export default function DmarcRoute() {
 	return (
 		<div className="max-w-5xl px-4 py-6 md:px-8 h-full overflow-y-auto">
 			<h1 className="pp-serif text-ink mb-4">DMARC Reports</h1>
+
+			{rollup && rollup.domains.length > 1 && (
+				<section className="mb-8">
+					<h2 className="text-sm font-semibold text-ink mb-1">All-domain rollup</h2>
+					<p className="text-xs text-ink-3 mb-3">
+						Ingested RUA data · last {rollup.window_days} days · sorted by worst alignment first
+					</p>
+					<div className="overflow-x-auto rounded-lg border border-line">
+						<table className="w-full text-sm">
+							<thead className="bg-paper-3 text-ink-3 text-xs uppercase">
+								<tr>
+									<th className="text-left px-3 py-2">Domain</th>
+									<th className="text-right px-3 py-2">Messages</th>
+									<th className="text-right px-3 py-2">Aligned</th>
+									<th className="text-right px-3 py-2">Failing</th>
+									<th className="text-left px-3 py-2">Alignment rate</th>
+								</tr>
+							</thead>
+							<tbody>
+								{rollup.domains.map((row) => {
+									const rate = row.total > 0 ? row.aligned / row.total : 0;
+									const isBad = rate < 0.5 && row.total >= 5;
+									return (
+										<tr
+											key={row.domain}
+											className={`border-t border-line cursor-pointer hover:bg-paper-3 transition-colors ${isBad ? "bg-paper-3" : ""}`}
+											onClick={() => setDomain(row.domain)}
+											title={`View ${row.domain} in detail below`}
+										>
+											<td className="px-3 py-2 font-mono text-ink">{row.domain}</td>
+											<td className="px-3 py-2 text-right">{row.total}</td>
+											<td className="px-3 py-2 text-right text-safe">{row.aligned}</td>
+											<td className="px-3 py-2 text-right text-danger">{row.failing}</td>
+											<td className="px-3 py-2">
+												<span className={isBad ? "text-danger" : "text-ink"}>
+													{Math.round(rate * 100)}%
+												</span>
+											</td>
+										</tr>
+									);
+								})}
+							</tbody>
+						</table>
+					</div>
+				</section>
+			)}
 
 			<div className="mb-6 flex items-center gap-4 flex-wrap">
 				<div className="flex items-center gap-2">
