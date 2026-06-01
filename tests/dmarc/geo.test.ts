@@ -44,10 +44,16 @@ function makeDispatcher(
 			return new Response(null, { status: 404 });
 		}
 		const name = u.searchParams.get("name") ?? "";
-		if (name.includes(".origin.asn.cymru.com")) {
+		// Parse the DNS name by labels to avoid substring checks (CodeQL gate).
+		// origin lookup: {reversed-ip}.origin.asn.cymru.com — last 4 labels match
+		// peer lookup:   AS{N}.asn.cymru.com — last 3 labels match (but not origin)
+		const labels = name.split(".");
+		const isOrigin = labels.slice(-4).join(".") === "origin.asn.cymru.com";
+		const isPeer = !isOrigin && labels.slice(-3).join(".") === "asn.cymru.com";
+		if (isOrigin) {
 			return originData ? dohTxtResponse(originData) : dohEmptyResponse();
 		}
-		if (name.includes(".asn.cymru.com")) {
+		if (isPeer) {
 			return peerData ? dohTxtResponse(peerData) : dohEmptyResponse();
 		}
 		return new Response(null, { status: 404 });
