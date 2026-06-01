@@ -162,3 +162,54 @@ auto-closed when #159's `--delete-branch` removed
 #161) was pre-flipped to `main` ahead of #161's merge, then rebased
 with `--onto origin/main 2c0e680` to drop the duplicated #149 commit
 cleanly. Both landed without losing CI history.
+
+### Single-issue routine: dedup gate — check for an open PR before creating one
+
+Before any automated routine opens a PR for issue `<N>`, it must verify that no
+open PR already references that issue. Without this guard a batch/cron run and a
+per-issue `issues.opened` run can both find the same open issue and independently
+ship competing PRs.
+
+Add the following two checks to the **Early-exit gate**, after the `state` check,
+and exit silently (no comment, no commit) if either returns a non-empty result:
+
+```
+# 1. Branch-pattern match — open PRs whose head already targets this issue
+mcp__github__list_pull_requests: owner=schmug repo=PhishSOC state=open
+  → filter results for head.ref matching "claude/issue-<N>-" prefix
+  → exit silently if any match
+
+# 2. Body / title reference match — open PRs that close/fix the issue
+mcp__github__search_pull_requests: "repo:schmug/PhishSOC is:pr is:open closes #<N>"
+  → exit silently if any match
+```
+
+Both checks are required. The branch-pattern check misses PRs opened by sessions
+that used random `claude/friendly-sagan-*` branches (e.g. issue #384 was handled by
+a first-wave session on `claude/friendly-sagan-uOn28`); the body-reference check
+catches those. The branch-pattern check catches PRs opened by sessions that did not
+embed `Closes #<N>` verbatim.
+
+**Root cause of 2026-06-01 double-fire (issue #403):**
+
+Two routine types ran concurrently on the same open DMARC-epic issues with no
+idempotency check between them:
+
+| Wave | Type | Session | Issues | PRs |
+|------|------|---------|--------|-----|
+| First (11:04–11:12 UTC) | Per-issue `issues.opened` sessions | multiple | #379–#387 | #388–#396 |
+| Second (11:22–12:03 UTC) | Single batch/cron session | `01Uqvt1cBFXbAdxSb2MNz2Kh` | #379–#384, #387 | #397–#401 |
+
+The batch session started ~13 minutes after the first wave, when first-wave PRs were
+open but not yet merged. It iterated through the same open issues and opened five
+duplicate PRs; one of them (#399 for issue #387) was opened 26 minutes after the
+first-wave PR (#393) had already merged.
+
+**Where the routines live:** The per-issue routine is a Claude Code web session
+triggered by `issues.opened` events on `schmug/PhishSOC`, configured in the
+claude.ai session UI (external to this repo). The batch routine is a separate
+scheduled/cron claude.ai session. Both must apply the dedup gate above; this
+CLAUDE.md entry is the spec for that update.
+
+Origin: Issue #403 (2026-06-01). Six duplicate PRs had to be closed; five surviving
+PRs were rebased and merged one-by-one through a manual merge train.
