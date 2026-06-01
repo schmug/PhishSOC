@@ -42,6 +42,7 @@ describe("sourcesToCsv", () => {
 				reject_count: 1,
 				first_seen: "2026-01-01",
 				last_seen: "2026-01-31",
+				legitimate: 0,
 			},
 		]);
 		const lines = csv.split("\r\n");
@@ -62,6 +63,7 @@ describe("sourcesToCsv", () => {
 				reject_count: 0,
 				first_seen: "2026-01-01",
 				last_seen: "2026-01-31",
+				legitimate: 0,
 			},
 		]);
 		const lines = csv.split("\r\n");
@@ -78,6 +80,7 @@ describe("sourcesToCsv", () => {
 				reject_count: 0,
 				first_seen: "2026-01-01",
 				last_seen: "2026-01-02",
+				legitimate: 0,
 			},
 		]);
 		expect(csv).toContain("\r\n");

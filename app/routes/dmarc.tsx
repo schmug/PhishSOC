@@ -44,6 +44,7 @@ interface DmarcSource {
 	first_seen: string;
 	last_seen: string;
 	label?: string | null;
+	legitimate: number;
 }
 
 interface DmarcAuthResultDkim {
@@ -103,6 +104,8 @@ export default function DmarcRoute() {
 	const [drillDown, setDrillDown] = useState<DrillDownRecord[] | null>(null);
 	const [drillDownLoading, setDrillDownLoading] = useState(false);
 	const [rollup, setRollup] = useState<DmarcRollup | null>(null);
+	const [showUnknownOnly, setShowUnknownOnly] = useState(false);
+	const [togglingIp, setTogglingIp] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (!mailboxId) return;
@@ -181,6 +184,34 @@ export default function DmarcRoute() {
 		URL.revokeObjectURL(url);
 	}
 
+	async function toggleLegitimate(source: DmarcSource) {
+		if (!mailboxId) return;
+		setTogglingIp(source.source_ip);
+		try {
+			await fetch(
+				`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/sources/${encodeURIComponent(source.source_ip)}`,
+				{
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ legitimate: source.legitimate === 0 }),
+				},
+			);
+			setSources((prev) =>
+				prev
+					? prev.map((s) =>
+							s.source_ip === source.source_ip
+								? { ...s, legitimate: source.legitimate === 0 ? 1 : 0 }
+								: s,
+					  )
+					: prev,
+			);
+		} catch (e) {
+			console.error("toggle legitimate failed", e);
+		} finally {
+			setTogglingIp(null);
+		}
+	}
+
 	if (!reports) {
 		return <div className="flex justify-center py-20"><Loader size="lg" /></div>;
 	}
@@ -198,6 +229,11 @@ export default function DmarcRoute() {
 	}
 
 	const activePolicyReport = reports.find((r) => !domain || r.domain === domain);
+	const displayedSources = sources
+		? showUnknownOnly
+			? sources.filter((s) => s.legitimate === 0)
+			: sources
+		: null;
 
 	return (
 		<div className="max-w-5xl px-4 py-6 md:px-8 h-full overflow-y-auto">
@@ -306,19 +342,34 @@ export default function DmarcRoute() {
 				<div className="flex items-center justify-between mb-3">
 					<h2 className="text-sm font-semibold text-ink">Sending sources</h2>
 					{sources && sources.length > 0 && (
-						<button
-							type="button"
-							onClick={handleDownloadCsv}
-							className="text-xs px-2 py-1 rounded border border-line bg-paper-3 hover:bg-paper-2 text-ink-2"
-						>
-							Download CSV
-						</button>
+						<div className="flex items-center gap-3">
+							<label className="flex items-center gap-2 text-sm text-ink-3 cursor-pointer">
+								<input
+									type="checkbox"
+									checked={showUnknownOnly}
+									onChange={(e) => setShowUnknownOnly(e.target.checked)}
+									className="rounded"
+								/>
+								Show only unknown sources
+							</label>
+							<button
+								type="button"
+								onClick={handleDownloadCsv}
+								className="text-xs px-2 py-1 rounded border border-line bg-paper-3 hover:bg-paper-2 text-ink-2"
+							>
+								Download CSV
+							</button>
+						</div>
 					)}
 				</div>
-				{!sources ? (
+				{!displayedSources ? (
 					<div className="text-ink-3 text-sm">Loading…</div>
-				) : sources.length === 0 ? (
-					<div className="text-ink-3 text-sm">No records for this domain.</div>
+				) : displayedSources.length === 0 ? (
+					<div className="text-ink-3 text-sm">
+						{showUnknownOnly && sources && sources.length > 0
+							? "No unknown sources — all sources marked legitimate."
+							: "No records for this domain."}
+					</div>
 				) : (
 					<div className="overflow-x-auto rounded-lg border border-line">
 						<table className="w-full text-sm">
@@ -331,13 +382,16 @@ export default function DmarcRoute() {
 									<th className="text-right px-3 py-2">Quarantine</th>
 									<th className="text-right px-3 py-2">Reject</th>
 									<th className="text-left px-3 py-2">Pass rate</th>
+									<th className="text-left px-3 py-2">Status</th>
 								</tr>
 							</thead>
 							<tbody>
-								{sources.map((s) => {
+								{displayedSources.map((s) => {
 									const rate = s.total_count > 0 ? s.pass_count / s.total_count : 0;
 									const suspect = rate < 0.5 && s.total_count >= 5;
 									const isSelected = selectedIp === s.source_ip;
+									const isUnknown = s.legitimate === 0;
+									const isToggling = togglingIp === s.source_ip;
 									return (
 										<tr
 											key={s.source_ip}
@@ -354,6 +408,26 @@ export default function DmarcRoute() {
 												<span className={suspect ? "text-danger" : "text-ink"}>
 													{Math.round(rate * 100)}%
 												</span>
+											</td>
+											<td className="px-3 py-2">
+												<div className="flex items-center gap-2">
+													{isUnknown ? (
+														<span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+															Shadow IT / Unknown
+														</span>
+													) : (
+														<span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+															Legitimate
+														</span>
+													)}
+													<button
+														onClick={() => toggleLegitimate(s)}
+														disabled={isToggling}
+														className="text-xs text-ink-3 hover:text-ink underline disabled:opacity-50"
+													>
+														{isToggling ? "…" : isUnknown ? "Mark legitimate" : "Mark unknown"}
+													</button>
+												</div>
 											</td>
 										</tr>
 									);
