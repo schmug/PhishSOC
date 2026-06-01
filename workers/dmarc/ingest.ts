@@ -17,6 +17,7 @@ import type { Env } from "../types";
 import { getMailboxStub } from "../lib/email-helpers";
 import { bufferToXmlText, gunzip, parseDmarcXml } from "./parser";
 import { parseDmarcRuf } from "./ruf-parser";
+import { resolveSourceLabel } from "./source-label";
 import type { RufIngestionSettings } from "../security/defaults";
 
 export { isDmarcRuf } from "./ruf-parser";
@@ -72,6 +73,15 @@ export async function ingestDmarcReport(
 	if (!report.policy_domain) return { ingested: false, reason: "no policy_domain in XML" };
 
 	const stub = getMailboxStub(env, mailboxId);
+	const recordsToInsert = report.records.map((r) => ({
+		id: crypto.randomUUID(),
+		source_ip: r.source_ip,
+		count: r.count,
+		disposition: r.disposition ?? null,
+		dkim_result: r.dkim_result ?? null,
+		spf_result: r.spf_result ?? null,
+		header_from: r.header_from ?? null,
+	}));
 	await stub.insertDmarcReport({
 		id: messageId,
 		received_at: new Date().toISOString(),
@@ -82,15 +92,16 @@ export async function ingestDmarcReport(
 		date_range_end: report.date_range_end ?? null,
 		policy_p: report.policy_p ?? null,
 		raw_r2_key: null,
-	}, report.records.map((r) => ({
-		id: crypto.randomUUID(),
-		source_ip: r.source_ip,
-		count: r.count,
-		disposition: r.disposition ?? null,
-		dkim_result: r.dkim_result ?? null,
-		spf_result: r.spf_result ?? null,
-		header_from: r.header_from ?? null,
-	})));
+	}, recordsToInsert);
+
+	// Enrich new source IPs with PTR/provider labels (best-effort, non-blocking).
+	const distinctIps = [...new Set(recordsToInsert.map((r) => r.source_ip))];
+	const knownIps = stub.getDmarcKnownSourceIps(distinctIps);
+	const newIps = distinctIps.filter((ip) => !knownIps.has(ip));
+	for (const ip of newIps) {
+		const label = await resolveSourceLabel(ip);
+		stub.insertDmarcSourceIfNew(ip, label);
+	}
 
 	return { ingested: true };
 }

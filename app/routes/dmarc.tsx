@@ -6,21 +6,6 @@ import { Loader } from "@cloudflare/kumo";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 
-/** RFC 4180 field escape: always wraps in double-quotes, escapes embedded quotes by doubling. */
-export function csvEscapeField(value: string | number): string {
-	return `"${String(value).replace(/"/g, '""')}"`;
-}
-
-export function sourcesToCsv(sources: DmarcSource[]): string {
-	const header = "source_ip,total_count,pass_count,quarantine_count,reject_count,first_seen,last_seen";
-	const rows = sources.map((s) =>
-		[s.source_ip, s.total_count, s.pass_count, s.quarantine_count, s.reject_count, s.first_seen, s.last_seen]
-			.map(csvEscapeField)
-			.join(","),
-	);
-	return [header, ...rows].join("\r\n");
-}
-
 interface DmarcReport {
 	id: string;
 	received_at: string;
@@ -33,6 +18,7 @@ interface DmarcReport {
 
 interface DmarcSource {
 	source_ip: string;
+	label: string | null;
 	total_count: number;
 	pass_count: number;
 	quarantine_count: number;
@@ -41,19 +27,15 @@ interface DmarcSource {
 	last_seen: string;
 }
 
-const RANGE_PRESETS = [7, 30, 90] as const;
-type RangeDays = (typeof RANGE_PRESETS)[number];
-
 /**
  * DMARC aggregate-report dashboard. Shows legitimate vs forged sending
- * sources for a domain over the selected date window.
+ * sources for a domain over the last 90 days of ingested reports.
  */
 export default function DmarcRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
 	const [reports, setReports] = useState<DmarcReport[] | null>(null);
 	const [domain, setDomain] = useState<string | null>(null);
 	const [sources, setSources] = useState<DmarcSource[] | null>(null);
-	const [days, setDays] = useState<RangeDays>(90);
 
 	useEffect(() => {
 		if (!mailboxId) return;
@@ -68,29 +50,17 @@ export default function DmarcRoute() {
 
 	useEffect(() => {
 		if (!mailboxId || !domain) return;
-		setSources(null);
-		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/summary?domain=${encodeURIComponent(domain)}&days=${days}`)
+		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/summary?domain=${encodeURIComponent(domain)}`)
 			.then((r) => r.json() as Promise<{ sources: DmarcSource[] }>)
 			.then((r) => setSources(r.sources))
 			.catch((e) => console.error("dmarc summary fetch failed", e));
-	}, [mailboxId, domain, days]);
+	}, [mailboxId, domain]);
 
 	const domains = useMemo(() => {
 		if (!reports) return [];
 		const set = new Set(reports.map((r) => r.domain));
 		return Array.from(set).sort();
 	}, [reports]);
-
-	function handleDownloadCsv() {
-		if (!sources || sources.length === 0) return;
-		const blob = new Blob([sourcesToCsv(sources)], { type: "text/csv;charset=utf-8;" });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-		a.href = url;
-		a.download = `dmarc-sources-${domain ?? "export"}.csv`;
-		a.click();
-		URL.revokeObjectURL(url);
-	}
 
 	if (!reports) {
 		return <div className="flex justify-center py-20"><Loader size="lg" /></div>;
@@ -112,47 +82,19 @@ export default function DmarcRoute() {
 		<div className="max-w-5xl px-4 py-6 md:px-8 h-full overflow-y-auto">
 			<h1 className="pp-serif text-ink mb-4">DMARC Reports</h1>
 
-			<div className="mb-6 flex items-center gap-4 flex-wrap">
-				<div className="flex items-center gap-2">
-					<label className="text-sm text-ink-3">Domain:</label>
-					<select
-						value={domain ?? ""}
-						onChange={(e) => setDomain(e.target.value)}
-						className="rounded border border-line bg-paper-3 px-2 py-1 text-sm"
-					>
-						{domains.map((d) => <option key={d} value={d}>{d}</option>)}
-					</select>
-				</div>
-				<div className="flex items-center gap-2">
-					<label className="text-sm text-ink-3">Range:</label>
-					<div className="flex rounded border border-line overflow-hidden text-sm">
-						{RANGE_PRESETS.map((d) => (
-							<button
-								key={d}
-								type="button"
-								onClick={() => setDays(d)}
-								className={`px-3 py-1 ${days === d ? "bg-accent text-white" : "bg-paper-3 text-ink hover:bg-paper-2"}`}
-							>
-								{d}d
-							</button>
-						))}
-					</div>
-				</div>
+			<div className="mb-6 flex items-center gap-3">
+				<label className="text-sm text-ink-3">Domain:</label>
+				<select
+					value={domain ?? ""}
+					onChange={(e) => setDomain(e.target.value)}
+					className="rounded border border-line bg-paper-3 px-2 py-1 text-sm"
+				>
+					{domains.map((d) => <option key={d} value={d}>{d}</option>)}
+				</select>
 			</div>
 
 			<section className="mb-8">
-				<div className="flex items-center justify-between mb-3">
-					<h2 className="text-sm font-semibold text-ink">Sending sources</h2>
-					{sources && sources.length > 0 && (
-						<button
-							type="button"
-							onClick={handleDownloadCsv}
-							className="text-xs px-2 py-1 rounded border border-line bg-paper-3 hover:bg-paper-2 text-ink-2"
-						>
-							Download CSV
-						</button>
-					)}
-				</div>
+				<h2 className="text-sm font-semibold text-ink mb-3">Sending sources</h2>
 				{!sources ? (
 					<div className="text-ink-3 text-sm">Loading…</div>
 				) : sources.length === 0 ? (
@@ -162,7 +104,7 @@ export default function DmarcRoute() {
 						<table className="w-full text-sm">
 							<thead className="bg-paper-3 text-ink-3 text-xs uppercase">
 								<tr>
-									<th className="text-left px-3 py-2">Source IP</th>
+									<th className="text-left px-3 py-2">Source</th>
 									<th className="text-right px-3 py-2">Messages</th>
 									<th className="text-right px-3 py-2">Pass</th>
 									<th className="text-right px-3 py-2">Quarantine</th>
@@ -176,7 +118,16 @@ export default function DmarcRoute() {
 									const suspect = rate < 0.5 && s.total_count >= 5;
 									return (
 										<tr key={s.source_ip} className={`border-t border-line ${suspect ? "bg-paper-3" : ""}`}>
-											<td className="px-3 py-2 font-mono text-ink">{s.source_ip}</td>
+											<td className="px-3 py-2 text-ink">
+												{s.label ? (
+													<>
+														<span>{s.label}</span>
+														<span className="ml-2 font-mono text-ink-3 text-xs">{s.source_ip}</span>
+													</>
+												) : (
+													<span className="font-mono">{s.source_ip}</span>
+												)}
+											</td>
 											<td className="px-3 py-2 text-right">{s.total_count}</td>
 											<td className="px-3 py-2 text-right text-safe">{s.pass_count}</td>
 											<td className="px-3 py-2 text-right text-suspect">{s.quarantine_count}</td>
