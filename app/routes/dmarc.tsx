@@ -29,6 +29,10 @@ interface DmarcReport {
 	date_range_begin: string | null;
 	date_range_end: string | null;
 	policy_p: string | null;
+	policy_adkim?: string | null;
+	policy_aspf?: string | null;
+	policy_sp?: string | null;
+	policy_pct?: string | null;
 }
 
 interface DmarcSource {
@@ -39,6 +43,34 @@ interface DmarcSource {
 	reject_count: number;
 	first_seen: string;
 	last_seen: string;
+}
+
+interface DmarcAuthResultDkim {
+	domain?: string;
+	selector?: string;
+	result?: string;
+}
+
+interface DmarcAuthResultSpf {
+	domain?: string;
+	result?: string;
+}
+
+interface DmarcAuthResults {
+	dkim: DmarcAuthResultDkim[];
+	spf: DmarcAuthResultSpf[];
+}
+
+interface DrillDownRecord {
+	report_id: string;
+	count: number;
+	disposition?: string | null;
+	dkim_result?: string | null;
+	spf_result?: string | null;
+	auth_results?: DmarcAuthResults | null;
+	date_range_begin?: string | null;
+	date_range_end?: string | null;
+	org_name?: string | null;
 }
 
 const RANGE_PRESETS = [7, 30, 90] as const;
@@ -54,6 +86,9 @@ export default function DmarcRoute() {
 	const [domain, setDomain] = useState<string | null>(null);
 	const [sources, setSources] = useState<DmarcSource[] | null>(null);
 	const [days, setDays] = useState<RangeDays>(90);
+	const [selectedIp, setSelectedIp] = useState<string | null>(null);
+	const [drillDown, setDrillDown] = useState<DrillDownRecord[] | null>(null);
+	const [drillDownLoading, setDrillDownLoading] = useState(false);
 
 	useEffect(() => {
 		if (!mailboxId) return;
@@ -74,6 +109,38 @@ export default function DmarcRoute() {
 			.then((r) => setSources(r.sources))
 			.catch((e) => console.error("dmarc summary fetch failed", e));
 	}, [mailboxId, domain, days]);
+
+	// Fetch per-record detail for the selected source IP across recent reports.
+	useEffect(() => {
+		if (!mailboxId || !selectedIp || !reports) return;
+		setDrillDown(null);
+		setDrillDownLoading(true);
+		const domainReports = reports.filter((r) => !domain || r.domain === domain);
+		Promise.all(
+			domainReports.map((rep) =>
+				fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/reports/${encodeURIComponent(rep.id)}/records`)
+					.then((r) => r.json() as Promise<{ records: Array<{ source_ip: string; count: number; disposition?: string | null; dkim_result?: string | null; spf_result?: string | null; auth_results?: DmarcAuthResults | null }> }>)
+					.then((r) => r.records
+						.filter((rec) => rec.source_ip === selectedIp)
+						.map((rec) => ({
+							report_id: rep.id,
+							count: rec.count,
+							disposition: rec.disposition,
+							dkim_result: rec.dkim_result,
+							spf_result: rec.spf_result,
+							auth_results: rec.auth_results,
+							date_range_begin: rep.date_range_begin,
+							date_range_end: rep.date_range_end,
+							org_name: rep.org_name,
+						})),
+					)
+					.catch(() => [] as DrillDownRecord[]),
+			),
+		).then((groups) => {
+			setDrillDown(groups.flat());
+			setDrillDownLoading(false);
+		});
+	}, [mailboxId, selectedIp, reports, domain]);
 
 	const domains = useMemo(() => {
 		if (!reports) return [];
@@ -108,6 +175,8 @@ export default function DmarcRoute() {
 		);
 	}
 
+	const activePolicyReport = reports.find((r) => !domain || r.domain === domain);
+
 	return (
 		<div className="max-w-5xl px-4 py-6 md:px-8 h-full overflow-y-auto">
 			<h1 className="pp-serif text-ink mb-4">DMARC Reports</h1>
@@ -139,6 +208,31 @@ export default function DmarcRoute() {
 					</div>
 				</div>
 			</div>
+
+			{activePolicyReport && (activePolicyReport.policy_adkim || activePolicyReport.policy_aspf || activePolicyReport.policy_sp || activePolicyReport.policy_pct) && (
+				<div className="mb-6 flex flex-wrap gap-3">
+					{activePolicyReport.policy_adkim && (
+						<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
+							<span className="font-medium text-ink">adkim</span>={activePolicyReport.policy_adkim}
+						</span>
+					)}
+					{activePolicyReport.policy_aspf && (
+						<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
+							<span className="font-medium text-ink">aspf</span>={activePolicyReport.policy_aspf}
+						</span>
+					)}
+					{activePolicyReport.policy_sp && (
+						<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
+							<span className="font-medium text-ink">sp</span>={activePolicyReport.policy_sp}
+						</span>
+					)}
+					{activePolicyReport.policy_pct && (
+						<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
+							<span className="font-medium text-ink">pct</span>={activePolicyReport.policy_pct}%
+						</span>
+					)}
+				</div>
+			)}
 
 			<section className="mb-8">
 				<div className="flex items-center justify-between mb-3">
@@ -174,8 +268,13 @@ export default function DmarcRoute() {
 								{sources.map((s) => {
 									const rate = s.total_count > 0 ? s.pass_count / s.total_count : 0;
 									const suspect = rate < 0.5 && s.total_count >= 5;
+									const isSelected = selectedIp === s.source_ip;
 									return (
-										<tr key={s.source_ip} className={`border-t border-line ${suspect ? "bg-paper-3" : ""}`}>
+										<tr
+											key={s.source_ip}
+											className={`border-t border-line cursor-pointer hover:bg-paper-2 ${suspect ? "bg-paper-3" : ""} ${isSelected ? "ring-1 ring-inset ring-accent" : ""}`}
+											onClick={() => setSelectedIp(isSelected ? null : s.source_ip)}
+										>
 											<td className="px-3 py-2 font-mono text-ink">{s.source_ip}</td>
 											<td className="px-3 py-2 text-right">{s.total_count}</td>
 											<td className="px-3 py-2 text-right text-safe">{s.pass_count}</td>
@@ -194,6 +293,73 @@ export default function DmarcRoute() {
 					</div>
 				)}
 			</section>
+
+			{selectedIp && (
+				<section className="mb-8 rounded-lg border border-line p-4">
+					<div className="flex items-center justify-between mb-3">
+						<h2 className="text-sm font-semibold text-ink">
+							Auth results for <span className="font-mono">{selectedIp}</span>
+						</h2>
+						<button
+							type="button"
+							onClick={() => setSelectedIp(null)}
+							className="text-xs text-ink-3 hover:text-ink"
+						>
+							✕ Close
+						</button>
+					</div>
+					{drillDownLoading ? (
+						<div className="text-ink-3 text-sm">Loading…</div>
+					) : !drillDown || drillDown.length === 0 ? (
+						<div className="text-ink-3 text-sm">No detail records found.</div>
+					) : (
+						<div className="space-y-3">
+							{drillDown.map((entry, i) => (
+								<div key={`${entry.report_id}-${i}`} className="rounded border border-line p-3 text-xs">
+									<div className="flex flex-wrap gap-3 mb-2 text-ink-3">
+										{entry.org_name && <span>Reporter: <span className="text-ink">{entry.org_name}</span></span>}
+										{entry.date_range_begin && (
+											<span>
+												Period: <span className="text-ink">
+													{new Date(Number(entry.date_range_begin) * 1000).toLocaleDateString()} – {new Date(Number(entry.date_range_end) * 1000).toLocaleDateString()}
+												</span>
+											</span>
+										)}
+										<span>Messages: <span className="text-ink">{entry.count}</span></span>
+										{entry.disposition && <span>Disposition: <span className={entry.disposition === "none" ? "text-safe" : "text-danger"}>{entry.disposition}</span></span>}
+									</div>
+									{entry.auth_results && (
+										<div className="flex flex-wrap gap-4">
+											{entry.auth_results.dkim.length > 0 && (
+												<div>
+													<div className="font-medium text-ink-3 mb-1">DKIM</div>
+													{entry.auth_results.dkim.map((d, j) => (
+														<div key={j} className="font-mono text-ink">
+															{d.domain}{d.selector ? `/${d.selector}` : ""}&nbsp;
+															<span className={d.result === "pass" ? "text-safe" : "text-danger"}>{d.result}</span>
+														</div>
+													))}
+												</div>
+											)}
+											{entry.auth_results.spf.length > 0 && (
+												<div>
+													<div className="font-medium text-ink-3 mb-1">SPF</div>
+													{entry.auth_results.spf.map((s, j) => (
+														<div key={j} className="font-mono text-ink">
+															{s.domain}&nbsp;
+															<span className={s.result === "pass" ? "text-safe" : "text-danger"}>{s.result}</span>
+														</div>
+													))}
+												</div>
+											)}
+										</div>
+									)}
+								</div>
+							))}
+						</div>
+					)}
+				</section>
+			)}
 
 			<section>
 				<h2 className="text-sm font-semibold text-ink mb-3">Recent reports</h2>

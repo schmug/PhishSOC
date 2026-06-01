@@ -498,4 +498,18 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_sender_graph_name ON sender_graph(sender_name);
         `,
 	},
+	{
+		// DMARC policy alignment fields (adkim/aspf/sp/pct) and per-record
+		// auth_results captured from RUA XML (issue #384). Stored on
+		// dmarc_reports for policy posture display; auth_results_json on
+		// dmarc_records enables per-source drill-down of DKIM/SPF selectors.
+		name: "23_dmarc_policy_auth_results",
+		sql: `
+            ALTER TABLE dmarc_reports ADD COLUMN policy_adkim TEXT;
+            ALTER TABLE dmarc_reports ADD COLUMN policy_aspf TEXT;
+            ALTER TABLE dmarc_reports ADD COLUMN policy_sp TEXT;
+            ALTER TABLE dmarc_reports ADD COLUMN policy_pct TEXT;
+            ALTER TABLE dmarc_records ADD COLUMN auth_results_json TEXT;
+        `,
+	},
 ];

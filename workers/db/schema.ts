@@ -143,6 +143,10 @@ export const dmarcReports = sqliteTable("dmarc_reports", {
 	date_range_begin: text("date_range_begin"),
 	date_range_end: text("date_range_end"),
 	policy_p: text("policy_p"),
+	policy_adkim: text("policy_adkim"),
+	policy_aspf: text("policy_aspf"),
+	policy_sp: text("policy_sp"),
+	policy_pct: text("policy_pct"),
 	raw_r2_key: text("raw_r2_key"),
 });
 
@@ -157,6 +161,7 @@ export const dmarcRecords = sqliteTable("dmarc_records", {
 	dkim_result: text("dkim_result"),
 	spf_result: text("spf_result"),
 	header_from: text("header_from"),
+	auth_results_json: text("auth_results_json"),
 });
 
 export const dmarcSources = sqliteTable("dmarc_sources", {

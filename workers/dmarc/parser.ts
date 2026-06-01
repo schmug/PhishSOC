@@ -17,7 +17,27 @@ export interface DmarcReport {
 	date_range_end?: string;
 	policy_domain?: string;
 	policy_p?: string;
+	policy_adkim?: string;
+	policy_aspf?: string;
+	policy_sp?: string;
+	policy_pct?: string;
 	records: DmarcRecord[];
+}
+
+export interface DmarcAuthResultDkim {
+	domain?: string;
+	selector?: string;
+	result?: string;
+}
+
+export interface DmarcAuthResultSpf {
+	domain?: string;
+	result?: string;
+}
+
+export interface DmarcAuthResults {
+	dkim: DmarcAuthResultDkim[];
+	spf: DmarcAuthResultSpf[];
 }
 
 export interface DmarcRecord {
@@ -27,6 +47,7 @@ export interface DmarcRecord {
 	dkim_result?: string;
 	spf_result?: string;
 	header_from?: string;
+	auth_results?: DmarcAuthResults;
 }
 
 /** Gunzip an arraybuffer using the runtime's DecompressionStream. */
@@ -70,6 +91,22 @@ export function parseDmarcXml(xml: string): DmarcReport {
 		const source_ip = tag(row, "source_ip")?.trim();
 		if (!source_ip) continue;
 		const countStr = tag(row, "count") ?? "0";
+
+		const authResultsBlock = tag(rec, "auth_results") ?? "";
+		const dkimEntries = allTags(authResultsBlock, "dkim").map((d) => ({
+			domain: tag(d, "domain"),
+			selector: tag(d, "selector"),
+			result: tag(d, "result"),
+		}));
+		const spfEntries = allTags(authResultsBlock, "spf").map((s) => ({
+			domain: tag(s, "domain"),
+			result: tag(s, "result"),
+		}));
+		const auth_results: DmarcAuthResults | undefined =
+			dkimEntries.length > 0 || spfEntries.length > 0
+				? { dkim: dkimEntries, spf: spfEntries }
+				: undefined;
+
 		records.push({
 			source_ip,
 			count: Math.max(0, Math.min(1000000, parseInt(countStr, 10) || 0)),
@@ -77,6 +114,7 @@ export function parseDmarcXml(xml: string): DmarcReport {
 			dkim_result: tag(policyEval, "dkim"),
 			spf_result: tag(policyEval, "spf"),
 			header_from: tag(identifiers, "header_from"),
+			auth_results,
 		});
 	}
 
@@ -87,6 +125,10 @@ export function parseDmarcXml(xml: string): DmarcReport {
 		date_range_end: tag(tag(metadata, "date_range") ?? "", "end"),
 		policy_domain: tag(policy, "domain"),
 		policy_p: tag(policy, "p"),
+		policy_adkim: tag(policy, "adkim"),
+		policy_aspf: tag(policy, "aspf"),
+		policy_sp: tag(policy, "sp"),
+		policy_pct: tag(policy, "pct"),
 		records,
 	};
 }

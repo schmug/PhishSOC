@@ -72,7 +72,7 @@ export async function ingestDmarcReport(
 	if (!report.policy_domain) return { ingested: false, reason: "no policy_domain in XML" };
 
 	const stub = getMailboxStub(env, mailboxId);
-	await stub.insertDmarcReport({
+	const reportRow = {
 		id: messageId,
 		received_at: new Date().toISOString(),
 		org_name: report.org_name ?? null,
@@ -81,8 +81,13 @@ export async function ingestDmarcReport(
 		date_range_begin: report.date_range_begin ?? null,
 		date_range_end: report.date_range_end ?? null,
 		policy_p: report.policy_p ?? null,
+		policy_adkim: report.policy_adkim ?? null,
+		policy_aspf: report.policy_aspf ?? null,
+		policy_sp: report.policy_sp ?? null,
+		policy_pct: report.policy_pct ?? null,
 		raw_r2_key: null,
-	}, report.records.map((r) => ({
+	};
+	const recordsToInsert = report.records.map((r) => ({
 		id: crypto.randomUUID(),
 		source_ip: r.source_ip,
 		count: r.count,
@@ -90,7 +95,9 @@ export async function ingestDmarcReport(
 		dkim_result: r.dkim_result ?? null,
 		spf_result: r.spf_result ?? null,
 		header_from: r.header_from ?? null,
-	})));
+		auth_results_json: r.auth_results ? JSON.stringify(r.auth_results) : null,
+	}));
+	await stub.insertDmarcReport(reportRow, recordsToInsert);
 
 	return { ingested: true };
 }
