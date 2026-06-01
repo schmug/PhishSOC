@@ -1519,11 +1519,12 @@ export class MailboxDO extends DurableObject<Env> {
 		finalize("ready", summary);
 	}
 
-	async getDmarcSummary(domain: string, sinceIso: string) {
+	async getDmarcSummary(domain: string) {
 		const rows = [
 			...this.ctx.storage.sql.exec(
 				`SELECT
 				   r.source_ip as source_ip,
+				   ds.label as label,
 				   SUM(r.count) as total_count,
 				   SUM(CASE WHEN r.dkim_result = 'pass' AND r.spf_result = 'pass' THEN r.count ELSE 0 END) as pass_count,
 				   SUM(CASE WHEN r.disposition = 'quarantine' THEN r.count ELSE 0 END) as quarantine_count,
@@ -1532,15 +1533,16 @@ export class MailboxDO extends DurableObject<Env> {
 				   MAX(rep.received_at) as last_seen
 				 FROM dmarc_records r
 				 JOIN dmarc_reports rep ON rep.id = r.report_id
-				 WHERE rep.domain = ?1 AND rep.received_at >= ?2
+				 LEFT JOIN dmarc_sources ds ON ds.source_ip = r.source_ip
+				 WHERE rep.domain = ?1
 				 GROUP BY r.source_ip
 				 ORDER BY total_count DESC
 				 LIMIT 200`,
 				domain,
-				sinceIso,
 			),
 		] as Array<{
 			source_ip: string;
+			label: string | null;
 			total_count: number;
 			pass_count: number;
 			quarantine_count: number;
@@ -1549,6 +1551,36 @@ export class MailboxDO extends DurableObject<Env> {
 			last_seen: string;
 		}>;
 		return rows;
+	}
+
+	/**
+	 * Returns the set of source IPs from the provided list that already have
+	 * a row in `dmarc_sources`. Used by the ingest path to avoid re-resolving
+	 * PTR records for already-enriched IPs.
+	 */
+	getDmarcKnownSourceIps(sourceIps: string[]): Set<string> {
+		if (sourceIps.length === 0) return new Set();
+		const placeholders = sourceIps.map((_, i) => `?${i + 1}`).join(", ");
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT source_ip FROM dmarc_sources WHERE source_ip IN (${placeholders})`,
+				...sourceIps,
+			),
+		] as Array<{ source_ip: string }>;
+		return new Set(rows.map((r) => r.source_ip));
+	}
+
+	/**
+	 * Insert a source-IP label row if it doesn't already exist.
+	 * INSERT OR IGNORE ensures the first resolved label wins and subsequent
+	 * ingest calls for the same IP are no-ops (no PTR re-fetch needed).
+	 */
+	insertDmarcSourceIfNew(sourceIp: string, label: string | null): void {
+		this.ctx.storage.sql.exec(
+			`INSERT OR IGNORE INTO dmarc_sources(source_ip, label) VALUES (?1, ?2)`,
+			sourceIp,
+			label,
+		);
 	}
 
 	async getDmarcAlignmentTotals(domain: string, sinceIso: string) {
