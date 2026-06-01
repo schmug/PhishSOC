@@ -1576,7 +1576,8 @@ export class MailboxDO extends DurableObject<Env> {
 				   SUM(CASE WHEN r.disposition = 'reject' THEN r.count ELSE 0 END) as reject_count,
 				   MIN(rep.received_at) as first_seen,
 				   MAX(rep.received_at) as last_seen,
-				   ds.label as label
+				   ds.label as label,
+				   COALESCE(ds.legitimate, 0) as legitimate
 				 FROM dmarc_records r
 				 JOIN dmarc_reports rep ON rep.id = r.report_id
 				 LEFT JOIN dmarc_sources ds ON ds.source_ip = r.source_ip
@@ -1596,8 +1597,22 @@ export class MailboxDO extends DurableObject<Env> {
 			first_seen: string;
 			last_seen: string;
 			label: string | null;
+			legitimate: number;
 		}>;
 		return rows;
+	}
+
+	async setSourceLegitimate(source_ip: string, legitimate: boolean, notes: string | null = null) {
+		this.ctx.storage.sql.exec(
+			`INSERT INTO dmarc_sources (source_ip, legitimate, notes)
+			 VALUES (?1, ?2, ?3)
+			 ON CONFLICT(source_ip) DO UPDATE SET
+			   legitimate = excluded.legitimate,
+			   notes = CASE WHEN excluded.notes IS NOT NULL THEN excluded.notes ELSE dmarc_sources.notes END`,
+			source_ip,
+			legitimate ? 1 : 0,
+			notes,
+		);
 	}
 
 	async getDmarcAlignmentTotals(domain: string, sinceIso: string) {

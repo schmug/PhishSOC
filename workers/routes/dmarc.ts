@@ -61,3 +61,28 @@ dmarcRoutes.get("/rollup", async (c) => {
 	const domains = await c.var.mailboxStub.getDmarcRollup(sinceIso);
 	return c.json({ window_days: days, since: sinceIso, domains });
 });
+
+function isValidIp(ip: string): boolean {
+	if (ip.length > 45) return false;
+	if (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+		return ip.split(".").every((o) => Number(o) <= 255);
+	}
+	return /^[0-9a-fA-F:.]{2,45}$/.test(ip) && ip.includes(":");
+}
+
+dmarcRoutes.patch("/sources/:sourceIp", async (c) => {
+	const sourceIp = decodeURIComponent(c.req.param("sourceIp"));
+	if (!isValidIp(sourceIp)) return c.json({ error: "invalid source_ip" }, 400);
+	let body: unknown;
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: "invalid JSON body" }, 400);
+	}
+	if (typeof (body as { legitimate?: unknown }).legitimate !== "boolean") {
+		return c.json({ error: "legitimate must be boolean" }, 400);
+	}
+	const { legitimate, notes } = body as { legitimate: boolean; notes?: string };
+	await c.var.mailboxStub.setSourceLegitimate(sourceIp, legitimate, notes ?? null);
+	return c.json({ ok: true });
+});
