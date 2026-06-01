@@ -26,15 +26,19 @@ interface DmarcSource {
 	last_seen: string;
 }
 
+const RANGE_PRESETS = [7, 30, 90] as const;
+type RangeDays = (typeof RANGE_PRESETS)[number];
+
 /**
  * DMARC aggregate-report dashboard. Shows legitimate vs forged sending
- * sources for a domain over the last 90 days of ingested reports.
+ * sources for a domain over the selected date window.
  */
 export default function DmarcRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
 	const [reports, setReports] = useState<DmarcReport[] | null>(null);
 	const [domain, setDomain] = useState<string | null>(null);
 	const [sources, setSources] = useState<DmarcSource[] | null>(null);
+	const [days, setDays] = useState<RangeDays>(90);
 
 	useEffect(() => {
 		if (!mailboxId) return;
@@ -49,11 +53,12 @@ export default function DmarcRoute() {
 
 	useEffect(() => {
 		if (!mailboxId || !domain) return;
-		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/summary?domain=${encodeURIComponent(domain)}`)
+		setSources(null);
+		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/summary?domain=${encodeURIComponent(domain)}&days=${days}`)
 			.then((r) => r.json() as Promise<{ sources: DmarcSource[] }>)
 			.then((r) => setSources(r.sources))
 			.catch((e) => console.error("dmarc summary fetch failed", e));
-	}, [mailboxId, domain]);
+	}, [mailboxId, domain, days]);
 
 	const domains = useMemo(() => {
 		if (!reports) return [];
@@ -81,15 +86,32 @@ export default function DmarcRoute() {
 		<div className="max-w-5xl px-4 py-6 md:px-8 h-full overflow-y-auto">
 			<h1 className="pp-serif text-ink mb-4">DMARC Reports</h1>
 
-			<div className="mb-6 flex items-center gap-3">
-				<label className="text-sm text-ink-3">Domain:</label>
-				<select
-					value={domain ?? ""}
-					onChange={(e) => setDomain(e.target.value)}
-					className="rounded border border-line bg-paper-3 px-2 py-1 text-sm"
-				>
-					{domains.map((d) => <option key={d} value={d}>{d}</option>)}
-				</select>
+			<div className="mb-6 flex items-center gap-4 flex-wrap">
+				<div className="flex items-center gap-2">
+					<label className="text-sm text-ink-3">Domain:</label>
+					<select
+						value={domain ?? ""}
+						onChange={(e) => setDomain(e.target.value)}
+						className="rounded border border-line bg-paper-3 px-2 py-1 text-sm"
+					>
+						{domains.map((d) => <option key={d} value={d}>{d}</option>)}
+					</select>
+				</div>
+				<div className="flex items-center gap-2">
+					<label className="text-sm text-ink-3">Range:</label>
+					<div className="flex rounded border border-line overflow-hidden text-sm">
+						{RANGE_PRESETS.map((d) => (
+							<button
+								key={d}
+								type="button"
+								onClick={() => setDays(d)}
+								className={`px-3 py-1 ${days === d ? "bg-accent text-white" : "bg-paper-3 text-ink hover:bg-paper-2"}`}
+							>
+								{d}d
+							</button>
+						))}
+					</div>
+				</div>
 			</div>
 
 			<section className="mb-8">
