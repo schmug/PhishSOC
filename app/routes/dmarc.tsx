@@ -5,6 +5,7 @@
 import { Loader } from "@cloudflare/kumo";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
+import { buildDmarcCsv } from "~/lib/dmarc-csv";
 
 interface DmarcReport {
 	id: string;
@@ -61,6 +62,19 @@ export default function DmarcRoute() {
 		return Array.from(set).sort();
 	}, [reports]);
 
+	function downloadSourcesCsv() {
+		if (!sources || sources.length === 0) return;
+		const csv = buildDmarcCsv(sources);
+		const blob = new Blob([csv], { type: "text/csv" });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		const date = new Date().toISOString().slice(0, 10);
+		a.href = url;
+		a.download = `dmarc-sources-${domain ?? "unknown"}-${date}.csv`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
 	if (!reports) {
 		return <div className="flex justify-center py-20"><Loader size="lg" /></div>;
 	}
@@ -93,7 +107,18 @@ export default function DmarcRoute() {
 			</div>
 
 			<section className="mb-8">
-				<h2 className="text-sm font-semibold text-ink mb-3">Sending sources</h2>
+				<div className="flex items-center justify-between mb-3">
+					<h2 className="text-sm font-semibold text-ink">Sending sources</h2>
+					{sources && sources.length > 0 && (
+						<button
+							type="button"
+							onClick={downloadSourcesCsv}
+							className="text-xs text-ink-3 hover:text-ink border border-line rounded px-2 py-1"
+						>
+							Download CSV
+						</button>
+					)}
+				</div>
 				{!sources ? (
 					<div className="text-ink-3 text-sm">Loading…</div>
 				) : sources.length === 0 ? (
