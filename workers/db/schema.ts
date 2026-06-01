@@ -169,6 +169,8 @@ export const dmarcSources = sqliteTable("dmarc_sources", {
 	label: text("label"),
 	legitimate: integer("legitimate").notNull().default(0),
 	notes: text("notes"),
+	asn: text("asn"),
+	country: text("country"),
 });
 
 // ── Cases (TheHive-lite) ─────────────────────────────────────────

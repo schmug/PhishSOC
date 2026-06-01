@@ -512,4 +512,17 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE dmarc_records ADD COLUMN auth_results_json TEXT;
         `,
 	},
+	{
+		// Geo + ASN enrichment for DMARC source IPs (issue #386). Two nullable
+		// columns on `dmarc_sources`: `country` is the ISO 3166-1 alpha-2 code
+		// (e.g. "US") and `asn` is the AS number plus org name from the Team
+		// Cymru DNS mapping service (e.g. "AS15169 GOOGLE, US"). Populated
+		// best-effort at RUA ingest time; NULL means not yet resolved. Existing
+		// rows receive NULL and are enriched on the next report ingest.
+		name: "24_dmarc_sources_geo",
+		sql: `
+            ALTER TABLE dmarc_sources ADD COLUMN asn TEXT;
+            ALTER TABLE dmarc_sources ADD COLUMN country TEXT;
+        `,
+	},
 ];
