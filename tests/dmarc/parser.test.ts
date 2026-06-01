@@ -65,6 +65,23 @@ describe("parseDmarcXml", () => {
 		expect(r.policy_p).toBe("reject");
 	});
 
+	it("parses policy alignment fields adkim/aspf/sp/pct", () => {
+		const r = parseDmarcXml(SAMPLE);
+		expect(r.policy_adkim).toBe("r");
+		expect(r.policy_aspf).toBe("r");
+		expect(r.policy_sp).toBe("reject");
+		expect(r.policy_pct).toBe("100");
+	});
+
+	it("returns undefined policy alignment fields when absent", () => {
+		const xml = `<feedback><policy_published><domain>x.com</domain><p>none</p></policy_published></feedback>`;
+		const r = parseDmarcXml(xml);
+		expect(r.policy_adkim).toBeUndefined();
+		expect(r.policy_aspf).toBeUndefined();
+		expect(r.policy_sp).toBeUndefined();
+		expect(r.policy_pct).toBeUndefined();
+	});
+
 	it("parses each <record> into a DmarcRecord", () => {
 		const r = parseDmarcXml(SAMPLE);
 		expect(r.records).toHaveLength(2);
@@ -83,6 +100,58 @@ describe("parseDmarcXml", () => {
 			dkim_result: "fail",
 			spf_result: "fail",
 		});
+	});
+
+	it("parses auth_results from the first record", () => {
+		const r = parseDmarcXml(SAMPLE);
+		const ar = r.records[0].auth_results;
+		expect(ar).toBeDefined();
+		expect(ar!.dkim).toHaveLength(1);
+		expect(ar!.dkim[0]).toMatchObject({ domain: "example.com", result: "pass" });
+		expect(ar!.spf).toHaveLength(1);
+		expect(ar!.spf[0]).toMatchObject({ domain: "example.com", result: "pass" });
+	});
+
+	it("leaves auth_results undefined when the record has no <auth_results> block", () => {
+		const r = parseDmarcXml(SAMPLE);
+		expect(r.records[1].auth_results).toBeUndefined();
+	});
+
+	it("parses DKIM selector from auth_results when present", () => {
+		const xml = `<feedback>
+      <policy_published><domain>x.com</domain><p>none</p></policy_published>
+      <record>
+        <row><source_ip>1.2.3.4</source_ip><count>1</count></row>
+        <auth_results>
+          <dkim><domain>x.com</domain><selector>default</selector><result>pass</result></dkim>
+        </auth_results>
+      </record>
+    </feedback>`;
+		const r = parseDmarcXml(xml);
+		expect(r.records[0].auth_results!.dkim[0]).toMatchObject({
+			domain: "x.com",
+			selector: "default",
+			result: "pass",
+		});
+	});
+
+	it("parses multiple DKIM entries in auth_results", () => {
+		const xml = `<feedback>
+      <policy_published><domain>x.com</domain><p>none</p></policy_published>
+      <record>
+        <row><source_ip>1.2.3.4</source_ip><count>1</count></row>
+        <auth_results>
+          <dkim><domain>x.com</domain><result>pass</result></dkim>
+          <dkim><domain>y.com</domain><result>fail</result></dkim>
+          <spf><domain>x.com</domain><result>pass</result></spf>
+        </auth_results>
+      </record>
+    </feedback>`;
+		const r = parseDmarcXml(xml);
+		const ar = r.records[0].auth_results!;
+		expect(ar.dkim).toHaveLength(2);
+		expect(ar.dkim[1]).toMatchObject({ domain: "y.com", result: "fail" });
+		expect(ar.spf).toHaveLength(1);
 	});
 
 	it("caps `count` at 1,000,000 to guard against crafted reports", () => {
