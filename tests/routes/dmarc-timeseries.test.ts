@@ -266,4 +266,59 @@ describe("GET /timeseries", () => {
 		const body = await res.json() as { timeseries: unknown[] };
 		expect(body.timeseries).toEqual([]);
 	});
+
+	it("defaults to 90-day window when ?days is absent", async () => {
+		// Plant one record 89 days ago (within default window) and one 91 days ago (outside).
+		const now = Date.now();
+		const within = new Date(now - 89 * 24 * 60 * 60 * 1000).toISOString();
+		const outside = new Date(now - 91 * 24 * 60 * 60 * 1000).toISOString();
+		const records: FakeDmarcRecord[] = [
+			{ domain: "test.com", received_at: within, count: 5, dkim_result: "pass", spf_result: "fail" },
+			{ domain: "test.com", received_at: outside, count: 3, dkim_result: "pass", spf_result: "fail" },
+		];
+		const app = makeApp(records);
+		const res = await app.fetch("/timeseries?domain=test.com");
+		expect(res.status).toBe(200);
+		const body = await res.json() as { timeseries: { day: string; aligned: number; failing: number }[] };
+		// Only the within-window record should appear.
+		expect(body.timeseries).toHaveLength(1);
+		expect(body.timeseries[0].aligned).toBe(5);
+	});
+
+	it("respects ?days=7 and excludes records older than 7 days", async () => {
+		const now = Date.now();
+		const within = new Date(now - 6 * 24 * 60 * 60 * 1000).toISOString();
+		const outside = new Date(now - 8 * 24 * 60 * 60 * 1000).toISOString();
+		const records: FakeDmarcRecord[] = [
+			{ domain: "test.com", received_at: within, count: 2, dkim_result: "pass", spf_result: "fail" },
+			{ domain: "test.com", received_at: outside, count: 9, dkim_result: "pass", spf_result: "fail" },
+		];
+		const app = makeApp(records);
+		const res = await app.fetch("/timeseries?domain=test.com&days=7");
+		expect(res.status).toBe(200);
+		const body = await res.json() as { timeseries: { day: string; aligned: number; failing: number }[] };
+		expect(body.timeseries).toHaveLength(1);
+		expect(body.timeseries[0].aligned).toBe(2);
+	});
+
+	it("clamps ?days above 365 to 365", async () => {
+		const now = Date.now();
+		// A record 364 days ago — always within a 365-day (or larger) window.
+		const within = new Date(now - 364 * 24 * 60 * 60 * 1000).toISOString();
+		const records: FakeDmarcRecord[] = [
+			{ domain: "test.com", received_at: within, count: 1, dkim_result: "pass", spf_result: "fail" },
+		];
+		const app = makeApp(records);
+		const res = await app.fetch("/timeseries?domain=test.com&days=9999");
+		expect(res.status).toBe(200);
+		const body = await res.json() as { timeseries: { day: string; aligned: number; failing: number }[] };
+		// Clamped to 365 — the 364-day-old record is still within window.
+		expect(body.timeseries).toHaveLength(1);
+	});
+
+	it("falls back to the default when ?days is not a valid number", async () => {
+		const app = makeApp([]);
+		const res = await app.fetch("/timeseries?domain=test.com&days=abc");
+		expect(res.status).toBe(200);
+	});
 });

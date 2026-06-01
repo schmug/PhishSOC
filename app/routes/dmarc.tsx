@@ -260,11 +260,11 @@ export default function DmarcRoute() {
 	useEffect(() => {
 		if (!mailboxId || !domain) return;
 		setTimeseries(null);
-		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/timeseries?domain=${encodeURIComponent(domain)}`)
+		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/timeseries?domain=${encodeURIComponent(domain)}&days=${days}`)
 			.then((r) => r.json() as Promise<{ timeseries: DmarcTimeSeriesPoint[] }>)
 			.then((r) => setTimeseries(r.timeseries))
 			.catch((e) => console.error("dmarc timeseries fetch failed", e));
-	}, [mailboxId, domain]);
+	}, [mailboxId, domain, days]);
 
 	const domains = useMemo(() => {
 		if (!reports) return [];
@@ -438,7 +438,7 @@ export default function DmarcRoute() {
 			)}
 
 			<section className="mb-8">
-				<h2 className="text-sm font-semibold text-ink mb-3">Daily aligned vs failing (90 days)</h2>
+				<h2 className="text-sm font-semibold text-ink mb-3">Daily aligned vs failing (last {days} days)</h2>
 				{!timeseries ? (
 					<div className="text-ink-3 text-sm">Loading…</div>
 				) : timeseries.length === 0 ? (
