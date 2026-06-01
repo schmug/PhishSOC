@@ -6,6 +6,21 @@ import { Loader } from "@cloudflare/kumo";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 
+/** RFC 4180 field escape: always wraps in double-quotes, escapes embedded quotes by doubling. */
+export function csvEscapeField(value: string | number): string {
+	return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+export function sourcesToCsv(sources: DmarcSource[]): string {
+	const header = "source_ip,total_count,pass_count,quarantine_count,reject_count,first_seen,last_seen";
+	const rows = sources.map((s) =>
+		[s.source_ip, s.total_count, s.pass_count, s.quarantine_count, s.reject_count, s.first_seen, s.last_seen]
+			.map(csvEscapeField)
+			.join(","),
+	);
+	return [header, ...rows].join("\r\n");
+}
+
 interface DmarcReport {
 	id: string;
 	received_at: string;
@@ -61,6 +76,17 @@ export default function DmarcRoute() {
 		return Array.from(set).sort();
 	}, [reports]);
 
+	function handleDownloadCsv() {
+		if (!sources || sources.length === 0) return;
+		const blob = new Blob([sourcesToCsv(sources)], { type: "text/csv;charset=utf-8;" });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = `dmarc-sources-${domain ?? "export"}.csv`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
 	if (!reports) {
 		return <div className="flex justify-center py-20"><Loader size="lg" /></div>;
 	}
@@ -93,7 +119,18 @@ export default function DmarcRoute() {
 			</div>
 
 			<section className="mb-8">
-				<h2 className="text-sm font-semibold text-ink mb-3">Sending sources</h2>
+				<div className="flex items-center justify-between mb-3">
+					<h2 className="text-sm font-semibold text-ink">Sending sources</h2>
+					{sources && sources.length > 0 && (
+						<button
+							type="button"
+							onClick={handleDownloadCsv}
+							className="text-xs px-2 py-1 rounded border border-line bg-paper-3 hover:bg-paper-2 text-ink-2"
+						>
+							Download CSV
+						</button>
+					)}
+				</div>
 				{!sources ? (
 					<div className="text-ink-3 text-sm">Loading…</div>
 				) : sources.length === 0 ? (
