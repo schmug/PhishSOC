@@ -86,3 +86,16 @@ dmarcRoutes.patch("/sources/:sourceIp", async (c) => {
 	await c.var.mailboxStub.setSourceLegitimate(sourceIp, legitimate, notes ?? null);
 	return c.json({ ok: true });
 });
+
+/** Window constant mirrors `DMARC_ALIGNMENT_WINDOW_DAYS` in workers/index.ts. */
+const TIMESERIES_WINDOW_DAYS = 90;
+
+dmarcRoutes.get("/timeseries", async (c) => {
+	const domain = c.req.query("domain");
+	if (!domain) return c.json({ error: "domain query param required" }, 400);
+	const sinceIso = new Date(
+		Date.now() - TIMESERIES_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+	).toISOString();
+	const timeseries = await c.var.mailboxStub.getDmarcTimeSeries(domain, sinceIso);
+	return c.json({ domain, timeseries });
+});

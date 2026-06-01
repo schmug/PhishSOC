@@ -1659,6 +1659,39 @@ export class MailboxDO extends DurableObject<Env> {
 		return rows;
 	}
 
+	/**
+	 * Daily time-series of aligned vs failing DMARC message counts for a domain.
+	 *
+	 * Aligned = dkim_result='pass' OR spf_result='pass' (consistent with
+	 * getDmarcAlignmentTotals). Returns one row per day that has data in the
+	 * window; days with no reports are absent (callers treat them as zero).
+	 */
+	async getDmarcTimeSeries(
+		domain: string,
+		sinceIso: string,
+	): Promise<{ day: string; aligned: number; failing: number }[]> {
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT
+				   date(rep.received_at) as day,
+				   COALESCE(SUM(CASE WHEN rec.dkim_result = 'pass' OR rec.spf_result = 'pass' THEN rec.count ELSE 0 END), 0) as aligned,
+				   COALESCE(SUM(CASE WHEN rec.dkim_result != 'pass' AND rec.spf_result != 'pass' THEN rec.count ELSE 0 END), 0) as failing
+				 FROM dmarc_records rec
+				 JOIN dmarc_reports rep ON rec.report_id = rep.id
+				 WHERE rep.domain = ?1 AND rep.received_at >= ?2
+				 GROUP BY date(rep.received_at)
+				 ORDER BY day`,
+				domain,
+				sinceIso,
+			),
+		] as Array<{ day: string; aligned: number | null; failing: number | null }>;
+		return rows.map((r) => ({
+			day: r.day,
+			aligned: Number(r.aligned ?? 0) || 0,
+			failing: Number(r.failing ?? 0) || 0,
+		}));
+	}
+
 	// ── TLS-RPT (RFC 8460 inbound report ingestion) ───────────────────
 
 	async insertTlsRptReport(

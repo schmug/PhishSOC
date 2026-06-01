@@ -90,6 +90,93 @@ interface DmarcRollup {
 	domains: DmarcRollupRow[];
 }
 
+interface DmarcTimeSeriesPoint {
+	day: string;
+	aligned: number;
+	failing: number;
+}
+
+// Inline SVG bar chart — no charting dependency needed. Two bars per day:
+// aligned (green) and failing (red). Sparse days render as zero via the
+// bar height calculation; missing days simply aren't drawn.
+const CHART_HEIGHT = 80;
+const BAR_GROUP_WIDTH = 10;
+const BAR_GAP = 1;
+const BAR_WIDTH = (BAR_GROUP_WIDTH - BAR_GAP * 3) / 2; // 2 bars + spacing
+
+function DmarcTimeSeriesChart({ data }: { data: DmarcTimeSeriesPoint[] }) {
+	const maxVal = Math.max(1, ...data.map((d) => d.aligned + d.failing));
+	const totalWidth = data.length * BAR_GROUP_WIDTH;
+
+	// Show at most ~12 evenly-spaced x-axis labels to avoid overlap.
+	const labelStep = Math.max(1, Math.ceil(data.length / 12));
+
+	return (
+		<div className="rounded-lg border border-line p-4 overflow-x-auto">
+			<svg
+				width="100%"
+				viewBox={`0 0 ${totalWidth} ${CHART_HEIGHT + 16}`}
+				preserveAspectRatio="none"
+				aria-label="Daily aligned vs failing DMARC message counts"
+				role="img"
+			>
+				{data.map((d, i) => {
+					const x = i * BAR_GROUP_WIDTH;
+					const alignedH = (d.aligned / maxVal) * CHART_HEIGHT;
+					const failingH = (d.failing / maxVal) * CHART_HEIGHT;
+					const alignedY = CHART_HEIGHT - alignedH;
+					const failingY = CHART_HEIGHT - failingH;
+					const showLabel = i % labelStep === 0;
+					return (
+						<g key={d.day}>
+							{/* aligned bar (green) */}
+							<rect
+								x={x + BAR_GAP}
+								y={alignedY}
+								width={BAR_WIDTH}
+								height={alignedH}
+								fill="var(--color-safe, #22c55e)"
+								aria-label={`${d.day}: ${d.aligned} aligned`}
+							/>
+							{/* failing bar (red) */}
+							<rect
+								x={x + BAR_GAP * 2 + BAR_WIDTH}
+								y={failingY}
+								width={BAR_WIDTH}
+								height={failingH}
+								fill="var(--color-danger, #ef4444)"
+								aria-label={`${d.day}: ${d.failing} failing`}
+							/>
+							{showLabel && (
+								<text
+									x={x + BAR_GROUP_WIDTH / 2}
+									y={CHART_HEIGHT + 12}
+									fontSize={4}
+									textAnchor="middle"
+									fill="currentColor"
+									className="text-ink-3"
+								>
+									{d.day.slice(5)} {/* MM-DD */}
+								</text>
+							)}
+						</g>
+					);
+				})}
+			</svg>
+			<div className="flex items-center gap-4 mt-2 text-xs text-ink-3">
+				<span className="flex items-center gap-1">
+					<span className="inline-block w-3 h-3 rounded-sm" style={{ background: "var(--color-safe, #22c55e)" }} />
+					Aligned (dkim or spf pass)
+				</span>
+				<span className="flex items-center gap-1">
+					<span className="inline-block w-3 h-3 rounded-sm" style={{ background: "var(--color-danger, #ef4444)" }} />
+					Failing (both fail)
+				</span>
+			</div>
+		</div>
+	);
+}
+
 /**
  * DMARC aggregate-report dashboard. Shows legitimate vs forged sending
  * sources for a domain over the selected date window.
@@ -106,6 +193,7 @@ export default function DmarcRoute() {
 	const [rollup, setRollup] = useState<DmarcRollup | null>(null);
 	const [showUnknownOnly, setShowUnknownOnly] = useState(false);
 	const [togglingIp, setTogglingIp] = useState<string | null>(null);
+	const [timeseries, setTimeseries] = useState<DmarcTimeSeriesPoint[] | null>(null);
 
 	useEffect(() => {
 		if (!mailboxId) return;
@@ -166,6 +254,15 @@ export default function DmarcRoute() {
 			.then((r) => setRollup(r))
 			.catch((e) => console.error("dmarc rollup fetch failed", e));
 	}, [mailboxId]);
+
+	useEffect(() => {
+		if (!mailboxId || !domain) return;
+		setTimeseries(null);
+		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/timeseries?domain=${encodeURIComponent(domain)}`)
+			.then((r) => r.json() as Promise<{ timeseries: DmarcTimeSeriesPoint[] }>)
+			.then((r) => setTimeseries(r.timeseries))
+			.catch((e) => console.error("dmarc timeseries fetch failed", e));
+	}, [mailboxId, domain]);
 
 	const domains = useMemo(() => {
 		if (!reports) return [];
@@ -337,6 +434,17 @@ export default function DmarcRoute() {
 					)}
 				</div>
 			)}
+
+			<section className="mb-8">
+				<h2 className="text-sm font-semibold text-ink mb-3">Daily aligned vs failing (90 days)</h2>
+				{!timeseries ? (
+					<div className="text-ink-3 text-sm">Loading…</div>
+				) : timeseries.length === 0 ? (
+					<div className="text-ink-3 text-sm">No time-series data for this domain.</div>
+				) : (
+					<DmarcTimeSeriesChart data={timeseries} />
+				)}
+			</section>
 
 			<section className="mb-8">
 				<div className="flex items-center justify-between mb-3">
