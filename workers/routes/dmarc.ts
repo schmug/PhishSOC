@@ -10,6 +10,9 @@
 import { Hono } from "hono";
 import { requireMailbox, type MailboxContext } from "../lib/mailbox";
 
+/** How far back the sending-sources summary looks. Matches the "last 90 days" copy in the DMARC dashboard. */
+const DMARC_SUMMARY_WINDOW_DAYS = 90;
+
 export const dmarcRoutes = new Hono<MailboxContext>();
 
 dmarcRoutes.use("*", requireMailbox);
@@ -31,6 +34,9 @@ dmarcRoutes.get("/reports/:reportId/records", async (c) => {
 dmarcRoutes.get("/summary", async (c) => {
 	const domain = c.req.query("domain");
 	if (!domain) return c.json({ error: "domain query param required" }, 400);
-	const summary = await c.var.mailboxStub.getDmarcSummary(domain);
+	const sinceIso = new Date(
+		Date.now() - DMARC_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+	).toISOString();
+	const summary = await c.var.mailboxStub.getDmarcSummary(domain, sinceIso);
 	return c.json({ domain, sources: summary });
 });

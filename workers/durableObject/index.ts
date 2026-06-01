@@ -1519,7 +1519,7 @@ export class MailboxDO extends DurableObject<Env> {
 		finalize("ready", summary);
 	}
 
-	async getDmarcSummary(domain: string) {
+	async getDmarcSummary(domain: string, sinceIso: string) {
 		const rows = [
 			...this.ctx.storage.sql.exec(
 				`SELECT
@@ -1532,11 +1532,12 @@ export class MailboxDO extends DurableObject<Env> {
 				   MAX(rep.received_at) as last_seen
 				 FROM dmarc_records r
 				 JOIN dmarc_reports rep ON rep.id = r.report_id
-				 WHERE rep.domain = ?1
+				 WHERE rep.domain = ?1 AND rep.received_at >= ?2
 				 GROUP BY r.source_ip
 				 ORDER BY total_count DESC
 				 LIMIT 200`,
 				domain,
+				sinceIso,
 			),
 		] as Array<{
 			source_ip: string;
