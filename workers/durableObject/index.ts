@@ -15,6 +15,8 @@ import { computeVerdictMix } from "../lib/dashboard-aggregation";
 import { summarizeCase } from "../lib/ai";
 import { dkimObservationCutoffIso } from "../dkim/posture";
 import { parseStageTrace } from "../security/stage-trace";
+import { resolvePtr } from "../dmarc/ptr-resolve";
+import { buildDmarcSourceLabel } from "../../shared/dmarc-provider";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -1305,6 +1307,50 @@ export class MailboxDO extends DurableObject<Env> {
 				.values(records.map((r) => ({ ...r, report_id: report.id })))
 				.run();
 		}
+		// Enrich new source IPs with PTR / provider labels in background.
+		const newIps = this.getNewDmarcSourceIps(records.map((r) => r.source_ip));
+		if (newIps.length > 0) {
+			this.ctx.waitUntil(this.enrichDmarcSources(newIps));
+		}
+	}
+
+	/** Returns IPs from `candidates` that have no row yet in `dmarc_sources`. */
+	private getNewDmarcSourceIps(candidates: string[]): string[] {
+		const distinct = [...new Set(candidates)];
+		return distinct.filter((ip) => {
+			const existing = [
+				...this.ctx.storage.sql.exec(
+					`SELECT 1 FROM dmarc_sources WHERE source_ip = ?1`,
+					ip,
+				),
+			];
+			return existing.length === 0;
+		});
+	}
+
+	/** Resolve PTR for each IP and persist into `dmarc_sources`. Best-effort; never throws. */
+	private async enrichDmarcSources(ips: string[]): Promise<void> {
+		for (const ip of ips) {
+			try {
+				const hostname = await resolvePtr(ip);
+				const label = buildDmarcSourceLabel(hostname);
+				this.ctx.storage.sql.exec(
+					`INSERT OR IGNORE INTO dmarc_sources (source_ip, label) VALUES (?1, ?2)`,
+					ip,
+					label,
+				);
+			} catch {
+				// Best-effort: persist a null-label row so we don't retry on the next ingest.
+				try {
+					this.ctx.storage.sql.exec(
+						`INSERT OR IGNORE INTO dmarc_sources (source_ip, label) VALUES (?1, NULL)`,
+						ip,
+					);
+				} catch {
+					// ignore
+				}
+			}
+		}
 	}
 
 	async listDmarcReports(options: { domain?: string; limit?: number; offset?: number } = {}) {
@@ -1529,9 +1575,11 @@ export class MailboxDO extends DurableObject<Env> {
 				   SUM(CASE WHEN r.disposition = 'quarantine' THEN r.count ELSE 0 END) as quarantine_count,
 				   SUM(CASE WHEN r.disposition = 'reject' THEN r.count ELSE 0 END) as reject_count,
 				   MIN(rep.received_at) as first_seen,
-				   MAX(rep.received_at) as last_seen
+				   MAX(rep.received_at) as last_seen,
+				   ds.label as label
 				 FROM dmarc_records r
 				 JOIN dmarc_reports rep ON rep.id = r.report_id
+				 LEFT JOIN dmarc_sources ds ON ds.source_ip = r.source_ip
 				 WHERE rep.domain = ?1 AND rep.received_at >= ?2
 				 GROUP BY r.source_ip
 				 ORDER BY total_count DESC
@@ -1547,6 +1595,7 @@ export class MailboxDO extends DurableObject<Env> {
 			reject_count: number;
 			first_seen: string;
 			last_seen: string;
+			label: string | null;
 		}>;
 		return rows;
 	}
