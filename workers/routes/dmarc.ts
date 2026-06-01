@@ -28,9 +28,15 @@ dmarcRoutes.get("/reports/:reportId/records", async (c) => {
 	return c.json({ records });
 });
 
+const DMARC_SUMMARY_DEFAULT_DAYS = 90;
+const DMARC_SUMMARY_MAX_DAYS = 365;
+
 dmarcRoutes.get("/summary", async (c) => {
 	const domain = c.req.query("domain");
 	if (!domain) return c.json({ error: "domain query param required" }, 400);
-	const summary = await c.var.mailboxStub.getDmarcSummary(domain);
+	const rawDays = Number(c.req.query("days") ?? DMARC_SUMMARY_DEFAULT_DAYS);
+	const days = Math.min(Math.max(Number.isFinite(rawDays) ? rawDays : DMARC_SUMMARY_DEFAULT_DAYS, 1), DMARC_SUMMARY_MAX_DAYS);
+	const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+	const summary = await c.var.mailboxStub.getDmarcSummary(domain, sinceIso);
 	return c.json({ domain, sources: summary });
 });
