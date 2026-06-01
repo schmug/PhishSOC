@@ -1569,6 +1569,57 @@ export class MailboxDO extends DurableObject<Env> {
 		};
 	}
 
+	/**
+	 * Cross-domain rollup: aggregate dmarc_records across ALL distinct domains
+	 * in dmarc_reports within the given time window. Returns one row per domain
+	 * sorted by worst alignment (highest failing count) first.
+	 *
+	 * Uses `dkim_result = 'pass' OR spf_result = 'pass'` for "aligned"
+	 * (consistent with getDmarcAlignmentTotals).
+	 *
+	 * @param sinceIso ISO-8601 lower-bound for rep.received_at; defaults to 90 days ago.
+	 */
+	async getDmarcCrossDomainRollup(sinceIso?: string): Promise<
+		Array<{
+			domain: string;
+			total: number;
+			aligned: number;
+			failing: number;
+		}>
+	> {
+		const since =
+			sinceIso ??
+			new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT
+				   rep.domain as domain,
+				   COALESCE(SUM(r.count), 0) as total,
+				   COALESCE(SUM(CASE WHEN r.dkim_result = 'pass' OR r.spf_result = 'pass' THEN r.count ELSE 0 END), 0) as aligned
+				 FROM dmarc_reports rep
+				 LEFT JOIN dmarc_records r ON r.report_id = rep.id
+				 WHERE rep.received_at >= ?1
+				 GROUP BY rep.domain
+				 ORDER BY (COALESCE(SUM(r.count), 0) - COALESCE(SUM(CASE WHEN r.dkim_result = 'pass' OR r.spf_result = 'pass' THEN r.count ELSE 0 END), 0)) DESC`,
+				since,
+			),
+		] as Array<{
+			domain: string;
+			total: number | bigint;
+			aligned: number | bigint;
+		}>;
+		return rows.map((row) => {
+			const total = Number(row.total) || 0;
+			const aligned = Number(row.aligned) || 0;
+			return {
+				domain: row.domain,
+				total,
+				aligned,
+				failing: Math.max(0, total - aligned),
+			};
+		});
+	}
+
 	// ── TLS-RPT (RFC 8460 inbound report ingestion) ───────────────────
 
 	async insertTlsRptReport(

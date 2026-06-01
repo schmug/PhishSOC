@@ -26,15 +26,28 @@ interface DmarcSource {
 	last_seen: string;
 }
 
+/** Per-domain alignment row from the cross-domain RUA rollup endpoint (#383). */
+interface DmarcRollupRow {
+	domain: string;
+	total: number;
+	aligned: number;
+	failing: number;
+}
+
 /**
  * DMARC aggregate-report dashboard. Shows legitimate vs forged sending
  * sources for a domain over the last 90 days of ingested reports.
+ *
+ * Also surfaces a cross-domain rollup section (#383) that aggregates
+ * ingested RUA data across all domains covered by this mailbox — distinct
+ * from the posture-based "Top domains · 24h" card from #141.
  */
 export default function DmarcRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
 	const [reports, setReports] = useState<DmarcReport[] | null>(null);
 	const [domain, setDomain] = useState<string | null>(null);
 	const [sources, setSources] = useState<DmarcSource[] | null>(null);
+	const [rollup, setRollup] = useState<DmarcRollupRow[] | null>(null);
 
 	useEffect(() => {
 		if (!mailboxId) return;
@@ -54,6 +67,14 @@ export default function DmarcRoute() {
 			.then((r) => setSources(r.sources))
 			.catch((e) => console.error("dmarc summary fetch failed", e));
 	}, [mailboxId, domain]);
+
+	useEffect(() => {
+		if (!mailboxId) return;
+		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/rollup`)
+			.then((r) => r.json() as Promise<{ rollup: DmarcRollupRow[] }>)
+			.then((r) => setRollup(r.rollup))
+			.catch((e) => console.error("dmarc rollup fetch failed", e));
+	}, [mailboxId]);
 
 	const domains = useMemo(() => {
 		if (!reports) return [];
@@ -80,6 +101,57 @@ export default function DmarcRoute() {
 	return (
 		<div className="max-w-5xl px-4 py-6 md:px-8 h-full overflow-y-auto">
 			<h1 className="pp-serif text-ink mb-4">DMARC Reports</h1>
+
+			{/* Cross-domain RUA rollup (#383) — ingested aggregate-report data,
+			    distinct from the posture-based "Top domains · 24h" card (#141). */}
+			{rollup !== null && rollup.length > 1 && (
+				<section className="mb-8">
+					<h2 className="text-sm font-semibold text-ink mb-3">
+						Cross-domain rollup
+						<span className="ml-2 text-xs font-normal text-ink-3">(90 days · RUA data)</span>
+					</h2>
+					<div className="overflow-x-auto rounded-lg border border-line">
+						<table className="w-full text-sm">
+							<thead className="bg-paper-3 text-ink-3 text-xs uppercase">
+								<tr>
+									<th className="text-left px-3 py-2">Domain</th>
+									<th className="text-right px-3 py-2">Messages</th>
+									<th className="text-right px-3 py-2">Aligned</th>
+									<th className="text-right px-3 py-2">Failing</th>
+									<th className="text-left px-3 py-2">Alignment rate</th>
+								</tr>
+							</thead>
+							<tbody>
+								{rollup.map((row) => {
+									const rate = row.total > 0 ? row.aligned / row.total : 0;
+									const isWorst = rate < 0.5 && row.total >= 5;
+									return (
+										<tr key={row.domain} className={`border-t border-line ${isWorst ? "bg-paper-3" : ""}`}>
+											<td className="px-3 py-2 font-mono">
+												<button
+													type="button"
+													onClick={() => setDomain(row.domain)}
+													className="text-accent hover:underline"
+												>
+													{row.domain}
+												</button>
+											</td>
+											<td className="px-3 py-2 text-right">{row.total}</td>
+											<td className="px-3 py-2 text-right text-safe">{row.aligned}</td>
+											<td className="px-3 py-2 text-right text-danger">{row.failing}</td>
+											<td className="px-3 py-2">
+												<span className={isWorst ? "text-danger" : "text-ink"}>
+													{Math.round(rate * 100)}%
+												</span>
+											</td>
+										</tr>
+									);
+								})}
+							</tbody>
+						</table>
+					</div>
+				</section>
+			)}
 
 			<div className="mb-6 flex items-center gap-3">
 				<label className="text-sm text-ink-3">Domain:</label>

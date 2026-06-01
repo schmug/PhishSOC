@@ -34,3 +34,22 @@ dmarcRoutes.get("/summary", async (c) => {
 	const summary = await c.var.mailboxStub.getDmarcSummary(domain);
 	return c.json({ domain, sources: summary });
 });
+
+/**
+ * Cross-domain DMARC RUA rollup (#383).
+ *
+ * Returns per-domain alignment totals aggregated from ingested
+ * dmarc_reports/dmarc_records — distinct from the posture-based
+ * comparison in #141 which uses live DoH lookups.
+ *
+ * Query params:
+ *   - since  ISO-8601 lower bound (defaults to 90 days ago in the DO)
+ *
+ * Response: { rollup: Array<{ domain, total, aligned, failing }> }
+ *   sorted by failing count desc (worst-alignment domain first).
+ */
+dmarcRoutes.get("/rollup", async (c) => {
+	const since = c.req.query("since") ?? undefined;
+	const rollup = await c.var.mailboxStub.getDmarcCrossDomainRollup(since);
+	return c.json({ rollup });
+});
