@@ -1286,6 +1286,10 @@ export class MailboxDO extends DurableObject<Env> {
 			date_range_begin: string | null;
 			date_range_end: string | null;
 			policy_p: string | null;
+			policy_adkim: string | null;
+			policy_aspf: string | null;
+			policy_sp: string | null;
+			policy_pct: string | null;
 			raw_r2_key: string | null;
 		},
 		records: Array<{
@@ -1296,6 +1300,7 @@ export class MailboxDO extends DurableObject<Env> {
 			dkim_result: string | null;
 			spf_result: string | null;
 			header_from: string | null;
+			auth_results: string | null;
 		}>,
 	) {
 		this.db.insert(schema.dmarcReports).values(report).run();

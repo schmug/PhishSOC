@@ -106,4 +106,67 @@ describe("parseDmarcXml", () => {
 	it("handles empty <feedback/> without throwing", () => {
 		expect(() => parseDmarcXml("<feedback></feedback>")).not.toThrow();
 	});
+
+	it("parses policy_published adkim/aspf/sp/pct from SAMPLE", () => {
+		const r = parseDmarcXml(SAMPLE);
+		expect(r.policy_adkim).toBe("r");
+		expect(r.policy_aspf).toBe("r");
+		expect(r.policy_sp).toBe("reject");
+		expect(r.policy_pct).toBe("100");
+	});
+
+	it("returns undefined policy fields when tags are absent", () => {
+		const xml = `<feedback><policy_published><domain>x.com</domain><p>none</p></policy_published></feedback>`;
+		const r = parseDmarcXml(xml);
+		expect(r.policy_adkim).toBeUndefined();
+		expect(r.policy_aspf).toBeUndefined();
+		expect(r.policy_sp).toBeUndefined();
+		expect(r.policy_pct).toBeUndefined();
+	});
+
+	it("parses auth_results for the first record in SAMPLE", () => {
+		const r = parseDmarcXml(SAMPLE);
+		const ar = r.records[0].auth_results;
+		expect(ar).toBeDefined();
+		expect(ar!.dkim).toHaveLength(1);
+		expect(ar!.dkim[0]).toMatchObject({ domain: "example.com", result: "pass" });
+		expect(ar!.spf).toHaveLength(1);
+		expect(ar!.spf[0]).toMatchObject({ domain: "example.com", result: "pass" });
+	});
+
+	it("returns undefined auth_results when the tag is absent", () => {
+		const r = parseDmarcXml(SAMPLE);
+		expect(r.records[1].auth_results).toBeUndefined();
+	});
+
+	it("parses multiple dkim entries in auth_results", () => {
+		const xml = `<feedback>
+  <record>
+    <row><source_ip>1.2.3.4</source_ip><count>3</count><policy_evaluated><disposition>none</disposition><dkim>pass</dkim><spf>pass</spf></policy_evaluated></row>
+    <auth_results>
+      <dkim><domain>a.com</domain><selector>s1</selector><result>pass</result></dkim>
+      <dkim><domain>b.com</domain><selector>s2</selector><result>fail</result></dkim>
+      <spf><domain>a.com</domain><result>pass</result></spf>
+    </auth_results>
+  </record>
+</feedback>`;
+		const r = parseDmarcXml(xml);
+		const ar = r.records[0].auth_results;
+		expect(ar).toBeDefined();
+		expect(ar!.dkim).toHaveLength(2);
+		expect(ar!.dkim[0]).toMatchObject({ domain: "a.com", selector: "s1", result: "pass" });
+		expect(ar!.dkim[1]).toMatchObject({ domain: "b.com", selector: "s2", result: "fail" });
+		expect(ar!.spf).toHaveLength(1);
+	});
+
+	it("returns undefined auth_results when auth_results block is empty", () => {
+		const xml = `<feedback>
+  <record>
+    <row><source_ip>1.2.3.4</source_ip><count>1</count></row>
+    <auth_results></auth_results>
+  </record>
+</feedback>`;
+		const r = parseDmarcXml(xml);
+		expect(r.records[0].auth_results).toBeUndefined();
+	});
 });

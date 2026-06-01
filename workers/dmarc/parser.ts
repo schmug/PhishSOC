@@ -10,6 +10,22 @@
  * We only capture the fields needed for the dashboard and forger intel.
  */
 
+export interface AuthDkimResult {
+	domain?: string;
+	selector?: string;
+	result?: string;
+}
+
+export interface AuthSpfResult {
+	domain?: string;
+	result?: string;
+}
+
+export interface AuthResults {
+	dkim: AuthDkimResult[];
+	spf: AuthSpfResult[];
+}
+
 export interface DmarcReport {
 	org_name?: string;
 	report_id?: string;
@@ -17,6 +33,10 @@ export interface DmarcReport {
 	date_range_end?: string;
 	policy_domain?: string;
 	policy_p?: string;
+	policy_adkim?: string;
+	policy_aspf?: string;
+	policy_sp?: string;
+	policy_pct?: string;
 	records: DmarcRecord[];
 }
 
@@ -27,6 +47,7 @@ export interface DmarcRecord {
 	dkim_result?: string;
 	spf_result?: string;
 	header_from?: string;
+	auth_results?: AuthResults;
 }
 
 /** Gunzip an arraybuffer using the runtime's DecompressionStream. */
@@ -58,6 +79,21 @@ function allTags(scope: string, name: string): string[] {
 	return out;
 }
 
+function parseAuthResults(scope: string): AuthResults | undefined {
+	const ar = tag(scope, "auth_results") ?? "";
+	const dkim: AuthDkimResult[] = allTags(ar, "dkim").map((d) => ({
+		domain: tag(d, "domain"),
+		selector: tag(d, "selector"),
+		result: tag(d, "result"),
+	}));
+	const spf: AuthSpfResult[] = allTags(ar, "spf").map((s) => ({
+		domain: tag(s, "domain"),
+		result: tag(s, "result"),
+	}));
+	if (dkim.length === 0 && spf.length === 0) return undefined;
+	return { dkim, spf };
+}
+
 export function parseDmarcXml(xml: string): DmarcReport {
 	const metadata = tag(xml, "report_metadata") ?? "";
 	const policy = tag(xml, "policy_published") ?? "";
@@ -77,6 +113,7 @@ export function parseDmarcXml(xml: string): DmarcReport {
 			dkim_result: tag(policyEval, "dkim"),
 			spf_result: tag(policyEval, "spf"),
 			header_from: tag(identifiers, "header_from"),
+			auth_results: parseAuthResults(rec),
 		});
 	}
 
@@ -87,6 +124,10 @@ export function parseDmarcXml(xml: string): DmarcReport {
 		date_range_end: tag(tag(metadata, "date_range") ?? "", "end"),
 		policy_domain: tag(policy, "domain"),
 		policy_p: tag(policy, "p"),
+		policy_adkim: tag(policy, "adkim"),
+		policy_aspf: tag(policy, "aspf"),
+		policy_sp: tag(policy, "sp"),
+		policy_pct: tag(policy, "pct"),
 		records,
 	};
 }

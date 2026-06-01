@@ -81,6 +81,10 @@ export async function ingestDmarcReport(
 		date_range_begin: report.date_range_begin ?? null,
 		date_range_end: report.date_range_end ?? null,
 		policy_p: report.policy_p ?? null,
+		policy_adkim: report.policy_adkim ?? null,
+		policy_aspf: report.policy_aspf ?? null,
+		policy_sp: report.policy_sp ?? null,
+		policy_pct: report.policy_pct ?? null,
 		raw_r2_key: null,
 	}, report.records.map((r) => ({
 		id: crypto.randomUUID(),
@@ -90,6 +94,7 @@ export async function ingestDmarcReport(
 		dkim_result: r.dkim_result ?? null,
 		spf_result: r.spf_result ?? null,
 		header_from: r.header_from ?? null,
+		auth_results: r.auth_results ? JSON.stringify(r.auth_results) : null,
 	})));
 
 	return { ingested: true };

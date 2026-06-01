@@ -24,7 +24,11 @@ dmarcRoutes.get("/reports", async (c) => {
 
 dmarcRoutes.get("/reports/:reportId/records", async (c) => {
 	const reportId = c.req.param("reportId");
-	const records = await c.var.mailboxStub.getDmarcRecords(reportId);
+	const raw = await c.var.mailboxStub.getDmarcRecords(reportId);
+	const records = raw.map((r) => ({
+		...r,
+		auth_results: r.auth_results ? JSON.parse(r.auth_results) : null,
+	}));
 	return c.json({ records });
 });
 

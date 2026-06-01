@@ -498,4 +498,18 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_sender_graph_name ON sender_graph(sender_name);
         `,
 	},
+	{
+		// Full policy_published fields (adkim/aspf/sp/pct) and per-record
+		// auth_results (DKIM/SPF signing domain, selector, raw verdict) from
+		// DMARC RUA XML (issue #384). Columns are nullable so pre-migration
+		// rows continue to read null. auth_results is stored as JSON text.
+		name: "23_dmarc_policy_auth_results",
+		sql: `
+            ALTER TABLE dmarc_reports ADD COLUMN policy_adkim TEXT;
+            ALTER TABLE dmarc_reports ADD COLUMN policy_aspf TEXT;
+            ALTER TABLE dmarc_reports ADD COLUMN policy_sp TEXT;
+            ALTER TABLE dmarc_reports ADD COLUMN policy_pct TEXT;
+            ALTER TABLE dmarc_records ADD COLUMN auth_results TEXT;
+        `,
+	},
 ];
