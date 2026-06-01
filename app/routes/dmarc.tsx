@@ -43,6 +43,7 @@ interface DmarcSource {
 	reject_count: number;
 	first_seen: string;
 	last_seen: string;
+	label?: string | null;
 }
 
 interface DmarcAuthResultDkim {
@@ -257,6 +258,7 @@ export default function DmarcRoute() {
 							<thead className="bg-paper-3 text-ink-3 text-xs uppercase">
 								<tr>
 									<th className="text-left px-3 py-2">Source IP</th>
+									<th className="text-left px-3 py-2">Source</th>
 									<th className="text-right px-3 py-2">Messages</th>
 									<th className="text-right px-3 py-2">Pass</th>
 									<th className="text-right px-3 py-2">Quarantine</th>
@@ -276,6 +278,7 @@ export default function DmarcRoute() {
 											onClick={() => setSelectedIp(isSelected ? null : s.source_ip)}
 										>
 											<td className="px-3 py-2 font-mono text-ink">{s.source_ip}</td>
+											<td className="px-3 py-2 text-ink-3">{s.label ?? s.source_ip}</td>
 											<td className="px-3 py-2 text-right">{s.total_count}</td>
 											<td className="px-3 py-2 text-right text-safe">{s.pass_count}</td>
 											<td className="px-3 py-2 text-right text-suspect">{s.quarantine_count}</td>
