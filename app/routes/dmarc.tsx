@@ -45,6 +45,8 @@ interface DmarcSource {
 	last_seen: string;
 	label?: string | null;
 	legitimate: number;
+	asn: string | null;
+	country: string | null;
 }
 
 interface DmarcAuthResultDkim {
@@ -485,6 +487,8 @@ export default function DmarcRoute() {
 								<tr>
 									<th className="text-left px-3 py-2">Source IP</th>
 									<th className="text-left px-3 py-2">Source</th>
+									<th className="text-left px-3 py-2">Country</th>
+									<th className="text-left px-3 py-2">ASN</th>
 									<th className="text-right px-3 py-2">Messages</th>
 									<th className="text-right px-3 py-2">Pass</th>
 									<th className="text-right px-3 py-2">Quarantine</th>
@@ -508,6 +512,8 @@ export default function DmarcRoute() {
 										>
 											<td className="px-3 py-2 font-mono text-ink">{s.source_ip}</td>
 											<td className="px-3 py-2 text-ink-3">{s.label ?? s.source_ip}</td>
+											<td className="px-3 py-2 text-ink-3">{s.country ?? "—"}</td>
+											<td className="px-3 py-2 text-ink-3 text-xs">{s.asn ?? "—"}</td>
 											<td className="px-3 py-2 text-right">{s.total_count}</td>
 											<td className="px-3 py-2 text-right text-safe">{s.pass_count}</td>
 											<td className="px-3 py-2 text-right text-suspect">{s.quarantine_count}</td>

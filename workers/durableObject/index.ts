@@ -4,7 +4,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/durable-sqlite";
-import { eq, and, or, asc, desc, sql } from "drizzle-orm";
+import { eq, and, or, asc, desc, sql, inArray } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import * as schema from "../db/schema";
 import { Folders } from "../../shared/folders";
@@ -14,6 +14,7 @@ import { attachmentObjectKey } from "../lib/attachments";
 import { computeVerdictMix } from "../lib/dashboard-aggregation";
 import { summarizeCase } from "../lib/ai";
 import { dkimObservationCutoffIso } from "../dkim/posture";
+import { lookupIpGeo } from "../dmarc/geo";
 import { parseStageTrace } from "../security/stage-trace";
 import { resolvePtr } from "../dmarc/ptr-resolve";
 import { buildDmarcSourceLabel } from "../../shared/dmarc-provider";
@@ -1307,10 +1308,19 @@ export class MailboxDO extends DurableObject<Env> {
 				.values(records.map((r) => ({ ...r, report_id: report.id })))
 				.run();
 		}
-		// Enrich new source IPs with PTR / provider labels in background.
+		// Enrich new source IPs: PTR/provider label first (creates the rows),
+		// then geo+ASN (updates them). Sequenced in one waitUntil so geo takes
+		// the UPDATE path on label-created rows instead of inserting a
+		// label-less row that would shadow the PTR label (see #385/#386).
 		const newIps = this.getNewDmarcSourceIps(records.map((r) => r.source_ip));
-		if (newIps.length > 0) {
-			this.ctx.waitUntil(this.enrichDmarcSources(newIps));
+		const distinctSourceIps = [...new Set(records.map((r) => r.source_ip))];
+		if (distinctSourceIps.length > 0) {
+			this.ctx.waitUntil(
+				(async () => {
+					if (newIps.length > 0) await this.enrichDmarcSources(newIps);
+					await this.enrichDmarcSourcesGeo(distinctSourceIps);
+				})(),
+			);
 		}
 	}
 
@@ -1351,6 +1361,49 @@ export class MailboxDO extends DurableObject<Env> {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Geo + ASN enrich the given source IPs (best-effort, nullable). Runs after
+	 * `enrichDmarcSources` so the rows exist; takes the UPDATE path to add
+	 * `asn`/`country` without clobbering the PTR `label`.
+	 */
+	private async enrichDmarcSourcesGeo(distinctIps: string[]): Promise<void> {
+		if (distinctIps.length === 0) return;
+
+		// Find IPs not yet geo-enriched (not in dmarc_sources or asn is null).
+		const existingRows = this.db
+			.select({ source_ip: schema.dmarcSources.source_ip, asn: schema.dmarcSources.asn })
+			.from(schema.dmarcSources)
+			.where(inArray(schema.dmarcSources.source_ip, distinctIps))
+			.all();
+		const existingByIp = new Map(existingRows.map((r) => [r.source_ip, r]));
+		const ipsNeedingGeo = distinctIps.filter((ip) => {
+			const row = existingByIp.get(ip);
+			return !row || row.asn === null;
+		});
+
+		if (ipsNeedingGeo.length === 0) return;
+
+		await Promise.all(
+			ipsNeedingGeo.map(async (ip) => {
+				const geo = await lookupIpGeo(ip).catch(() => ({ asn: null, country: null }));
+				const existing = existingByIp.get(ip);
+				if (existing) {
+					this.db
+						.update(schema.dmarcSources)
+						.set({ asn: geo.asn, country: geo.country })
+						.where(eq(schema.dmarcSources.source_ip, ip))
+						.run();
+				} else {
+					this.db
+						.insert(schema.dmarcSources)
+						.values({ source_ip: ip, asn: geo.asn, country: geo.country, label: null, legitimate: 0, notes: null })
+						.onConflictDoNothing()
+						.run();
+				}
+			}),
+		);
 	}
 
 	async listDmarcReports(options: { domain?: string; limit?: number; offset?: number } = {}) {
@@ -1577,12 +1630,14 @@ export class MailboxDO extends DurableObject<Env> {
 				   MIN(rep.received_at) as first_seen,
 				   MAX(rep.received_at) as last_seen,
 				   ds.label as label,
-				   COALESCE(ds.legitimate, 0) as legitimate
+				   COALESCE(ds.legitimate, 0) as legitimate,
+				   ds.asn as asn,
+				   ds.country as country
 				 FROM dmarc_records r
 				 JOIN dmarc_reports rep ON rep.id = r.report_id
 				 LEFT JOIN dmarc_sources ds ON ds.source_ip = r.source_ip
 				 WHERE rep.domain = ?1 AND rep.received_at >= ?2
-				 GROUP BY r.source_ip
+				 GROUP BY r.source_ip, ds.asn, ds.country
 				 ORDER BY total_count DESC
 				 LIMIT 200`,
 				domain,
@@ -1598,6 +1653,8 @@ export class MailboxDO extends DurableObject<Env> {
 			last_seen: string;
 			label: string | null;
 			legitimate: number;
+			asn: string | null;
+			country: string | null;
 		}>;
 		return rows;
 	}
