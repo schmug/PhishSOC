@@ -48,3 +48,16 @@ dmarcRoutes.get("/summary", async (c) => {
 	const summary = await c.var.mailboxStub.getDmarcSummary(domain, sinceIso);
 	return c.json({ domain, sources: summary });
 });
+
+const ROLLUP_MAX_DAYS = 365;
+const ROLLUP_DEFAULT_DAYS = 90;
+
+dmarcRoutes.get("/rollup", async (c) => {
+	const rawDays = Number(c.req.query("days") ?? ROLLUP_DEFAULT_DAYS);
+	const days = Number.isFinite(rawDays) && rawDays > 0
+		? Math.min(rawDays, ROLLUP_MAX_DAYS)
+		: ROLLUP_DEFAULT_DAYS;
+	const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+	const domains = await c.var.mailboxStub.getDmarcRollup(sinceIso);
+	return c.json({ window_days: days, since: sinceIso, domains });
+});

@@ -1619,6 +1619,31 @@ export class MailboxDO extends DurableObject<Env> {
 		};
 	}
 
+	async getDmarcRollup(sinceIso: string) {
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT
+				   rep.domain,
+				   SUM(r.count) as total,
+				   SUM(CASE WHEN r.dkim_result = 'pass' OR r.spf_result = 'pass' THEN r.count ELSE 0 END) as aligned,
+				   SUM(CASE WHEN r.disposition = 'quarantine' OR r.disposition = 'reject' THEN r.count ELSE 0 END) as failing
+				 FROM dmarc_records r
+				 JOIN dmarc_reports rep ON rep.id = r.report_id
+				 WHERE rep.received_at >= ?1
+				 GROUP BY rep.domain
+				 ORDER BY (SUM(r.count) - SUM(CASE WHEN r.dkim_result = 'pass' OR r.spf_result = 'pass' THEN r.count ELSE 0 END)) DESC, SUM(r.count) DESC
+				 LIMIT 100`,
+				sinceIso,
+			),
+		] as Array<{
+			domain: string;
+			total: number;
+			aligned: number;
+			failing: number;
+		}>;
+		return rows;
+	}
+
 	// ── TLS-RPT (RFC 8460 inbound report ingestion) ───────────────────
 
 	async insertTlsRptReport(
