@@ -28,9 +28,15 @@ dmarcRoutes.get("/reports/:reportId/records", async (c) => {
 	return c.json({ records });
 });
 
+/** Window constant that matches the "last 90 days" copy in `app/routes/dmarc.tsx`. */
+const DMARC_SUMMARY_WINDOW_DAYS = 90;
+
 dmarcRoutes.get("/summary", async (c) => {
 	const domain = c.req.query("domain");
 	if (!domain) return c.json({ error: "domain query param required" }, 400);
-	const summary = await c.var.mailboxStub.getDmarcSummary(domain);
+	const sinceIso = new Date(
+		Date.now() - DMARC_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+	).toISOString();
+	const summary = await c.var.mailboxStub.getDmarcSummary(domain, sinceIso);
 	return c.json({ domain, sources: summary });
 });
