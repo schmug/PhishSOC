@@ -55,14 +55,14 @@ describe("isDmarcRuf", () => {
 		expect(isDmarcRuf(email)).toBe(true);
 	});
 
-	it("returns true for subject containing 'dmarc failure report' (case-insensitive)", () => {
+	it("returns false for subject-only DMARC keywords without feedback-report part", () => {
 		const email = makeEmail([], { subject: "DMARC Failure Report for example.com" });
-		expect(isDmarcRuf(email)).toBe(true);
+		expect(isDmarcRuf(email)).toBe(false);
 	});
 
-	it("returns true for subject containing 'auth-failure'", () => {
+	it("returns false for subject containing 'auth-failure' without feedback-report part", () => {
 		const email = makeEmail([], { subject: "RE: auth-failure notification" });
-		expect(isDmarcRuf(email)).toBe(true);
+		expect(isDmarcRuf(email)).toBe(false);
 	});
 
 	it("returns false for a normal email with no feedback-report attachment", () => {

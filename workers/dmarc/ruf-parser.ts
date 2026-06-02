@@ -46,22 +46,14 @@ export const RUF_MAX_PAYLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
  * Heuristic: does this parsed email look like a DMARC forensic report?
  *
  * RUF reports carry a `message/feedback-report` MIME part (RFC 6591 §3).
- * Some reporters also use an explicit `Feedback-Type: auth-failure` header
- * or a subject like "DMARC Failure Report". We check MIME type first as the
- * most reliable signal, then fall back to subject keywords.
+ * We require that part — subject-only keywords like "auth-failure" are too
+ * broad and previously let phishing skip the inbound security pipeline when
+ * `receiveEmail` returned early on a failed/disabled ingest.
  */
 export function isDmarcRuf(parsed: Email): boolean {
 	for (const att of parsed.attachments ?? []) {
 		const mt = (att.mimeType ?? "").toLowerCase();
 		if (mt === "message/feedback-report") return true;
-	}
-	const subject = (parsed.subject ?? "").toLowerCase();
-	if (
-		subject.includes("dmarc failure report") ||
-		subject.includes("dmarc forensic report") ||
-		subject.includes("auth-failure")
-	) {
-		return true;
 	}
 	return false;
 }

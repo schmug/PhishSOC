@@ -1334,10 +1334,9 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 	}
 
 	// DMARC RUF forensic reports (RFC 6591) — opt-in per mailbox (issue #171).
-	// Always diverted out of the security pipeline; ingested only when the
-	// mailbox has `ruf_ingestion.enabled === true`. Otherwise the report is
-	// dropped (archived without classifying) — forensic reports must never
-	// be scored as if they were user-sent mail.
+	// Same divert pattern as RUA/TLS-RPT: only short-circuit when ingest succeeds.
+	// On heuristic miss, disabled ingest, or parse failure, fall through to the
+	// security pipeline so subject-keyword false positives cannot bypass it.
 	if (isDmarcRuf(parsedEmail)) {
 		try {
 			const rufSettings = (await resolveMailboxSettings(env, mailboxId)).security.ruf_ingestion;
@@ -1345,14 +1344,13 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 				const result = await ingestDmarcRuf(env, mailboxId, messageId, parsedEmail, rufSettings);
 				if (result.ingested) {
 					await stub.moveEmail(messageId, Folders.ARCHIVE);
-				} else {
-					console.log("dmarc ruf drop:", result.reason);
+					return;
 				}
+				console.log("dmarc ruf drop:", result.reason);
 			}
 		} catch (e) {
 			console.error("dmarc ruf ingest failed:", (e as Error).message);
 		}
-		return; // Never classify a forensic report through the security pipeline
 	}
 
 	// Security pipeline (opt-in per mailbox via settings.security.enabled).
