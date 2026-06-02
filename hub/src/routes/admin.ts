@@ -31,6 +31,9 @@ const CreatePeerSchema = z.object({
 	default_trust: z.number().min(0).max(10).default(0.5),
 	tag_include: z.string().max(4000).optional(),
 	tag_exclude: z.string().max(4000).optional(),
+	// When true, orgs can discover this peer via GET /peers and self-subscribe.
+	// Set false for private/paid feeds where access should be invite-only.
+	discoverable: z.boolean().optional().default(false),
 	// Escape hatch for registering a peer whose upstream is currently down,
 	// or for tests that don't want a real outbound fetch. Operators should
 	// leave this false — the probe catches misconfig in seconds rather than
@@ -66,8 +69,8 @@ adminRoutes.post("/peers", async (c) => {
 
 	await c.env.DB.batch([
 		c.env.DB
-			.prepare(`INSERT INTO peers (uuid, name, contact) VALUES (?1, ?2, ?3)`)
-			.bind(peerUuid, body.name, body.contact ?? null),
+			.prepare(`INSERT INTO peers (uuid, name, contact, discoverable) VALUES (?1, ?2, ?3, ?4)`)
+			.bind(peerUuid, body.name, body.contact ?? null, body.discoverable ? 1 : 0),
 		c.env.DB
 			.prepare(`INSERT INTO orgs (uuid, name, contact, trust) VALUES (?1, ?2, ?3, ?4)`)
 			.bind(syntheticOrgUuid, `peer:${body.name}`, body.contact ?? null, body.default_trust),
@@ -196,6 +199,29 @@ adminRoutes.delete("/peers/:uuid", async (c) => {
 		// manually if no events remain.
 	]);
 	return new Response(null, { status: 204 });
+});
+
+const UpdatePeerSchema = z.object({
+	discoverable: z.boolean(),
+});
+
+adminRoutes.patch("/peers/:uuid", async (c) => {
+	const ibUuid = c.req.param("uuid");
+	const parsed = UpdatePeerSchema.safeParse(await c.req.json().catch(() => null));
+	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+	const ib = await c.env.DB
+		.prepare(`SELECT peer_uuid FROM inbound_peers WHERE uuid = ?1`)
+		.bind(ibUuid)
+		.first<{ peer_uuid: string }>();
+	if (!ib) return c.json({ error: "not found" }, 404);
+
+	await c.env.DB
+		.prepare(`UPDATE peers SET discoverable = ?1 WHERE uuid = ?2`)
+		.bind(parsed.data.discoverable ? 1 : 0, ib.peer_uuid)
+		.run();
+
+	return c.json({ ok: true, peer_uuid: ib.peer_uuid, discoverable: parsed.data.discoverable });
 });
 
 // ── Org trust management ──────────────────────────────────────────────────

@@ -25,14 +25,23 @@ interface AggregateInput {
 	orgc_uuid: string;
 	sharing_group_uuid: string | null;
 	attributes: Array<{ type: string; value: string }>;
+	// When provided, skip the orgs table lookup and use this value directly.
+	// Used by inbound sync to apply per-subscription trust multipliers without
+	// an extra DB round-trip per event.
+	trustOverride?: number;
 }
 
 export async function applyCorroboration(db: D1Database, input: AggregateInput) {
-	const orgRow = await db
-		.prepare(`SELECT trust FROM orgs WHERE uuid = ?1`)
-		.bind(input.orgc_uuid)
-		.first<{ trust: number }>();
-	const trust = orgRow?.trust ?? 1.0;
+	let trust: number;
+	if (input.trustOverride !== undefined) {
+		trust = input.trustOverride;
+	} else {
+		const orgRow = await db
+			.prepare(`SELECT trust FROM orgs WHERE uuid = ?1`)
+			.bind(input.orgc_uuid)
+			.first<{ trust: number }>();
+		trust = orgRow?.trust ?? 1.0;
+	}
 	const now = new Date().toISOString();
 
 	for (const attr of input.attributes) {

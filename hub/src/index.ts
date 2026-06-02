@@ -27,6 +27,7 @@ import { sharingGroupRoutes } from "./routes/sharing-groups";
 import { adminRoutes } from "./routes/admin";
 import { adminStatsRoutes } from "./routes/admin/stats";
 import { corroborationRoutes } from "./routes/corroboration";
+import { peerRoutes } from "./routes/peers";
 import { consumeTriageBatch } from "./agent/triage";
 import { runInboundSync } from "./lib/sync";
 import type { Env, TriageMessage } from "./types";
@@ -57,6 +58,7 @@ app.route("/feeds", feedRoutes);
 app.route("/orgs", orgAcceptApp); // public /orgs/accept
 app.route("/orgs", orgRoutes); // authed /orgs/me, /orgs/invite
 app.route("/sharing_groups", sharingGroupRoutes);
+app.route("/peers", peerRoutes);
 app.route("/admin", adminRoutes);
 app.route("/admin", adminStatsRoutes);
 app.route("/api/v1/corroboration", corroborationRoutes);

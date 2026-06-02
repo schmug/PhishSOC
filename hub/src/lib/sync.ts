@@ -65,6 +65,33 @@ export interface PullResult {
 	error: string | null;
 }
 
+interface SubscriptionTarget {
+	sharing_group_uuid: string;
+	trust: number; // synthetic_org.trust * subscription.trust_multiplier
+}
+
+/** Load the set of (sharing_group_uuid, effective_trust) targets for all orgs
+ *  subscribed to peerUuid.  Called once per pull run before the event loop. */
+async function loadSubscriptionTargets(
+	env: Env,
+	peerUuid: string,
+	syntheticOrgTrust: number,
+): Promise<SubscriptionTarget[]> {
+	const rows = await env.DB
+		.prepare(
+			`SELECT ops.trust_multiplier, sgo.sharing_group_uuid
+			 FROM org_peer_subscriptions ops
+			 JOIN sharing_group_orgs sgo ON sgo.org_uuid = ops.org_uuid
+			 WHERE ops.peer_uuid = ?1`,
+		)
+		.bind(peerUuid)
+		.all<{ trust_multiplier: number; sharing_group_uuid: string }>();
+	return (rows.results ?? []).map((r) => ({
+		sharing_group_uuid: r.sharing_group_uuid,
+		trust: syntheticOrgTrust * r.trust_multiplier,
+	}));
+}
+
 export async function pullFromPeer(env: Env, peer: InboundPeerRow): Promise<PullResult> {
 	// Take the soft lock so an overlapping cron skips this peer.
 	const softLockUntil = new Date(Date.now() + SOFT_LOCK_MINUTES * 60_000).toISOString();
@@ -83,6 +110,16 @@ export async function pullFromPeer(env: Env, peer: InboundPeerRow): Promise<Pull
 	const localOrgSet = new Set((localOrgs.results ?? []).map((r) => r.uuid));
 	// The synthetic org represents the peer; allow it through.
 	localOrgSet.delete(peer.synthetic_org_uuid);
+
+	// Load synthetic org trust and subscription targets once before the event
+	// loop.  Subscribed orgs' sharing groups each get their own corroboration
+	// rows weighted by trust_multiplier.
+	const synthOrgRow = await env.DB
+		.prepare(`SELECT trust FROM orgs WHERE uuid = ?1`)
+		.bind(peer.synthetic_org_uuid)
+		.first<{ trust: number }>();
+	const syntheticTrust = synthOrgRow?.trust ?? 1.0;
+	const subscriptionTargets = await loadSubscriptionTargets(env, peer.peer_uuid, syntheticTrust);
 
 	const tagInclude = (peer.tag_include ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
 	const tagExclude = (peer.tag_exclude ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -104,12 +141,33 @@ export async function pullFromPeer(env: Env, peer: InboundPeerRow): Promise<Pull
 			if (!passesTagFilter(ev.Tag, tagInclude, tagExclude)) { filtered++; continue; }
 
 			await upsertEvent(env, peer, e);
+
+			const attrs = (ev.Attribute ?? []).map((a) => ({ type: a.type, value: a.value }));
+
+			// Default corroboration: always write to the peer's configured
+			// sharing group (existing behaviour).
 			await applyCorroboration(env.DB, {
 				event_uuid: ev.uuid,
 				orgc_uuid: peer.synthetic_org_uuid,
 				sharing_group_uuid: peer.default_sharing_group_uuid,
-				attributes: (ev.Attribute ?? []).map((a) => ({ type: a.type, value: a.value })),
+				attributes: attrs,
 			});
+
+			// Subscription corroboration: write to each subscribed org's
+			// sharing groups.  Skip if identical to the default group — the
+			// INSERT OR IGNORE in applyCorroboration would no-op anyway, but
+			// the extra DB round-trips are wasteful.
+			for (const target of subscriptionTargets) {
+				if (target.sharing_group_uuid === peer.default_sharing_group_uuid) continue;
+				await applyCorroboration(env.DB, {
+					event_uuid: ev.uuid,
+					orgc_uuid: peer.synthetic_org_uuid,
+					sharing_group_uuid: target.sharing_group_uuid,
+					attributes: attrs,
+					trustOverride: target.trust,
+				});
+			}
+
 			if (ev.timestamp > maxTs) maxTs = ev.timestamp;
 			pulled++;
 		}
