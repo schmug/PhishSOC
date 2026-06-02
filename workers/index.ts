@@ -4,9 +4,8 @@
 
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
-import PostalMime from "postal-mime";
 import { z } from "zod";
-import { sendEmail } from "./email-sender";
+import type { NormalizedInbound } from "./providers/types";
 import { attachmentObjectKey, storeAttachments, type StoredAttachment } from "./lib/attachments";
 import {
 	validateSender,
@@ -1227,41 +1226,20 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
 
 // -- Receive inbound email ------------------------------------------
 
-const MAX_EMAIL_SIZE = 25 * 1024 * 1024;
-
-async function streamToArrayBuffer(stream: ReadableStream, streamSize: number) {
-	if (streamSize > MAX_EMAIL_SIZE) throw new Error(`Email too large: ${streamSize} bytes exceeds ${MAX_EMAIL_SIZE} byte limit`);
-	if (streamSize <= 0) throw new Error(`Invalid stream size: ${streamSize}`);
-	const result = new Uint8Array(streamSize);
-	let bytesRead = 0;
-	const reader = stream.getReader();
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		if (bytesRead + value.length > streamSize) { reader.cancel(); throw new Error(`Stream exceeds declared size`); }
-		result.set(value, bytesRead);
-		bytesRead += value.length;
-	}
-	return result;
-}
-
-async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env: Env, ctx: ExecutionContext) {
-	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
-	const parsedEmail = await new PostalMime().parse(rawEmail);
-
-	if (!parsedEmail.to?.length || !parsedEmail.to[0].address) throw new Error("received email with empty to");
-
-	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[]).map((a) => a.toLowerCase());
-	const allRecipients = parsedEmail.to.map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
-	const ccRecipients = (parsedEmail.cc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
-	const bccRecipients = (parsedEmail.bcc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
-
-	let mailboxId: string | undefined;
-	if (allowedAddresses.length > 0) {
-		mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
-		if (!mailboxId) { console.log(`Ignoring email: no recipient matches EMAIL_ADDRESSES.`); return; }
-	} else { mailboxId = allRecipients[0]; }
-	if (!mailboxId) throw new Error("received email with no valid recipient address");
+/**
+ * Process a normalised inbound message through the full pipeline:
+ * DO storage → security scoring → async deep-scan → agent auto-draft.
+ *
+ * CF-specific parsing (stream → ArrayBuffer → PostalMime → mailboxId
+ * determination) is handled upstream by `workers/providers/cf-routing.ts`
+ * before this function is called.  Other providers (Workspace, M365)
+ * produce the same `NormalizedInbound` shape.
+ */
+async function receiveEmail(normalized: NormalizedInbound, env: Env, ctx: ExecutionContext) {
+	const { parsedEmail, mailboxId } = normalized;
+	const allRecipients = (parsedEmail.to ?? []).map((t) => (t as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
+	const ccRecipients = (parsedEmail.cc ?? []).map((e) => (e as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
+	const bccRecipients = (parsedEmail.bcc ?? []).map((e) => (e as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
 
 	const messageId = crypto.randomUUID();
 	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return; }
