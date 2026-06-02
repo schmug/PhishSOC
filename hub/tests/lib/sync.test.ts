@@ -190,6 +190,110 @@ describe("pullFromPeer", () => {
 
 import { runInboundSync } from "../../src/lib/sync";
 
+describe("pullFromPeer — subscription corroboration", () => {
+	it("writes corroboration to subscribed org's sharing group", async () => {
+		// Set up a second sharing group and an org subscribed to this peer.
+		db.raw.prepare(`INSERT INTO sharing_groups (uuid, name) VALUES (?, ?)`)
+			.run("sg-sub", "subscriber-sg");
+		db.raw.prepare(`INSERT INTO orgs (uuid, name, trust) VALUES (?, ?, ?)`)
+			.run("sub-org", "subscriber", 1.0);
+		db.raw
+			.prepare(`INSERT INTO sharing_group_orgs (sharing_group_uuid, org_uuid) VALUES (?, ?)`)
+			.run("sg-sub", "sub-org");
+		db.raw
+			.prepare(`INSERT INTO org_peer_subscriptions (org_uuid, peer_uuid, trust_multiplier) VALUES (?, ?, ?)`)
+			.run("sub-org", "peer-1", 1.0);
+
+		mockUpstream([
+			[sampleEvent("aaaa0001-0000-0000-0000-000000000001", "1700001000", [
+				{ type: "url", value: "https://subtest.example/path" },
+			])],
+			[],
+		]);
+
+		await pullFromPeer(env, getPeer());
+
+		// Default SG (sg-1) gets corroboration as before.
+		const defaultCorr = db.raw.prepare(
+			`SELECT score FROM corroboration
+			 WHERE attribute_type = 'url' AND value = 'https://subtest.example/path'
+			   AND sharing_group_uuid = 'sg-1'`,
+		).get() as { score: number } | undefined;
+		expect(defaultCorr).toBeDefined();
+		expect(defaultCorr!.score).toBeCloseTo(0.5); // synthetic_org.trust = 0.5
+
+		// Subscription SG (sg-sub) also gets corroboration.
+		const subCorr = db.raw.prepare(
+			`SELECT score FROM corroboration
+			 WHERE attribute_type = 'url' AND value = 'https://subtest.example/path'
+			   AND sharing_group_uuid = 'sg-sub'`,
+		).get() as { score: number } | undefined;
+		expect(subCorr).toBeDefined();
+		expect(subCorr!.score).toBeCloseTo(0.5); // 0.5 * 1.0 trust_multiplier
+	});
+
+	it("applies trust_multiplier to subscription corroboration", async () => {
+		db.raw.prepare(`INSERT INTO sharing_groups (uuid, name) VALUES (?, ?)`)
+			.run("sg-half", "half-trust-sg");
+		db.raw.prepare(`INSERT INTO orgs (uuid, name, trust) VALUES (?, ?, ?)`)
+			.run("half-org", "half-trust-org", 1.0);
+		db.raw
+			.prepare(`INSERT INTO sharing_group_orgs (sharing_group_uuid, org_uuid) VALUES (?, ?)`)
+			.run("sg-half", "half-org");
+		db.raw
+			.prepare(`INSERT INTO org_peer_subscriptions (org_uuid, peer_uuid, trust_multiplier) VALUES (?, ?, ?)`)
+			.run("half-org", "peer-1", 0.5); // halve the trust
+
+		mockUpstream([
+			[sampleEvent("bbbb0001-0000-0000-0000-000000000001", "1700002000", [
+				{ type: "url", value: "https://halftest.example/path" },
+			])],
+			[],
+		]);
+
+		await pullFromPeer(env, getPeer());
+
+		// sg-half gets score = synthetic_org.trust(0.5) * trust_multiplier(0.5) = 0.25
+		const subCorr = db.raw.prepare(
+			`SELECT score FROM corroboration
+			 WHERE attribute_type = 'url' AND value = 'https://halftest.example/path'
+			   AND sharing_group_uuid = 'sg-half'`,
+		).get() as { score: number } | undefined;
+		expect(subCorr).toBeDefined();
+		expect(subCorr!.score).toBeCloseTo(0.25);
+	});
+
+	it("does not duplicate corroboration when subscription SG matches default SG", async () => {
+		// Subscribe a member of the default sg-1 to this peer.
+		db.raw.prepare(`INSERT INTO orgs (uuid, name, trust) VALUES (?, ?, ?)`)
+			.run("same-sg-org", "same-sg-org", 1.0);
+		db.raw
+			.prepare(`INSERT INTO sharing_group_orgs (sharing_group_uuid, org_uuid) VALUES (?, ?)`)
+			.run("sg-1", "same-sg-org"); // member of the DEFAULT SG
+		db.raw
+			.prepare(`INSERT INTO org_peer_subscriptions (org_uuid, peer_uuid, trust_multiplier) VALUES (?, ?, ?)`)
+			.run("same-sg-org", "peer-1", 1.0);
+
+		mockUpstream([
+			[sampleEvent("cccc0001-0000-0000-0000-000000000001", "1700003000", [
+				{ type: "url", value: "https://samesg.example/path" },
+			])],
+			[],
+		]);
+
+		await pullFromPeer(env, getPeer());
+
+		// Corroboration for sg-1 should still only have ONE contributor entry.
+		const corr = db.raw.prepare(
+			`SELECT contributor_count, score FROM corroboration
+			 WHERE attribute_type = 'url' AND value = 'https://samesg.example/path'
+			   AND sharing_group_uuid = 'sg-1'`,
+		).get() as { contributor_count: number; score: number };
+		expect(corr.contributor_count).toBe(1);
+		expect(corr.score).toBeCloseTo(0.5);
+	});
+});
+
 describe("runInboundSync", () => {
 	it("skips peers whose next_retry_at is in the future", async () => {
 		const future = new Date(Date.now() + 60_000).toISOString();
