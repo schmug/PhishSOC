@@ -9,3 +9,6 @@
 ## 2026-05-27 - Optimize Participant Parsing
 **Learning:** `formatParticipants` repeated `split()`, `map()`, and `filter()` on strings repeatedly for each row item during list view rendering. This becomes computationally expensive as the size of the list increases, especially when parsing identical threads.
 **Action:** Implemented a bounded `Map` cache inside `formatParticipants` in `app/lib/utils.ts` to memoize the parsed result for unique participant lists.
+## 2026-05-29 - Optimize Thread Message Plain Text Extraction
+**Learning:** `stripHtml` calls `htmlToPlainText` which parses HTML via a character-walking tokenizer. This occurs repeatedly during every re-render of thread rows in `ThreadMessage.tsx` (via `stripHtml(email.body || "").slice(0, 80)`). For threads with large or complex HTML bodies, this CPU-intensive re-parsing on every UI update loop can cause noticeable jank.
+**Action:** Implemented a bounded `Map` cache (size 1000) inside `stripHtml` in `app/lib/utils.ts` to memoize the plain text extraction for identical HTML strings, mirroring the existing optimization pattern used for `getSnippetText` and `formatParticipants`. This effectively eliminates redundant HTML parsing overhead during thread view rendering.

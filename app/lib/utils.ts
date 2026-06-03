@@ -14,8 +14,8 @@ import { htmlToPlainText as htmlToText } from "shared/html-text";
 import type { Attachment } from "~/types";
 
 export {
-	formatListDate,
 	formatDetailDate,
+	formatListDate,
 	formatShortDate,
 } from "shared/dates";
 
@@ -31,7 +31,7 @@ export function formatBytes(bytes: number, decimals = 1): string {
 	const dm = decimals < 0 ? 0 : decimals;
 	const sizes = ["B", "KB", "MB", "GB"];
 	const i = Math.floor(Math.log(bytes) / Math.log(k));
-	return `${Number.parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+	return `${Number.parseFloat((bytes / k ** i).toFixed(dm))} ${sizes[i]}`;
 }
 
 /**
@@ -47,7 +47,9 @@ export function splitEmailList(value?: string | null): string[] {
 /**
  * Convert a list of addresses into the API payload format.
  */
-export function toEmailListValue(addresses: string[]): string | string[] | undefined {
+export function toEmailListValue(
+	addresses: string[],
+): string | string[] | undefined {
 	if (addresses.length === 0) return undefined;
 	return addresses.length === 1 ? addresses[0] : addresses;
 }
@@ -60,11 +62,28 @@ export function htmlToPlainText(html: string): string {
 	return htmlToText(html, { preserveLineBreaks: true });
 }
 
+// ⚡ Bolt: Cache stripHtml operations to prevent expensive HTML parsing of full email bodies
+// on every re-render in ThreadMessage.tsx. Limits size to 1000 items.
+const stripHtmlCache = new Map<string, string>();
+
 /**
  * Strip all HTML tags and collapse whitespace to a single line of plain text.
  */
 export function stripHtml(html: string): string {
-	return htmlToText(html);
+	if (!html) return "";
+	if (stripHtmlCache.has(html)) {
+		const cached = stripHtmlCache.get(html);
+		if (cached !== undefined) return cached;
+	}
+
+	const result = htmlToText(html);
+
+	if (stripHtmlCache.size >= 1000) {
+		const firstKey = stripHtmlCache.keys().next().value;
+		if (firstKey !== undefined) stripHtmlCache.delete(firstKey);
+	}
+	stripHtmlCache.set(html, result);
+	return result;
 }
 
 // ⚡ Bolt: Cache htmlToText operations to prevent expensive HTML parsing on every re-render
@@ -74,7 +93,10 @@ const snippetCache = new Map<string, string>();
 // ⚡ Bolt: Cache participant parsing to prevent expensive split/map/filter operations on every re-render
 const participantsCache = new Map<string, string>();
 
-export function formatParticipants(email: { participants?: string | null; sender: string }): string {
+export function formatParticipants(email: {
+	participants?: string | null;
+	sender: string;
+}): string {
 	if (!email.participants) {
 		return email.sender.split("@")[0];
 	}
@@ -123,7 +145,8 @@ export function getSnippetText(
 	}
 	const clean = htmlToText(snippet);
 	if (!clean) return "";
-	const result = clean.length > maxLength ? `${clean.slice(0, maxLength)}...` : clean;
+	const result =
+		clean.length > maxLength ? `${clean.slice(0, maxLength)}...` : clean;
 
 	// ⚡ Bolt: Prevent memory leaks by maintaining a bounded size (evicts oldest entry)
 	if (snippetCache.size >= 1000) {
@@ -179,7 +202,7 @@ export function buildQuotedReplyBlock(
 ): string {
 	if (!body) return "";
 	const formattedDate = formatComposeDate(dateStr);
-	
+
 	// HTML-escape sender to prevent <john@example.com> from disappearing as a tag
 	const escapedSender = escapeHtml(sender);
 
@@ -200,7 +223,11 @@ export function rewriteInlineImages(
 	body: string,
 	mailboxId: string,
 	emailId: string,
-	attachments?: { id: string; content_id?: string | null; disposition?: string | null }[],
+	attachments?: {
+		id: string;
+		content_id?: string | null;
+		disposition?: string | null;
+	}[],
 ): string {
 	if (!body || !attachments?.length) return body;
 	let result = body;
@@ -211,14 +238,22 @@ export function rewriteInlineImages(
 			const cid = att.content_id.startsWith("<")
 				? att.content_id.slice(1, -1)
 				: att.content_id;
-			result = result.replace(new RegExp(`cid:${cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "gi"), url);
+			result = result.replace(
+				new RegExp(`cid:${cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "gi"),
+				url,
+			);
 		}
 	}
 	return result;
 }
 
-export function getNonInlineAttachments(attachments?: Attachment[]): Attachment[] {
-	return attachments?.filter((attachment) => attachment.disposition !== "inline") ?? [];
+export function getNonInlineAttachments(
+	attachments?: Attachment[],
+): Attachment[] {
+	return (
+		attachments?.filter((attachment) => attachment.disposition !== "inline") ??
+		[]
+	);
 }
 
 export function getAttachmentUrl(
