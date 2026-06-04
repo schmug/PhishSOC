@@ -36,21 +36,15 @@ import { resolveMailboxSettings } from "../lib/mailbox-settings";
 
 const EXACT_KEY_CAP = 2000; // per-feed cap — we only fast-path confirm up to this many
 
-function bloomKey(feedId: string) {
-	return `intel:${feedId}:bloom`;
-}
-function exactKey(feedId: string, value: string) {
-	return `intel:${feedId}:exact:${value}`;
-}
+function bloomKey(feedId: string) { return `intel:${feedId}:bloom`; }
+function exactKey(feedId: string, value: string) { return `intel:${feedId}:exact:${value}`; }
 /**
  * Storage key for `ip-cidr` feeds. Bloom filters don't fit CIDR membership
  * (an IP is checked against a *range*, not an exact string) so we materialise
  * the whole list as a JSON blob and linear-scan on lookup. DROP-class feeds
  * are a few thousand CIDRs — well under any KV size limit.
  */
-function cidrKey(feedId: string) {
-	return `intel:${feedId}:cidrs`;
-}
+function cidrKey(feedId: string) { return `intel:${feedId}:cidrs`; }
 
 export interface MailboxIntelSettings {
 	feeds?: Array<{
@@ -78,10 +72,7 @@ export interface MailboxIntelSettings {
  * (never deep-merged across tiers). Defaults from `DEFAULT_FEEDS` are
  * stitched in by `resolveFeeds` below.
  */
-async function loadMailboxIntelSettings(
-	env: Env,
-	mailboxId: string,
-): Promise<MailboxIntelSettings> {
+async function loadMailboxIntelSettings(env: Env, mailboxId: string): Promise<MailboxIntelSettings> {
 	try {
 		const resolved = await resolveMailboxSettings(env, mailboxId);
 		return resolved.intel as MailboxIntelSettings;
@@ -90,25 +81,17 @@ async function loadMailboxIntelSettings(
 	}
 }
 
-function resolveFeeds(
-	env: Env,
-	settings: MailboxIntelSettings,
-): FeedDefinition[] {
-	const defaults =
-		settings.feeds && settings.feeds.length > 0 ? [] : DEFAULT_FEEDS;
-	const byId = new Map<string, FeedDefinition>(
-		DEFAULT_FEEDS.map((f) => [f.id, f]),
-	);
+function resolveFeeds(env: Env, settings: MailboxIntelSettings): FeedDefinition[] {
+	const defaults = settings.feeds && settings.feeds.length > 0 ? [] : DEFAULT_FEEDS;
+	const byId = new Map<string, FeedDefinition>(DEFAULT_FEEDS.map((f) => [f.id, f]));
 	const user: FeedDefinition[] = [];
 	for (const f of settings.feeds ?? []) {
 		const base = byId.get(f.id);
 		const headers: Record<string, string> = { ...(f.headers ?? {}) };
-		// Prevent confused deputy / secret exfiltration via unconstrained secret access.
-		// Only allow access to explicitly designated feed secrets.
-		if (f.auth_secret && f.auth_secret.startsWith("FEED_SECRET_")) {
-			const secretValue = (env as unknown as Record<string, string>)[
-				f.auth_secret
-			];
+			// Prevent confused deputy / secret exfiltration via unconstrained secret access.
+			// Only allow access to explicitly designated feed secrets.
+			if (f.auth_secret && f.auth_secret.startsWith("FEED_SECRET_")) {
+			const secretValue = (env as unknown as Record<string, string>)[f.auth_secret];
 			if (secretValue) headers["Authorization"] = secretValue;
 		}
 		user.push({
@@ -163,7 +146,10 @@ function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
  * A malformed entry is logged and skipped — a single bad line shouldn't
  * poison the whole feed refresh.
  */
-export function parseCidrFeedBody(body: string, feedId: string): Ipv4Cidr[] {
+export function parseCidrFeedBody(
+	body: string,
+	feedId: string,
+): Ipv4Cidr[] {
 	const lines = body.split(/\r?\n/);
 	const out: Ipv4Cidr[] = [];
 	for (const raw of lines) {
@@ -178,9 +164,7 @@ export function parseCidrFeedBody(body: string, feedId: string): Ipv4Cidr[] {
 		if (!head) continue;
 		const cidr = parseCidr(head);
 		if (!cidr) {
-			console.warn(
-				`feed ${feedId}: skipping malformed CIDR entry ${JSON.stringify(head)}`,
-			);
+			console.warn(`feed ${feedId}: skipping malformed CIDR entry ${JSON.stringify(head)}`);
 			continue;
 		}
 		out.push(cidr);
@@ -189,28 +173,17 @@ export function parseCidrFeedBody(body: string, feedId: string): Ipv4Cidr[] {
 }
 
 function normalizeDomain(s: string): string {
-	return s
-		.toLowerCase()
-		.replace(/^https?:\/\//, "")
-		.split(/[\/?#]/)[0];
+	return s.toLowerCase().replace(/^https?:\/\//, "").split(/[\/?#]/)[0];
 }
 
 function safeHostname(url: string): string | null {
-	try {
-		return new URL(url).hostname.toLowerCase();
-	} catch {
-		return null;
-	}
+	try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
 }
 
 /** Refresh all feeds across all mailboxes. Called from the cron handler. */
-export async function refreshAllFeeds(
-	env: Env,
-): Promise<{ feeds: number; entries: number }> {
+export async function refreshAllFeeds(env: Env): Promise<{ feeds: number; entries: number }> {
 	if (!env.BLOOM_KV) {
-		console.warn(
-			"BLOOM_KV binding not configured — skipping intel feed refresh",
-		);
+		console.warn("BLOOM_KV binding not configured — skipping intel feed refresh");
 		return { feeds: 0, entries: 0 };
 	}
 	const mailboxes = await listMailboxes(env.BUCKET);
@@ -251,10 +224,7 @@ async function refreshFeed(
 	const headers: Record<string, string> = { ...(feed.headers ?? {}) };
 	if (state?.etag) headers["If-None-Match"] = state.etag;
 
-	const res = await fetch(feed.url, {
-		headers,
-		signal: AbortSignal.timeout(15000),
-	});
+	const res = await fetch(feed.url, { headers, signal: AbortSignal.timeout(15000) });
 	if (res.status === 304) return { entries: state?.entry_count ?? 0 };
 	if (!res.ok) throw new Error(`${feed.url} returned ${res.status}`);
 
@@ -300,9 +270,11 @@ async function refreshFeed(
 	const writes: Promise<void>[] = [];
 	for (const v of exactSlice) {
 		writes.push(
-			env.BLOOM_KV.put(exactKey(feed.id, v), "1", {
-				expirationTtl: feed.refreshHours * 3600 * 4,
-			}).catch(() => {}), // isolated; individual failures shouldn't abort refresh
+			env.BLOOM_KV
+				.put(exactKey(feed.id, v), "1", {
+					expirationTtl: feed.refreshHours * 3600 * 4,
+				})
+				.catch(() => {}), // isolated; individual failures shouldn't abort refresh
 		);
 	}
 	await Promise.all(writes);
@@ -355,15 +327,8 @@ export async function checkUrlAgainstFeeds(
 		for (const v of candidates) {
 			if (!checkBloom(filter, v)) continue;
 			const exact = await env.BLOOM_KV.get(exactKey(feed.id, v), "text");
-			if (exact === "1")
-				return { matched: true, feedId: feed.id, value: v, confirmed: true };
-			if (!bloomOnly)
-				bloomOnly = {
-					matched: true,
-					feedId: feed.id,
-					value: v,
-					confirmed: false,
-				};
+			if (exact === "1") return { matched: true, feedId: feed.id, value: v, confirmed: true };
+			if (!bloomOnly) bloomOnly = { matched: true, feedId: feed.id, value: v, confirmed: false };
 		}
 	}
 	return bloomOnly;
@@ -377,11 +342,7 @@ export interface IpFeedMatch {
 	cidr: string;
 }
 
-interface SerializedCidrRow {
-	n: number;
-	m: number;
-	p: number;
-}
+interface SerializedCidrRow { n: number; m: number; p: number; }
 
 /**
  * Resolve and check an IPv4 address against every configured `ip-cidr` feed.

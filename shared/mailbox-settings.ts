@@ -74,9 +74,9 @@ export const SecuritySettings = z
  */
 export const HubConfig = z
   .object({
-    url: z.string().min(1),
+    url: z.string().url().min(1),
     org_uuid: z.string().min(1),
-    api_key_secret_name: z.string().min(1),
+    api_key_secret_name: z.string().min(1).startsWith("HUB_SECRET_"),
     default_sharing_group_uuid: z.string().optional(),
     auto_report: z.boolean().optional(),
   })
