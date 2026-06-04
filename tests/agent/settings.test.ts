@@ -1,7 +1,7 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 import { describe, expect, it } from "vitest";
-import { MailboxSettings } from "../../shared/mailbox-settings";
+import { IntelFeed, MailboxSettings } from "../../shared/mailbox-settings";
 
 describe("MailboxSettings", () => {
   // Post-#106: schema-layer defaults are deliberately gone. The resolver in
@@ -169,5 +169,38 @@ describe("MailboxSettings", () => {
       security: { classification: { skip_on_timeout: "yes" } },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("IntelFeed schema — auth_secret FEED_SECRET_ prefix (#418)", () => {
+  it("rejects a non-FEED_SECRET_ auth_secret at parse time", () => {
+    const result = IntelFeed.safeParse({ id: "feed-1", auth_secret: "MASTER_DB_PASSWORD" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an absent auth_secret (optional — no Authorization header sent)", () => {
+    const result = IntelFeed.safeParse({ id: "feed-1" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.auth_secret).toBeUndefined();
+  });
+
+  it("accepts a valid FEED_SECRET_* auth_secret", () => {
+    const result = IntelFeed.safeParse({ id: "feed-1", auth_secret: "FEED_SECRET_THREATFOX" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.auth_secret).toBe("FEED_SECRET_THREATFOX");
+  });
+
+  it("rejects a non-FEED_SECRET_ auth_secret nested via MailboxSettings.intel.feeds", () => {
+    const result = MailboxSettings.safeParse({
+      intel: { feeds: [{ id: "feed-1", auth_secret: "MASTER_DB_PASSWORD" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a valid FEED_SECRET_* value nested via MailboxSettings.intel.feeds", () => {
+    const result = MailboxSettings.safeParse({
+      intel: { feeds: [{ id: "feed-1", auth_secret: "FEED_SECRET_OPENPHISH" }] },
+    });
+    expect(result.success).toBe(true);
   });
 });
