@@ -2,7 +2,7 @@
 
 **Decision:** Partial-adopt — three rule categories installed under `.claude/rules/`  
 **Date:** 2026-05-25 · **Issue:** #321  
-**License:** CodeGuard is [CC BY 4.0](https://github.com/cosai-oasis/project-codeguard/blob/main/LICENSE.md). Vendored rule content in `.claude/rules/` is attributed at the file head. Compatible with this repo's MIT license (attribution-only requirement; no copyleft).
+**License:** CodeGuard is [CC BY 4.0](https://github.com/cosai-oasis/project-codeguard/blob/main/LICENSE.md). Vendored rule content in `.claude/rules/` is attributed at the file head. Compatible with this repo's Apache-2.0 license (CC BY 4.0 is attribution-only with no copyleft; satisfies Apache-2.0's attribution/NOTICE requirements).
 
 ---
 
