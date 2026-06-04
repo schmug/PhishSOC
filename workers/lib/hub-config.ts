@@ -56,6 +56,9 @@ export async function loadHubCredentials(
 ): Promise<{ cfg: HubConfig; apiKey: string } | null> {
 	const cfg = await loadHubConfig(env, mailboxId);
 	if (!cfg) return null;
+	// Prevent confused deputy / secret exfiltration via unconstrained secret access.
+	// Only allow access to explicitly designated hub secrets.
+	if (!cfg.api_key_secret_name.startsWith("HUB_SECRET_")) return null;
 	const apiKey = env[cfg.api_key_secret_name];
 	if (typeof apiKey !== "string" || !apiKey) return null;
 	return { cfg, apiKey };
