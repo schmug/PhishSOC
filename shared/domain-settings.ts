@@ -8,6 +8,30 @@ import {
 } from "./mailbox-settings";
 
 /**
+ * Per-domain catch-all probe capture and harvest-alert settings (#423 epic).
+ *
+ * - `enabled` / `retention_days` / `sample_limit` govern what `CatchallIntelDO`
+ *   stores (wired in #426).
+ * - `harvest_alert_threshold` / `harvest_alert_window_minutes` govern when
+ *   `computeHarvestAlerts` fires an alert (this issue, #429).
+ *
+ * All fields are optional so absent-key-inherits semantics are preserved.
+ * Defaults live in `workers/intel/catchall-alert.ts` (alert fields) and in
+ * the wiring layer of #426 (capture fields), not on this schema.
+ */
+export const CatchallIntelSettings = z
+	.object({
+		enabled: z.boolean().optional(),
+		retention_days: z.number().int().positive().optional(),
+		sample_limit: z.number().int().positive().optional(),
+		harvest_alert_threshold: z.number().int().positive().optional(),
+		harvest_alert_window_minutes: z.number().int().positive().optional(),
+	})
+	.passthrough();
+
+export type CatchallIntelSettings = z.infer<typeof CatchallIntelSettings>;
+
+/**
  * Per-domain settings stored at R2 key `domains/<domain>.json` (#142).
  *
  * Sits between mailbox and org in the inheritance hierarchy:
@@ -41,6 +65,7 @@ export const DomainSettings = z
 		agentModel: z.string().optional(),
 		security: SecuritySettings.optional(),
 		intel: IntelSettings.optional(),
+		catchall_intel: CatchallIntelSettings.optional(),
 	})
 	.passthrough();
 
