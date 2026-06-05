@@ -398,3 +398,50 @@ function formatCidr(c: Ipv4Cidr): string {
 	const d = c.network & 0xff;
 	return `${a}.${b}.${cc}.${d}/${c.prefix}`;
 }
+
+/**
+ * Mailbox-agnostic variant of {@link checkIpAgainstFeeds} that checks an IPv4
+ * address against the global `DEFAULT_FEEDS` ip-cidr entries (Spamhaus DROP +
+ * EDROP) stored in `BLOOM_KV`. Does NOT load per-mailbox settings — safe to
+ * call from paths that have no `mailboxId` (e.g. the catch-all analyzer).
+ *
+ * Returns the first matching feed or `null`. Never throws — callers should
+ * treat `null` as "no signal" rather than "failed", matching the best-effort
+ * contract of the whole intel layer.
+ */
+export async function checkIpAgainstDefaultFeeds(
+	env: Env,
+	ip: string,
+): Promise<IpFeedMatch | null> {
+	if (!env.BLOOM_KV) return null;
+	const ipNum = parseIpv4(ip);
+	if (ipNum === null) return null;
+	const feeds = DEFAULT_FEEDS.filter((f) => f.kind === "ip-cidr");
+	for (const feed of feeds) {
+		const serialized = await env.BLOOM_KV.get(cidrKey(feed.id), "text");
+		if (!serialized) continue;
+		let rows: SerializedCidrRow[];
+		try {
+			rows = JSON.parse(serialized) as SerializedCidrRow[];
+		} catch {
+			continue;
+		}
+		if (!Array.isArray(rows)) continue;
+		const cidrs: Ipv4Cidr[] = rows.map((r) => ({
+			network: r.n >>> 0,
+			mask: r.m >>> 0,
+			prefix: r.p,
+		}));
+		const match = findCidrMatch(ipNum, cidrs);
+		if (match) {
+			return {
+				matched: true,
+				feedId: feed.id,
+				feedDescription: feed.description,
+				ip,
+				cidr: formatCidr(match),
+			};
+		}
+	}
+	return null;
+}
