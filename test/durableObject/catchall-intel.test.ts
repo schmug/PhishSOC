@@ -211,7 +211,6 @@ describe("_recordProbeImpl — lazy GC", () => {
 		_recordProbeImpl(sql, makeEvent({ ts: new Date().toISOString(), retentionDays: 30 }));
 
 		// Old row should be gone (GC uses ts-based cutoff from the new probe's ts)
-		const rows = [...sql.exec<{ cnt: number }>("SELECT COUNT(*) as cnt FROM probe_rollup")];
 		// The new probe's upsert will re-create the same (ip, domain) row.
 		// What matters is that the OLD distinct row from before retention is gone.
 		// Since both use the same (ip, domain), we verify via probe_recent count.

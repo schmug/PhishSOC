@@ -12,7 +12,7 @@
  *   - transient CTI failures degrade gracefully (no throw)
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { analyzeCatchall } from "../../workers/security/catchall";
 import type { Env } from "../../workers/types";
 import type { Email } from "postal-mime";

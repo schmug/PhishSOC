@@ -14,7 +14,7 @@
  *   - email() handler routes to receiveCatchall; no mailbox INBOX row; no AI
  */
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseDomainSettings } from "../../shared/domain-settings";
 import { stripDefaultEqual } from "../../workers/lib/mailbox-settings";
 
