@@ -14,6 +14,7 @@ import { confirmRoute } from "./routes/confirm";
 import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
+export { CatchallIntelDO } from "./durableObject/catchall-intel";
 export { EmailAgent } from "./agent";
 export { OrgAgent } from "./agent/org";
 export { EmailMCP } from "./mcp";

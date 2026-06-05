@@ -526,3 +526,63 @@ export const mailboxMigrations: Migration[] = [
         `,
 	},
 ];
+
+/**
+ * Schema migrations for `CatchallIntelDO` — per-domain catch-all probe
+ * rollup store (issue #425). Keyed `idFromName(domain)`.
+ */
+export const catchallIntelMigrations: Migration[] = [
+	{
+		// Initial schema for catch-all probe storage (issue #425).
+		// Three tables:
+		//   probe_rollup   — one row per (source_ip, sender_domain); tracks count,
+		//                    distinct_localparts, max_score, first/last seen.
+		//   probe_localparts — capped ring of distinct localparts per (ip, domain);
+		//                    backs distinct_localparts in the rollup.
+		//   probe_recent   — ring buffer of recent probe samples; capped at
+		//                    sample_limit by evicting oldest on overflow.
+		// All three are lazily GC'd on each write by retention_days cutoff.
+		name: "1_catchall_intel_init",
+		sql: txn(`
+            CREATE TABLE IF NOT EXISTS probe_rollup (
+                source_ip          TEXT NOT NULL,
+                sender_domain      TEXT NOT NULL,
+                count              INTEGER NOT NULL DEFAULT 0,
+                distinct_localparts INTEGER NOT NULL DEFAULT 0,
+                max_score          INTEGER NOT NULL DEFAULT 0,
+                first_seen         TEXT NOT NULL,
+                last_seen          TEXT NOT NULL,
+                PRIMARY KEY (source_ip, sender_domain)
+            );
+            CREATE INDEX IF NOT EXISTS idx_probe_rollup_last_seen
+                ON probe_rollup(last_seen);
+            CREATE INDEX IF NOT EXISTS idx_probe_rollup_count
+                ON probe_rollup(count DESC);
+
+            CREATE TABLE IF NOT EXISTS probe_localparts (
+                source_ip     TEXT NOT NULL,
+                sender_domain TEXT NOT NULL,
+                localpart     TEXT NOT NULL,
+                last_seen     TEXT NOT NULL,
+                PRIMARY KEY (source_ip, sender_domain, localpart)
+            );
+            CREATE INDEX IF NOT EXISTS idx_probe_localparts_last_seen
+                ON probe_localparts(source_ip, sender_domain, last_seen);
+
+            CREATE TABLE IF NOT EXISTS probe_recent (
+                id             TEXT PRIMARY KEY,
+                ts             TEXT NOT NULL,
+                source_ip      TEXT NOT NULL,
+                sender_domain  TEXT NOT NULL,
+                sender         TEXT NOT NULL,
+                localpart      TEXT NOT NULL,
+                subject_snippet TEXT NOT NULL,
+                score          INTEGER NOT NULL,
+                band           TEXT NOT NULL,
+                signals_json   TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_probe_recent_ts
+                ON probe_recent(ts);
+        `),
+	},
+];
