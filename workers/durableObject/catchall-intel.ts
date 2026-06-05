@@ -1,6 +1,7 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 import { DurableObject } from "cloudflare:workers";
+import type { Env } from "../types";
 import { applyMigrations, catchallIntelMigrations } from "./migrations";
 
 export interface CatchallProbeEvent {
@@ -42,15 +43,10 @@ export interface CatchallSummary {
 	}>;
 }
 
-// Not parameterised with Env: this DO never accesses this.env, and using
-// DurableObject<Env> here would create a circular type dependency (Env →
-// Cloudflare.Env → CatchallIntelDO → DurableObject<Env>) that causes
-// TypeScript to resolve the stub as DurableObjectStub<undefined> for the
-// last binding in Cloudflare.Env. EmailAgent/OrgAgent use the same pattern.
-export class CatchallIntelDO extends DurableObject<object> {
+export class CatchallIntelDO extends DurableObject<Env> {
 	declare __DURABLE_OBJECT_BRAND: never;
 
-	constructor(state: DurableObjectState, env: object) {
+	constructor(state: DurableObjectState, env: Env) {
 		super(state, env);
 		applyMigrations(
 			this.ctx.storage.sql,

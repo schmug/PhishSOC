@@ -61,12 +61,12 @@
 				"class_name": "EmailMCP"
 			},
 			{
-				"name": "ORG_AGENT",
-				"class_name": "OrgAgent"
-			},
-			{
 				"name": "CATCHALL_INTEL",
 				"class_name": "CatchallIntelDO"
+			},
+			{
+				"name": "ORG_AGENT",
+				"class_name": "OrgAgent"
 			}
 		]
 	},
