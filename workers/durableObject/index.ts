@@ -2188,3 +2188,5 @@ export class MailboxDO extends DurableObject<Env> {
 			.all();
 	}
 }
+
+export { CatchallIntelDO } from "./catchall-intel";
