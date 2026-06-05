@@ -1,7 +1,6 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 import { DurableObject } from "cloudflare:workers";
-import type { Env } from "../types";
 import { applyMigrations, catchallIntelMigrations } from "./migrations";
 
 export interface CatchallProbeEvent {
@@ -43,10 +42,14 @@ export interface CatchallSummary {
 	}>;
 }
 
-export class CatchallIntelDO extends DurableObject<Env> {
+// Not parameterised with Env: workers/types.ts imports this class directly to
+// break the circular re-evaluation of import("./workers/app").CatchallIntelDO
+// that TypeScript encounters during the Env extends Cloudflare.Env check.
+// Using DurableObject<object> avoids a back-edge to workers/types.ts here.
+export class CatchallIntelDO extends DurableObject<object> {
 	declare __DURABLE_OBJECT_BRAND: never;
 
-	constructor(state: DurableObjectState, env: Env) {
+	constructor(state: DurableObjectState, env: object) {
 		super(state, env);
 		applyMigrations(
 			this.ctx.storage.sql,

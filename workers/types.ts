@@ -2,7 +2,14 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import type { CatchallIntelDO } from "./durableObject/catchall-intel";
+
 export interface Env extends Cloudflare.Env {
+	// Explicit re-declaration prevents TypeScript from re-evaluating the type
+	// through the circular workers/app.ts chain during the extends check, which
+	// would yield DurableObjectStub<undefined>. Direct import from the source
+	// file breaks the cycle.
+	CATCHALL_INTEL: DurableObjectNamespace<CatchallIntelDO>;
 	POLICY_AUD: string;
 	TEAM_DOMAIN: string;
 	/**
