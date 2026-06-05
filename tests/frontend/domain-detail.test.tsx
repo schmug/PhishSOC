@@ -4,7 +4,7 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router";
-import type { DomainStats } from "~/types";
+import type { CatchallSummary, DomainStats } from "~/types";
 import {
 	shellDashboardMock,
 	shellDomainsMock,
@@ -314,5 +314,76 @@ describe("DomainDetailRoute", () => {
 		expect(within(dmarcCard).getByText("100%")).toBeInTheDocument();
 		expect(within(dmarcCard).getByText("configured")).toBeInTheDocument();
 		expect(within(dmarcCard).getByText("97%")).toBeInTheDocument();
+	});
+
+	it("renders the catch-all probes empty-state when no probe data is available (#427)", () => {
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderDomainDetail("acme.com");
+		const card = screen
+			.getByText(/catch-all probes/i)
+			.closest(".pp-card") as HTMLElement;
+		expect(
+			within(card).getByText(/no catch-all probe activity recorded/i),
+		).toBeInTheDocument();
+	});
+
+	it("renders catch-all probes populated card when useCatchallIntel returns data (#427)", async () => {
+		const domainsModule = await import("~/queries/domains");
+		const catchallData: CatchallSummary = {
+			totals: { probe_count: 42, distinct_sources: 3, distinct_localparts: 17 },
+			topSources: [
+				{
+					source_ip: "198.51.100.5",
+					sender_domain: "evil.example",
+					count: 30,
+					distinct_localparts: 12,
+					max_score: 85,
+					first_seen: "2026-06-01T00:00:00Z",
+					last_seen: "2026-06-05T12:00:00Z",
+				},
+			],
+			recent: [
+				{
+					id: 1,
+					ts: "2026-06-05T12:00:00Z",
+					source_ip: "198.51.100.5",
+					sender_domain: "evil.example",
+					sender: "probe@evil.example",
+					localpart: "admin",
+					subject_snippet: "Test subject",
+					score: 75,
+					band: "high",
+					signals_json: "[]",
+				},
+			],
+		};
+		vi.spyOn(domainsModule, "useCatchallIntel").mockReturnValue({
+			data: catchallData,
+			isLoading: false,
+			isError: false,
+		} as ReturnType<typeof domainsModule.useCatchallIntel>);
+
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderDomainDetail("acme.com");
+
+		const card = screen
+			.getByText(/catch-all probes/i)
+			.closest(".pp-card") as HTMLElement;
+
+		// Totals
+		expect(within(card).getByText("42")).toBeInTheDocument();
+		expect(within(card).getByText("3")).toBeInTheDocument();
+		expect(within(card).getByText("17")).toBeInTheDocument();
+
+		// Top sources table (source_ip and sender_domain are operator data, not attacker)
+		// Both tables render source_ip, so use getAllByText.
+		expect(within(card).getAllByText("198.51.100.5").length).toBeGreaterThanOrEqual(1);
+		expect(within(card).getAllByText("evil.example").length).toBeGreaterThanOrEqual(1);
+
+		// Recent samples — attacker-controlled fields rendered as text, not HTML.
+		expect(within(card).getByText("admin")).toBeInTheDocument();
+		expect(within(card).getByText("probe@evil.example")).toBeInTheDocument();
+
+		vi.restoreAllMocks();
 	});
 });

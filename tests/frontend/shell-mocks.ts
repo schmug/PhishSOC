@@ -91,6 +91,7 @@ export interface ShellDomainsMockOverrides {
 	useAddDomain?: () => unknown;
 	useRemoveDomain?: () => unknown;
 	useRufRecords?: () => QueryStub<unknown>;
+	useCatchallIntel?: () => QueryStub<unknown>;
 	[key: string]: unknown;
 }
 
@@ -113,6 +114,7 @@ export function shellDomainsMock(
 		useAddDomain: () => ({ mutateAsync: vi.fn(), isPending: false }),
 		useRemoveDomain: () => ({ mutateAsync: vi.fn(), isPending: false }),
 		useRufRecords: () => ({ data: undefined, isLoading: false, isError: false }),
+		useCatchallIntel: () => ({ data: undefined, isLoading: false, isError: false }),
 		...overrides,
 	};
 }
