@@ -7,6 +7,7 @@ import {
 	DEFAULT_DRAFT_VERIFIER_MODEL,
 	DEFAULT_INJECTION_SCANNER_MODEL,
 	MailboxSettings,
+	parseSettingsLenient,
 	YaraMailScannerSettings,
 } from "../../shared/mailbox-settings";
 
@@ -42,7 +43,9 @@ export async function getMailboxSettings(
 		const obj = await env.BUCKET.get(`mailboxes/${mailboxId}.json`);
 		if (obj) {
 			const raw = await obj.json<Record<string, unknown>>();
-			return MailboxSettings.parse(raw);
+			// Read-side lenient parse: a legacy hub/feed secret name that predates
+			// the HUB_SECRET_/FEED_SECRET_ invariant must not wipe the whole tier.
+			return parseSettingsLenient(MailboxSettings, raw);
 		}
 	} catch {
 		// Fall through to empty — missing/malformed blob shouldn't break

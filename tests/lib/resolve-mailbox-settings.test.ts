@@ -29,6 +29,7 @@ import {
 } from "../../workers/lib/domain-settings";
 import { DEFAULT_SECURITY_SETTINGS } from "../../workers/security/defaults";
 import { loadHubConfig } from "../../workers/lib/hub-config";
+import { MailboxSettings, parseSettingsLenient } from "../../shared/mailbox-settings";
 
 interface FakeStored {
 	body: string;
@@ -613,12 +614,12 @@ describe("resolveMailboxSettings — intel.hub inheritance (#121 audit Q1)", () 
 	const orgHub = {
 		url: "https://hub.example.com",
 		org_uuid: "org-uuid-123",
-		api_key_secret_name: "HUB_KEY",
+		api_key_secret_name: "HUB_SECRET_KEY",
 	};
 	const mailboxHub = {
 		url: "https://other-hub.example.com",
 		org_uuid: "mailbox-uuid-456",
-		api_key_secret_name: "OTHER_HUB_KEY",
+		api_key_secret_name: "HUB_SECRET_OTHER_KEY",
 	};
 
 	it("org sets hub, mailbox absent → resolved.intel.hub = org hub", async () => {
@@ -877,7 +878,7 @@ describe("resolveMailboxSettings — domain tier (#142)", () => {
 		const domainHub = {
 			url: "https://domain-hub.example.com",
 			org_uuid: "domain-uuid",
-			api_key_secret_name: "DOMAIN_HUB_KEY",
+			api_key_secret_name: "HUB_SECRET_DOMAIN_KEY",
 		};
 		const bucket = makeFakeBucket({
 			[DOMAIN_KEY]: { intel: { hub: domainHub } },
@@ -1112,6 +1113,74 @@ describe("domainFromMailboxId / domainSettingsKey", () => {
 
 	it("centralises the R2 key format for a future multi-tenant refactor", () => {
 		expect(domainSettingsKey("Example.COM")).toBe("domains/example.com.json");
+	});
+});
+
+describe("parseSettingsLenient — read-path leniency for legacy non-prefixed secrets (#415 follow-up)", () => {
+	it("drops an invalid intel.hub (non-HUB_SECRET_ key) but preserves the rest of the tier", () => {
+		const parsed = parseSettingsLenient(MailboxSettings, {
+			agentModel: "@cf/custom/v1",
+			intel: {
+				hub: {
+					url: "https://hub.example.com",
+					org_uuid: "org-1",
+					// Legacy secret name that predates the HUB_SECRET_ invariant.
+					api_key_secret_name: "MASTER_DB_PASSWORD",
+				},
+			},
+		});
+		// The tier survives — the strict schema would have thrown and wiped it.
+		expect(parsed.agentModel).toBe("@cf/custom/v1");
+		// Only the offending hub is dropped (the runtime loadHubConfig guard
+		// would also block it at use time).
+		expect(parsed.intel?.hub).toBeUndefined();
+	});
+
+	it("filters out only invalid intel.feeds[] entries, keeping valid ones", () => {
+		const parsed = parseSettingsLenient(MailboxSettings, {
+			intel: {
+				feeds: [
+					{ id: "good", auth_secret: "FEED_SECRET_OK" },
+					{ id: "bad", auth_secret: "STEAL_ME" }, // non-prefixed → dropped
+					{ id: "no-secret" }, // valid — auth_secret is optional
+				],
+			},
+		});
+		const ids = (parsed.intel?.feeds ?? []).map((f) => f.id).sort();
+		expect(ids).toEqual(["good", "no-secret"]);
+	});
+
+	it("getMailboxSettings does not wipe the tier when a stored blob carries a legacy hub key", async () => {
+		const bucket = makeFakeBucket({
+			[MAILBOX_KEY]: {
+				agentModel: "@cf/custom/v1",
+				intel: {
+					hub: {
+						url: "https://hub.example.com",
+						org_uuid: "org-1",
+						api_key_secret_name: "MASTER_DB_PASSWORD",
+					},
+				},
+			},
+		});
+		const settings = await getMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(settings.agentModel).toBe("@cf/custom/v1");
+		expect(settings.intel?.hub).toBeUndefined();
+	});
+
+	it("returns the value unchanged when hub + feeds are all valid", () => {
+		const parsed = parseSettingsLenient(MailboxSettings, {
+			intel: {
+				hub: {
+					url: "https://hub.example.com",
+					org_uuid: "org-1",
+					api_key_secret_name: "HUB_SECRET_OK",
+				},
+				feeds: [{ id: "f1", auth_secret: "FEED_SECRET_OK" }],
+			},
+		});
+		expect(parsed.intel?.hub?.api_key_secret_name).toBe("HUB_SECRET_OK");
+		expect(parsed.intel?.feeds).toHaveLength(1);
 	});
 });
 
