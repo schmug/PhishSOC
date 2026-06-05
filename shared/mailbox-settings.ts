@@ -74,9 +74,9 @@ export const SecuritySettings = z
  */
 export const HubConfig = z
   .object({
-    url: z.string().min(1),
+    url: z.string().url().min(1),
     org_uuid: z.string().min(1),
-    api_key_secret_name: z.string().min(1),
+    api_key_secret_name: z.string().min(1).startsWith("HUB_SECRET_"),
     default_sharing_group_uuid: z.string().optional(),
     auto_report: z.boolean().optional(),
   })
@@ -105,6 +105,71 @@ export const IntelSettings = z
     feeds: z.array(IntelFeed).optional(),
   })
   .passthrough();
+
+/**
+ * READ-side lenient parse for a settings tier (mailbox / org / domain).
+ *
+ * The strict schema is still used verbatim on WRITE paths (settings PUT
+ * endpoints, `parseOrgSettings` / `parseDomainSettings`) so malformed input is
+ * rejected at write time. But on READ, a *legacy stored blob* whose
+ * `intel.hub.api_key_secret_name` (or a feed's `auth_secret`) predates the
+ * `HUB_SECRET_` / `FEED_SECRET_` prefix invariant must not blow away the whole
+ * tier — a strict `.parse()` throws on the entire object, which would silently
+ * drop `agentModel`, `autoDraft`, `security`, etc. on every read.
+ *
+ * Strategy: parse strictly; on failure, drop ONLY the offending `intel.hub`
+ * and/or the invalid `intel.feeds[]` entries, then retry. The runtime guards
+ * (`loadHubConfig` / `resolveFeeds`) already enforce the prefix at use time, so
+ * a dropped hub merely disables hub reporting rather than corrupting the tier.
+ * Anything malformed beyond that known case falls back to empty (prior
+ * behaviour). NOTE: read-only — never use this on a write path.
+ */
+export function parseSettingsLenient<T extends z.ZodTypeAny>(
+  schema: T,
+  raw: unknown,
+): z.infer<T> {
+  const first = schema.safeParse(raw ?? {});
+  if (first.success) return first.data;
+
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && "intel" in raw) {
+    const rec = raw as Record<string, unknown>;
+    const intel = rec.intel;
+    if (intel && typeof intel === "object" && !Array.isArray(intel)) {
+      const issues = first.error.issues;
+      const dropHub = issues.some((i) => i.path[0] === "intel" && i.path[1] === "hub");
+      const dropFeeds = issues.some(
+        (i) => i.path[0] === "intel" && i.path[1] === "feeds",
+      );
+      if (dropHub || dropFeeds) {
+        const salvaged: Record<string, unknown> = {
+          ...(intel as Record<string, unknown>),
+        };
+        if (dropHub) delete salvaged.hub;
+        if (dropFeeds) {
+          salvaged.feeds = Array.isArray(salvaged.feeds)
+            ? (salvaged.feeds as unknown[]).filter(
+                (f) => IntelFeed.safeParse(f).success,
+              )
+            : undefined;
+        }
+        const retry = schema.safeParse({ ...rec, intel: salvaged });
+        if (retry.success) {
+          console.warn(
+            `parseSettingsLenient: dropped invalid intel.${[
+              dropHub && "hub",
+              dropFeeds && "feeds",
+            ]
+              .filter(Boolean)
+              .join("+")} on read (secret-name prefix invariant); preserved the rest of the tier`,
+          );
+          return retry.data;
+        }
+      }
+    }
+  }
+
+  return schema.parse({}) as z.infer<T>;
+}
 
 export const AutoDraftSettings = z
   .object({

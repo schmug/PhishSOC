@@ -34,6 +34,9 @@ export async function loadHubConfig(
 	if (!raw || typeof raw !== "object") return null;
 	const cfg = raw as Partial<HubConfig>;
 	if (!cfg.url || !cfg.org_uuid || !cfg.api_key_secret_name) return null;
+	// Prevent confused deputy / secret exfiltration via unconstrained secret access.
+	// Only allow access to explicitly designated hub secrets.
+	if (!cfg.api_key_secret_name.startsWith("HUB_SECRET_")) return null;
 	return {
 		url: cfg.url,
 		org_uuid: cfg.org_uuid,
