@@ -95,7 +95,7 @@ export const IntelFeed = z
     kind: z.enum(["domain", "url", "ip-cidr"]).optional(),
     refresh_hours: z.number().optional(),
     headers: z.record(z.string(), z.string()).optional(),
-    auth_secret: z.string().optional(),
+    auth_secret: z.string().min(1).startsWith("FEED_SECRET_", { message: "Secret name must start with FEED_SECRET_" }).optional(),
   })
   .passthrough();
 
