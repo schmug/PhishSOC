@@ -44,6 +44,8 @@ export interface CatchallSummary {
 }
 
 export class CatchallIntelDO extends DurableObject<Env> {
+	declare __DURABLE_OBJECT_BRAND: never;
+
 	constructor(state: DurableObjectState, env: Env) {
 		super(state, env);
 		applyMigrations(
