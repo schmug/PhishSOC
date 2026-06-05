@@ -6,13 +6,19 @@
  * The Workers runtime is not available in the Node pool, so we use the
  * vi.mock("cloudflare:workers") + prototype-call pattern (same as
  * tests/dmarc/source-enrichment.test.ts) combined with a real in-memory
- * SQLite database from node:sqlite (Node 22) to validate SQL correctness.
+ * SQLite database (better-sqlite3) to validate SQL correctness.
+ *
+ * The DO uses ?NNN positional params (correct Workers runtime syntax).
+ * better-sqlite3 binds positional params differently, so normalizeSql()
+ * expands ?NNN references into sequential anonymous ? placeholders with
+ * repeated argument values — this allows the same SQL to run unchanged
+ * in production while the test helper adapts it for better-sqlite3.
  *
  * Each test constructs a fresh in-memory DB, runs the migration DDL, and
  * wraps it in a fake ctx.storage.sql compatible with the DO's exec() calls.
  */
 
-import { DatabaseSync } from "node:sqlite";
+import Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
@@ -23,18 +29,39 @@ import { catchallIntelMigrations } from "../../workers/durableObject/migrations"
 // ── Test infrastructure ────────────────────────────────────────────────────
 
 /**
+ * Expand ?NNN positional references into sequential anonymous ? placeholders,
+ * repeating argument values when the same index appears multiple times.
+ *
+ * Workers DO SQL uses ?1/?2/.../?N positional params; better-sqlite3 binds
+ * anonymous ? in left-to-right order. This adapter lets the DO's SQL run
+ * unchanged in production while the test helper normalises it for the driver.
+ *
+ * Example: `WHERE a = ?1 AND b = ?2 AND a = ?1`, params [x, y]
+ *   → SQL:    `WHERE a = ?  AND b = ?  AND a = ?`
+ *   → params: [x, y, x]
+ */
+function normalizeSql(sqlStr: string, params: unknown[]): { sql: string; args: unknown[] } {
+	const args: unknown[] = [];
+	const sql = sqlStr.replace(/\?(\d+)/g, (_, n: string) => {
+		args.push(params[parseInt(n, 10) - 1]);
+		return "?";
+	});
+	return { sql, args };
+}
+
+/**
  * Build a fake ctx.storage.sql backed by a real in-memory SQLite database.
  * SELECT / WITH → .all() (returns rows); everything else → .run() (no rows).
- * The ?NNN positional parameter syntax used in the DO is natively supported.
  */
-function makeFakeSql(db: DatabaseSync) {
+function makeFakeSql(db: InstanceType<typeof Database>) {
 	return {
 		exec(sqlStr: string, ...params: unknown[]) {
 			const trimmed = sqlStr.trim();
-			if (/^\s*(SELECT|WITH)/i.test(trimmed)) {
-				return db.prepare(trimmed).all(...params);
+			const { sql, args } = normalizeSql(trimmed, params);
+			if (/^\s*(SELECT|WITH)/i.test(sql)) {
+				return db.prepare(sql).all(...args);
 			}
-			db.prepare(trimmed).run(...params);
+			db.prepare(sql).run(...args);
 			return [];
 		},
 	};
@@ -45,9 +72,9 @@ function makeFakeSql(db: DatabaseSync) {
  * `this` suitable for CatchallIntelDO prototype calls.
  */
 function makeTestCtx() {
-	const db = new DatabaseSync(":memory:");
+	const db = new Database(":memory:");
 
-	// Strip BEGIN TRANSACTION / COMMIT so DatabaseSync.exec() can run the DDL
+	// Strip BEGIN TRANSACTION / COMMIT so db.exec() can run multi-statement DDL
 	for (const migration of catchallIntelMigrations) {
 		const raw = migration.sql
 			.replace(/^\s*BEGIN TRANSACTION\s*;?\s*/i, "")
