@@ -29,9 +29,4 @@ export interface Env extends Cloudflare.Env {
 	 * When absent, the yaramail callback route returns 503.
 	 */
 	YARAMAIL_CALLBACK_SECRET?: string;
-	/**
-	 * Per-domain catch-all probe rollup store (#425). DO binding registered in
-	 * wrangler.jsonc by #425 alongside the CatchallIntelDO class and migration.
-	 */
-	CATCHALL_INTEL: DurableObjectNamespace;
 }

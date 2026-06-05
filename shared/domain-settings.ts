@@ -58,14 +58,6 @@ export type CatchallIntelSettings = z.infer<typeof CatchallIntelSettings>;
  * `orgs/<orgId>/domains/<domain>.json` — is one helper change rather than
  * a cross-cutting grep.
  */
-export const CatchallIntelSettings = z.object({
-	enabled: z.boolean(),
-	retention_days: z.number().int().positive(),
-	sample_limit: z.number().int().positive(),
-});
-
-export type CatchallIntelSettings = z.infer<typeof CatchallIntelSettings>;
-
 export const DomainSettings = z
 	.object({
 		agentSystemPrompt: z.string().optional(),
