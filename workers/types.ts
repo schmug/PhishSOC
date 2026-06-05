@@ -2,6 +2,14 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+// Pre-evaluate CatchallIntelDO before TypeScript walks the circular chain
+// types.ts → Cloudflare.Env → app.ts → types.ts.  Without this re-export,
+// the chain resolves import("./workers/app").CatchallIntelDO as `undefined`,
+// making Cloudflare.Env.CATCHALL_INTEL = DurableObjectNamespace<undefined> and
+// causing TS2430/TS2344. The module cache is warm by the time the chain runs,
+// so the import expression resolves to the real class instead.
+export type { CatchallIntelDO } from "./durableObject/catchall-intel";
+
 export interface Env extends Cloudflare.Env {
 	POLICY_AUD: string;
 	TEAM_DOMAIN: string;
