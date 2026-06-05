@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "~/services/api";
-import type { DomainListEntry, DomainStats, DmarcRufRecord } from "~/types";
+import type { CatchallSummary, DomainListEntry, DomainStats, DmarcRufRecord } from "~/types";
 import { queryKeys } from "./keys";
 
 /**
@@ -60,6 +60,18 @@ export function useRufRecords(domain: string | undefined) {
 		queryKey: domain ? ["domains", domain, "ruf-records"] : ["domains", "_disabled", "ruf-records"],
 		queryFn: ({ signal }) =>
 			api.getDomainRufRecords(domain!, { signal }) as Promise<RufRecordsResponse>,
+		enabled: !!domain,
+		staleTime: 60_000,
+	});
+}
+
+export function useCatchallIntel(domain: string | undefined) {
+	return useQuery<CatchallSummary>({
+		queryKey: domain
+			? queryKeys.domains.catchallIntel(domain)
+			: ["domains", "_disabled", "catchall-intel"],
+		queryFn: ({ signal }) =>
+			api.getDomainCatchallIntel(domain!, { signal }) as Promise<CatchallSummary>,
 		enabled: !!domain,
 		staleTime: 60_000,
 	});

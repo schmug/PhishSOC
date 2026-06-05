@@ -402,6 +402,40 @@ export interface DomainStats {
 	recentCases: DashboardCase[];
 }
 
+/** Source-IP rollup row from CatchallIntelDO (#425/#427). */
+export interface CatchallSourceRollup {
+	source_ip: string;
+	sender_domain: string;
+	count: number;
+	distinct_localparts: number;
+	max_score: number;
+	first_seen: string;
+	last_seen: string;
+}
+
+/** Recent probe sample row from CatchallIntelDO (#425/#427).
+ * `localpart`, `sender`, `subject_snippet` are attacker-controlled — render
+ * as text only, never dangerouslySetInnerHTML. */
+export interface CatchallRecentSample {
+	id: number;
+	ts: string;
+	source_ip: string;
+	sender_domain: string;
+	sender: string;
+	localpart: string;
+	subject_snippet: string;
+	score: number;
+	band: string;
+	signals_json: string;
+}
+
+/** Shape returned by `GET /api/v1/domains/:domain/catchall-intel` (#427). */
+export interface CatchallSummary {
+	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
+	topSources: CatchallSourceRollup[];
+	recent: CatchallRecentSample[];
+}
+
 export interface HubContribution {
 	uuid: string;
 	info: string;

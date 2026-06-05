@@ -3,6 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import type {
+	CatchallSummary,
 	DashboardSummary,
 	DomainListEntry,
 	DomainStats,
@@ -273,6 +274,11 @@ const api = {
 	getDomainRufRecords: (domain: string, opts?: { signal?: AbortSignal }) =>
 		get<{ enabled: boolean; records: DmarcRufRecord[] }>(
 			`/api/v1/domains/${encodeURIComponent(domain)}/ruf-records`,
+			{ signal: opts?.signal },
+		),
+	getDomainCatchallIntel: (domain: string, opts?: { signal?: AbortSignal }) =>
+		get<CatchallSummary>(
+			`/api/v1/domains/${encodeURIComponent(domain)}/catchall-intel`,
 			{ signal: opts?.signal },
 		),
 

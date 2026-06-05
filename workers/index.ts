@@ -840,6 +840,66 @@ app.get("/api/v1/domains/:domain/ruf-records", async (c) => {
 	return c.json({ enabled: anyEnabled, records: sorted });
 });
 
+// ---------------------------------------------------------------------------
+// Catch-all probe intel (#427)
+// ---------------------------------------------------------------------------
+
+interface CatchallSourceRollup {
+	source_ip: string;
+	sender_domain: string;
+	count: number;
+	distinct_localparts: number;
+	max_score: number;
+	first_seen: string;
+	last_seen: string;
+}
+
+interface CatchallRecentSample {
+	id: number;
+	ts: string;
+	source_ip: string;
+	sender_domain: string;
+	sender: string;
+	localpart: string;
+	subject_snippet: string;
+	score: number;
+	band: string;
+	signals_json: string;
+}
+
+interface CatchallSummary {
+	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
+	topSources: CatchallSourceRollup[];
+	recent: CatchallRecentSample[];
+}
+
+function emptyCatchallSummary(): CatchallSummary {
+	return { totals: { probe_count: 0, distinct_sources: 0, distinct_localparts: 0 }, topSources: [], recent: [] };
+}
+
+/** Per-domain catch-all probe rollup (#427). Same CF-Access auth boundary as
+ * all `/api/v1/` routes. Returns empty summary for domains with no probe data
+ * or where CATCHALL_INTEL is not yet wired (#425/#426 deferred). */
+app.get("/api/v1/domains/:domain/catchall-intel", async (c) => {
+	const raw = c.req.param("domain") ?? "";
+	const domain = decodeURIComponent(raw).toLowerCase();
+	if (!DOMAIN_REGEX.test(domain)) return c.json({ error: "Malformed domain" }, 400);
+
+	const limit = Math.min(parseInt(c.req.query("limit") ?? "20", 10) || 20, 100);
+
+	try {
+		const doId = c.env.CATCHALL_INTEL.idFromName(domain);
+		const stub = c.env.CATCHALL_INTEL.get(doId) as unknown as {
+			getCatchallSummary(opts: { limit: number }): Promise<CatchallSummary>;
+		};
+		const summary = await stub.getCatchallSummary({ limit });
+		return c.json(summary);
+	} catch (e) {
+		console.error("catchall-intel: DO fetch failed:", (e as Error).message);
+		return c.json(emptyCatchallSummary());
+	}
+});
+
 app.post("/api/v1/mailboxes", async (c) => {
 	const { name, settings, email: rawEmail } = CreateMailboxBody.parse(await c.req.json());
 	const email = rawEmail.toLowerCase();

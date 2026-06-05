@@ -4,13 +4,17 @@ import { Loader } from "@cloudflare/kumo";
 import {
 	BriefcaseIcon,
 	EnvelopeIcon,
+	EyeIcon,
 	ShieldCheckIcon,
 	WarningIcon,
 } from "@phosphor-icons/react";
 import { Link as RouterLink, useParams } from "react-router";
 import Shell from "~/components/phishsoc/Shell";
-import { useDomainStats, useRufRecords } from "~/queries/domains";
+import { useCatchallIntel, useDomainStats, useRufRecords } from "~/queries/domains";
 import type {
+	CatchallRecentSample,
+	CatchallSourceRollup,
+	CatchallSummary,
 	DmarcRufRecord,
 	DnssecPosture,
 	DomainStats,
@@ -25,6 +29,7 @@ export default function DomainDetailRoute() {
 	const { domain } = useParams<{ domain: string }>();
 	const { data, isLoading, isError, refetch } = useDomainStats(domain);
 	const rufQuery = useRufRecords(domain);
+	const catchallQuery = useCatchallIntel(domain);
 
 	return (
 		<Shell>
@@ -38,7 +43,7 @@ export default function DomainDetailRoute() {
 				) : isError ? (
 					<DomainError onRetry={() => refetch()} />
 				) : data ? (
-					<DomainBody data={data} rufData={rufQuery.data} />
+					<DomainBody data={data} rufData={rufQuery.data} catchallData={catchallQuery.data} catchallLoading={catchallQuery.isLoading} />
 				) : null}
 			</div>
 		</Shell>
@@ -92,7 +97,17 @@ function DomainError({ onRetry }: { onRetry: () => void }) {
 	);
 }
 
-function DomainBody({ data, rufData }: { data: DomainStats; rufData: import("~/queries/domains").RufRecordsResponse | undefined }) {
+function DomainBody({
+	data,
+	rufData,
+	catchallData,
+	catchallLoading,
+}: {
+	data: DomainStats;
+	rufData: import("~/queries/domains").RufRecordsResponse | undefined;
+	catchallData: CatchallSummary | undefined;
+	catchallLoading: boolean;
+}) {
 	return (
 		<>
 			<KpiGrid data={data} />
@@ -115,6 +130,7 @@ function DomainBody({ data, rufData }: { data: DomainStats; rufData: import("~/q
 			{rufData?.enabled && rufData.records.length > 0 && (
 				<RufFailuresTable records={rufData.records} />
 			)}
+			<CatchallProbesCard data={catchallData} isLoading={catchallLoading} />
 		</>
 	);
 }
@@ -625,6 +641,142 @@ function RecentCasesList({
 					</li>
 				))}
 			</ul>
+		</div>
+	);
+}
+
+function CatchallProbesCard({
+	data,
+	isLoading,
+}: {
+	data: CatchallSummary | undefined;
+	isLoading: boolean;
+}) {
+	if (isLoading) {
+		return (
+			<div className="pp-card p-5">
+				<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+					<EyeIcon size={12} />
+					Catch-all probes
+				</div>
+				<div className="flex justify-center py-4">
+					<Loader size="sm" />
+				</div>
+			</div>
+		);
+	}
+
+	const empty = !data || data.totals.probe_count === 0;
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<EyeIcon size={12} />
+				Catch-all probes
+			</div>
+			{empty ? (
+				<p className="text-[12.5px] text-ink-3">
+					No catch-all probe activity recorded. Enable <span className="pp-mono">catchall_intel</span> on this domain to start collecting directory-harvest data.
+				</p>
+			) : (
+				<div className="space-y-5">
+					<dl className="grid grid-cols-3 gap-4">
+						<div>
+							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">Probes</dt>
+							<dd className="pp-serif text-[28px] leading-none text-ink">{data.totals.probe_count}</dd>
+						</div>
+						<div>
+							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">Sources</dt>
+							<dd className="pp-serif text-[28px] leading-none text-ink">{data.totals.distinct_sources}</dd>
+						</div>
+						<div>
+							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">Local-parts tried</dt>
+							<dd className="pp-serif text-[28px] leading-none text-ink">{data.totals.distinct_localparts}</dd>
+						</div>
+					</dl>
+					{data.topSources.length > 0 && (
+						<CatchallTopSourcesTable sources={data.topSources} />
+					)}
+					{data.recent.length > 0 && (
+						<CatchallRecentSamplesTable samples={data.recent} />
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function CatchallTopSourcesTable({ sources }: { sources: CatchallSourceRollup[] }) {
+	return (
+		<div>
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
+				Top sources
+			</div>
+			<div className="overflow-x-auto">
+				<table className="w-full text-[12px] text-ink-2">
+					<thead>
+						<tr className="text-left text-[10.5px] uppercase tracking-[0.06em] text-ink-3 border-b border-line">
+							<th className="pb-2 pr-4 font-normal">Source IP</th>
+							<th className="pb-2 pr-4 font-normal">Sender domain</th>
+							<th className="pb-2 pr-4 font-normal text-right">Probes</th>
+							<th className="pb-2 pr-4 font-normal text-right">Local-parts</th>
+							<th className="pb-2 font-normal text-right">Max score</th>
+						</tr>
+					</thead>
+					<tbody className="divide-y divide-line">
+						{sources.map((s) => (
+							<tr key={`${s.source_ip}:${s.sender_domain}`} className="align-top">
+								<td className="py-2 pr-4 pp-mono text-ink-2">{s.source_ip}</td>
+								<td className="py-2 pr-4 text-ink-2">{s.sender_domain}</td>
+								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-2 text-right">{s.count}</td>
+								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-2 text-right">{s.distinct_localparts}</td>
+								<td className="py-2 pp-mono tabular-nums text-ink-2 text-right">{s.max_score}</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	);
+}
+
+function CatchallRecentSamplesTable({ samples }: { samples: CatchallRecentSample[] }) {
+	return (
+		<div>
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
+				Recent samples
+			</div>
+			<div className="overflow-x-auto">
+				<table className="w-full text-[12px] text-ink-2">
+					<thead>
+						<tr className="text-left text-[10.5px] uppercase tracking-[0.06em] text-ink-3 border-b border-line">
+							<th className="pb-2 pr-4 font-normal">Time</th>
+							<th className="pb-2 pr-4 font-normal">Local-part</th>
+							<th className="pb-2 pr-4 font-normal">Sender</th>
+							<th className="pb-2 pr-4 font-normal">Source IP</th>
+							<th className="pb-2 font-normal">Score / band</th>
+						</tr>
+					</thead>
+					<tbody className="divide-y divide-line">
+						{samples.map((s) => (
+							<tr key={s.id} className="align-top">
+								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-3 whitespace-nowrap">
+									{new Date(s.ts).toLocaleString(undefined, {
+										month: "short",
+										day: "numeric",
+										hour: "2-digit",
+										minute: "2-digit",
+									})}
+								</td>
+								{/* attacker-controlled fields — rendered as text; React escapes by default */}
+								<td className="py-2 pr-4 pp-mono text-ink-2 max-w-[10rem] truncate">{s.localpart}</td>
+								<td className="py-2 pr-4 text-ink-2 max-w-[12rem] truncate">{s.sender}</td>
+								<td className="py-2 pr-4 pp-mono text-ink-2">{s.source_ip}</td>
+								<td className="py-2 pp-mono tabular-nums text-ink-2">{s.score} · {s.band}</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
 		</div>
 	);
 }
