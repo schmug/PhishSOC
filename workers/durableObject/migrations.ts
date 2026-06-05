@@ -526,3 +526,48 @@ export const mailboxMigrations: Migration[] = [
         `,
 	},
 ];
+
+/**
+ * Schema for `CatchallIntelDO` (issue #425). Separate from `mailboxMigrations`
+ * because this is a different Durable Object class with its own SQLite database.
+ */
+export const catchallIntelMigrations: Migration[] = [
+	{
+		name: "1_catchall_intel_setup",
+		sql: txn(`
+            CREATE TABLE probe_rollup (
+                source_ip   TEXT NOT NULL,
+                sender_domain TEXT NOT NULL,
+                count       INTEGER NOT NULL DEFAULT 1,
+                distinct_localparts INTEGER NOT NULL DEFAULT 1,
+                max_score   INTEGER NOT NULL DEFAULT 0,
+                first_seen  TEXT NOT NULL,
+                last_seen   TEXT NOT NULL,
+                PRIMARY KEY (source_ip, sender_domain)
+            );
+
+            CREATE TABLE probe_localparts (
+                source_ip     TEXT NOT NULL,
+                sender_domain TEXT NOT NULL,
+                localpart     TEXT NOT NULL,
+                last_seen     TEXT NOT NULL,
+                PRIMARY KEY (source_ip, sender_domain, localpart)
+            );
+
+            CREATE TABLE probe_recent (
+                id             TEXT PRIMARY KEY,
+                ts             TEXT NOT NULL,
+                source_ip      TEXT NOT NULL,
+                sender_domain  TEXT NOT NULL,
+                sender         TEXT NOT NULL,
+                localpart      TEXT NOT NULL,
+                subject_snippet TEXT NOT NULL,
+                score          INTEGER NOT NULL,
+                band           TEXT NOT NULL,
+                signals_json   TEXT NOT NULL
+            );
+
+            CREATE INDEX idx_probe_recent_ts ON probe_recent(ts DESC);
+        `),
+	},
+];

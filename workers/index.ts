@@ -5,7 +5,7 @@
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
-import type { NormalizedInbound } from "./providers/types";
+import type { MailboxInbound, CatchallInbound } from "./providers/types";
 import { attachmentObjectKey, storeAttachments, type StoredAttachment } from "./lib/attachments";
 import {
 	validateSender,
@@ -1293,9 +1293,9 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
  * CF-specific parsing (stream → ArrayBuffer → PostalMime → mailboxId
  * determination) is handled upstream by `workers/providers/cf-routing.ts`
  * before this function is called.  Other providers (Workspace, M365)
- * produce the same `NormalizedInbound` shape.
+ * produce the same `MailboxInbound` shape.
  */
-async function receiveEmail(normalized: NormalizedInbound, env: Env, ctx: ExecutionContext) {
+async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: ExecutionContext) {
 	const { parsedEmail, mailboxId } = normalized;
 	const allRecipients = (parsedEmail.to ?? []).map((t) => (t as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
 	const ccRecipients = (parsedEmail.cc ?? []).map((e) => (e as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
@@ -1572,6 +1572,54 @@ async function receiveEmail(normalized: NormalizedInbound, env: Env, ctx: Execut
 				: null,
 		}),
 	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
+}
+
+/**
+ * Handle a catch-all inbound message: analyze with heuristic scorers and
+ * persist a rollup row + recent sample to `CatchallIntelDO`.
+ *
+ * Best-effort: any analysis or persistence failure is caught and logged so
+ * a throw never propagates to `email()` and bounces the message.
+ */
+export async function receiveCatchall(normalized: CatchallInbound, env: Env, _ctx: ExecutionContext): Promise<void> {
+	const { analyzeCatchall } = await import("./security/catchall");
+	const { parsedEmail, domain, retentionDays, sampleLimit } = normalized;
+
+	let verdict;
+	try {
+		verdict = await analyzeCatchall(env, { parsedEmail });
+	} catch (e) {
+		console.error(`catchall: analysis failed for ${domain}:`, (e as Error).message);
+		return;
+	}
+
+	const localpart = (() => {
+		const addr = (parsedEmail.to?.[0] as { address?: string } | undefined)?.address ?? "";
+		const at = addr.indexOf("@");
+		return at >= 0 ? addr.slice(0, at) : addr;
+	})();
+	const senderDomain = parsedEmail.from?.address?.split("@")[1] ?? "";
+
+	try {
+		const stub = env.CATCHALL_INTEL.get(env.CATCHALL_INTEL.idFromName(domain)) as unknown as {
+			recordCatchallProbe(e: unknown): Promise<void>;
+		};
+		await stub.recordCatchallProbe({
+			ts: new Date().toISOString(),
+			sourceIp: verdict.sourceIp ?? "",
+			senderDomain,
+			sender: verdict.sender,
+			localpart,
+			subjectSnippet: (parsedEmail.subject ?? "").slice(0, 200),
+			score: verdict.score,
+			band: verdict.band,
+			signals: verdict.signals,
+			retentionDays,
+			sampleLimit,
+		});
+	} catch (e) {
+		console.error(`catchall: persistence failed for ${domain}:`, (e as Error).message);
+	}
 }
 
 export { app, receiveEmail };

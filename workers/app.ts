@@ -6,7 +6,7 @@ import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
-import { app as apiApp, receiveEmail } from "./index";
+import { app as apiApp, receiveEmail, receiveCatchall } from "./index";
 import { normalizeInbound } from "./providers/cf-routing";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
@@ -14,6 +14,7 @@ import { confirmRoute } from "./routes/confirm";
 import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
+export { CatchallIntelDO } from "./durableObject/catchall-intel";
 export { EmailAgent } from "./agent";
 export { OrgAgent } from "./agent/org";
 export { EmailMCP } from "./mcp";
@@ -136,7 +137,11 @@ export default {
 		try {
 			const normalized = await normalizeInbound(event, env);
 			if (!normalized) return;
-			await receiveEmail(normalized, env, ctx);
+			if (normalized.kind === "catchall") {
+				await receiveCatchall(normalized, env, ctx);
+			} else {
+				await receiveEmail(normalized, env, ctx);
+			}
 		} catch (e) {
 			console.error("Failed to process incoming email:", (e as Error).message, (e as Error).stack);
 			// Re-throw so Cloudflare's email routing can retry delivery or bounce the message.

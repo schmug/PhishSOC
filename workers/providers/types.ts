@@ -24,11 +24,10 @@ import type { SendEmailParams } from "../email-sender";
 export type { Email };
 
 /**
- * Parsed inbound message, normalised across inbound providers.
- * `parsedEmail` is PostalMime's `Email` shape — CF routing, IMAP, and
- * Workspace adapters all produce this same structure.
+ * Inbound message destined for a registered mailbox.
  */
-export interface NormalizedInbound {
+export interface MailboxInbound {
+	kind: "mailbox";
 	/** Raw bytes of the full RFC-5322 message. */
 	rawEmail: ArrayBuffer;
 	/** Normalised parsed representation (PostalMime `Email`). */
@@ -36,6 +35,29 @@ export interface NormalizedInbound {
 	/** The local-part@domain address that identifies the target mailbox. */
 	mailboxId: string;
 }
+
+/**
+ * Inbound message for a catch-all recipient on an owned+enabled domain.
+ * There is no registered mailbox for this address; the message is scored
+ * by the catch-all analyzer and persisted to `CatchallIntelDO`.
+ */
+export interface CatchallInbound {
+	kind: "catchall";
+	rawEmail: ArrayBuffer;
+	parsedEmail: Email;
+	/** Domain the recipient address belongs to. */
+	domain: string;
+	/** From `catchall_intel.retention_days` on the domain settings. */
+	retentionDays: number;
+	/** From `catchall_intel.sample_limit` on the domain settings. */
+	sampleLimit: number;
+}
+
+/**
+ * Parsed inbound message, normalised across inbound providers.
+ * @deprecated Use `MailboxInbound | CatchallInbound` for discriminated dispatch.
+ */
+export type NormalizedInbound = MailboxInbound;
 
 /**
  * Outbound message params — mirrors `SendEmailParams` so callers don't
@@ -55,5 +77,5 @@ export type NormalizedOutbound = SendEmailParams;
 export interface MailProvider {
 	readonly id: string;
 	send(env: Env, msg: NormalizedOutbound): Promise<{ messageId: string }>;
-	applyVerdict?(env: Env, msg: NormalizedInbound, verdict: unknown): Promise<void>;
+	applyVerdict?(env: Env, msg: MailboxInbound, verdict: unknown): Promise<void>;
 }
