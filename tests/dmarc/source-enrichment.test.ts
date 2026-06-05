@@ -89,3 +89,31 @@ describe("enrichDmarcSourcesGeo (label + geo coexistence)", () => {
 		expect(inserts).toHaveLength(0);
 	});
 });
+
+describe("getNewDmarcSourceIps (legitimate-before-PTR race)", () => {
+	function runGetNew(ipsByLabel: Map<string, string | null>, candidates: string[]): string[] {
+		const sql = {
+			exec: (query: string, ip: string) => {
+				if (!query.includes("label")) return [];
+				const label = ipsByLabel.get(ip);
+				return label === undefined ? [] : [{ label }];
+			},
+		};
+		return (MailboxDO.prototype as unknown as {
+			getNewDmarcSourceIps(
+				this: { ctx: { storage: { sql: typeof sql } } },
+				candidates: string[],
+			): string[];
+		}).getNewDmarcSourceIps.call({ ctx: { storage: { sql } } }, candidates);
+	}
+
+	it("re-enriches when a legitimate toggle created a row before PTR ran", () => {
+		const store = new Map<string, string | null>([["1.2.3.4", null]]);
+		expect(runGetNew(store, ["1.2.3.4"])).toEqual(["1.2.3.4"]);
+	});
+
+	it("skips IPs that already have a PTR label", () => {
+		const store = new Map<string, string | null>([["1.2.3.4", "Google"]]);
+		expect(runGetNew(store, ["1.2.3.4"])).toEqual([]);
+	});
+});
