@@ -2,15 +2,16 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-// Pre-evaluate CatchallIntelDO before TypeScript walks the circular chain
-// types.ts → Cloudflare.Env → app.ts → types.ts.  Without this re-export,
-// the chain resolves import("./workers/app").CatchallIntelDO as `undefined`,
-// making Cloudflare.Env.CATCHALL_INTEL = DurableObjectNamespace<undefined> and
-// causing TS2430/TS2344. The module cache is warm by the time the chain runs,
-// so the import expression resolves to the real class instead.
-export type { CatchallIntelDO } from "./durableObject/catchall-intel";
+import type { CatchallIntelDO } from "./durableObject/catchall-intel";
 
-export interface Env extends Cloudflare.Env {
+// Wrangler generates CATCHALL_INTEL as DurableObjectNamespace<import("./workers/app").CatchallIntelDO>.
+// That import("./workers/app") expression hits the circular chain
+//   types.ts → Cloudflare.Env → app.ts → types.ts
+// and TypeScript resolves CatchallIntelDO as `undefined` on a cold build.
+// Fix: Omit the circular property from the base and redeclare it using a
+// direct import from the leaf file, which has no cycle back to types.ts.
+export interface Env extends Omit<Cloudflare.Env, "CATCHALL_INTEL"> {
+	CATCHALL_INTEL: DurableObjectNamespace<CatchallIntelDO>;
 	POLICY_AUD: string;
 	TEAM_DOMAIN: string;
 	/**
