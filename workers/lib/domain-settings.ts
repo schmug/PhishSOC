@@ -18,6 +18,7 @@ import {
 	DomainSettings,
 	parseDomainSettings,
 } from "../../shared/domain-settings";
+import { parseSettingsLenient } from "../../shared/mailbox-settings";
 
 interface DomainSettingsCacheEntry {
 	etag: string | null;
@@ -90,7 +91,9 @@ export async function getDomainSettings(
 
 	try {
 		const raw = await obj.json<Record<string, unknown>>();
-		const parsed = parseDomainSettings(raw) ?? {};
+		// Read-side lenient parse: legacy intel.hub/feed secret names must not
+		// wipe the whole domain tier (same invariant as getMailboxSettings, #415).
+		const parsed = parseSettingsLenient(DomainSettings, raw);
 		cache.set(key, { etag: obj.etag ?? null, settings: parsed });
 		return parsed;
 	} catch {
