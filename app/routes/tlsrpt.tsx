@@ -6,6 +6,18 @@ import { Loader } from "@cloudflare/kumo";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 
+// ⚡ Bolt: Cache Intl.DateTimeFormat instance to prevent expensive instantiations
+// inside loops (e.g. mapping over table rows).
+// We use the default options for toLocaleString (date and time) by specifying both.
+const defaultDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+	year: "numeric",
+	month: "numeric",
+	day: "numeric",
+	hour: "numeric",
+	minute: "numeric",
+	second: "numeric",
+});
+
 interface TlsRptReport {
 	id: string;
 	received_at: string;
@@ -44,7 +56,9 @@ export default function TlsRptRoute() {
 
 	useEffect(() => {
 		if (!mailboxId) return;
-		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/tlsrpt/reports?limit=100`)
+		fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/tlsrpt/reports?limit=100`,
+		)
 			.then((r) => r.json() as Promise<{ reports: TlsRptReport[] }>)
 			.then((r) => {
 				setReports(r.reports);
@@ -55,8 +69,16 @@ export default function TlsRptRoute() {
 
 	useEffect(() => {
 		if (!mailboxId || !domain) return;
-		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/tlsrpt/summary?domain=${encodeURIComponent(domain)}`)
-			.then((r) => r.json() as Promise<{ sources: TlsRptSource[]; failures: TlsRptFailure[] }>)
+		fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/tlsrpt/summary?domain=${encodeURIComponent(domain)}`,
+		)
+			.then(
+				(r) =>
+					r.json() as Promise<{
+						sources: TlsRptSource[];
+						failures: TlsRptFailure[];
+					}>,
+			)
 			.then((r) => {
 				setSources(r.sources);
 				setFailures(r.failures);
@@ -71,7 +93,11 @@ export default function TlsRptRoute() {
 	}, [reports]);
 
 	if (!reports) {
-		return <div className="flex justify-center py-20"><Loader size="lg" /></div>;
+		return (
+			<div className="flex justify-center py-20">
+				<Loader size="lg" />
+			</div>
+		);
 	}
 
 	if (reports.length === 0) {
@@ -81,8 +107,7 @@ export default function TlsRptRoute() {
 				<div className="rounded-lg border border-line p-6 text-ink-3">
 					No TLS-RPT reports received yet. Publish{" "}
 					<code>v=TLSRPTv1; rua=mailto:tlsrpt@your-domain</code> in your
-					domain's <code>_smtp._tls</code> TXT record to start receiving
-					them.
+					domain's <code>_smtp._tls</code> TXT record to start receiving them.
 				</div>
 			</div>
 		);
@@ -99,7 +124,11 @@ export default function TlsRptRoute() {
 					onChange={(e) => setDomain(e.target.value)}
 					className="rounded border border-line bg-paper-3 px-2 py-1 text-sm"
 				>
-					{domains.map((d) => <option key={d} value={d}>{d}</option>)}
+					{domains.map((d) => (
+						<option key={d} value={d}>
+							{d}
+						</option>
+					))}
 				</select>
 			</div>
 
@@ -123,8 +152,10 @@ export default function TlsRptRoute() {
 							</thead>
 							<tbody>
 								{sources.map((s) => {
-									const total = s.successful_session_count + s.failed_session_count;
-									const rate = total > 0 ? s.successful_session_count / total : 0;
+									const total =
+										s.successful_session_count + s.failed_session_count;
+									const rate =
+										total > 0 ? s.successful_session_count / total : 0;
 									const suspect = rate < 0.5 && total >= 5;
 									const ipLabel = s.sending_mta_ip ?? "(policy summary)";
 									const mxLabel = s.receiving_mx_hostname ?? "—";
@@ -133,10 +164,18 @@ export default function TlsRptRoute() {
 											key={`${s.sending_mta_ip ?? "summary"}|${s.receiving_mx_hostname ?? "any"}`}
 											className={`border-t border-line ${suspect ? "bg-paper-3" : ""}`}
 										>
-											<td className="px-3 py-2 font-mono text-ink">{ipLabel}</td>
-											<td className="px-3 py-2 font-mono text-ink-2">{mxLabel}</td>
-											<td className="px-3 py-2 text-right text-safe">{s.successful_session_count}</td>
-											<td className="px-3 py-2 text-right text-danger">{s.failed_session_count}</td>
+											<td className="px-3 py-2 font-mono text-ink">
+												{ipLabel}
+											</td>
+											<td className="px-3 py-2 font-mono text-ink-2">
+												{mxLabel}
+											</td>
+											<td className="px-3 py-2 text-right text-safe">
+												{s.successful_session_count}
+											</td>
+											<td className="px-3 py-2 text-right text-danger">
+												{s.failed_session_count}
+											</td>
 											<td className="px-3 py-2">
 												<span className={suspect ? "text-danger" : "text-ink"}>
 													{total === 0 ? "—" : `${Math.round(rate * 100)}%`}
@@ -165,8 +204,12 @@ export default function TlsRptRoute() {
 							<tbody>
 								{failures.map((f) => (
 									<tr key={f.result_type} className="border-t border-line">
-										<td className="px-3 py-2 font-mono text-ink">{f.result_type}</td>
-										<td className="px-3 py-2 text-right text-danger">{f.failed_session_count}</td>
+										<td className="px-3 py-2 font-mono text-ink">
+											{f.result_type}
+										</td>
+										<td className="px-3 py-2 text-right text-danger">
+											{f.failed_session_count}
+										</td>
 									</tr>
 								))}
 							</tbody>
@@ -188,14 +231,22 @@ export default function TlsRptRoute() {
 							</tr>
 						</thead>
 						<tbody>
-							{reports.filter((r) => !domain || r.domain === domain).map((r) => (
-								<tr key={r.id} className="border-t border-line">
-									<td className="px-3 py-2 text-ink-3">{new Date(r.received_at).toLocaleString()}</td>
-									<td className="px-3 py-2">{r.org_name ?? "unknown"}</td>
-									<td className="px-3 py-2 font-mono">{r.domain}</td>
-									<td className="px-3 py-2 text-ink-3">{r.contact_info ?? "—"}</td>
-								</tr>
-							))}
+							{reports
+								.filter((r) => !domain || r.domain === domain)
+								.map((r) => (
+									<tr key={r.id} className="border-t border-line">
+										<td className="px-3 py-2 text-ink-3">
+											{defaultDateTimeFormatter.format(
+												Date.parse(r.received_at),
+											)}
+										</td>
+										<td className="px-3 py-2">{r.org_name ?? "unknown"}</td>
+										<td className="px-3 py-2 font-mono">{r.domain}</td>
+										<td className="px-3 py-2 text-ink-3">
+											{r.contact_info ?? "—"}
+										</td>
+									</tr>
+								))}
 						</tbody>
 					</table>
 				</div>

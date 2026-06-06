@@ -27,7 +27,9 @@ const STATUS_TABS: Array<{ id: string; label: string }> = [
 
 function relativeAge(iso: string): string {
 	const now = Date.now();
-	const then = new Date(iso).getTime();
+	// ⚡ Bolt: Use Date.parse instead of new Date().getTime() to prevent
+	// object allocation overhead in loops.
+	const then = Date.parse(iso);
 	if (Number.isNaN(then)) return "—";
 	const ms = Math.max(0, now - then);
 	const m = Math.floor(ms / 60_000);
@@ -87,7 +89,12 @@ export default function CasesRoute() {
 	}, []);
 
 	const counts = useMemo(() => {
-		const out: Record<string, number> = { open: 0, "closed-tp": 0, "closed-fp": 0, all: allCases.length };
+		const out: Record<string, number> = {
+			open: 0,
+			"closed-tp": 0,
+			"closed-fp": 0,
+			all: allCases.length,
+		};
 		for (const c of allCases) {
 			if (c.status in out) out[c.status] = (out[c.status] ?? 0) + 1;
 		}
@@ -101,9 +108,12 @@ export default function CasesRoute() {
 					<div className="text-[11px] uppercase tracking-[0.08em] text-ink-3 mb-1">
 						Triage
 					</div>
-					<h1 className="pp-serif text-[40px] leading-none text-ink mb-2">Cases</h1>
+					<h1 className="pp-serif text-[40px] leading-none text-ink mb-2">
+						Cases
+					</h1>
 					<p className="text-[13px] text-ink-3 max-w-xl">
-						Every quarantine, block, and tag verdict opens a case. Confirm or release.
+						Every quarantine, block, and tag verdict opens a case. Confirm or
+						release.
 					</p>
 				</div>
 				<button
@@ -133,9 +143,7 @@ export default function CasesRoute() {
 							type="button"
 							onClick={() => setTab(t.id)}
 							className={`relative px-3 py-2 text-[13px] transition-colors ${
-								active
-									? "text-ink"
-									: "text-ink-3 hover:text-ink-2"
+								active ? "text-ink" : "text-ink-3 hover:text-ink-2"
 							}`}
 						>
 							{t.label}{" "}
@@ -151,9 +159,13 @@ export default function CasesRoute() {
 			</div>
 
 			{cases === null ? (
-				<div className="pp-card p-10 text-center text-ink-3 text-[13px]">Loading…</div>
+				<div className="pp-card p-10 text-center text-ink-3 text-[13px]">
+					Loading…
+				</div>
 			) : error ? (
-				<div className="pp-card p-10 text-center text-danger text-[13px]">{error}</div>
+				<div className="pp-card p-10 text-center text-danger text-[13px]">
+					{error}
+				</div>
 			) : cases.length === 0 ? (
 				<div className="pp-card p-10 text-center text-ink-3 text-[13px]">
 					No cases yet. Report a phish from any email in your inbox to open one.
@@ -189,7 +201,10 @@ export default function CasesRoute() {
 										<span className="pp-mono text-[12px] text-ink-3">
 											{relativeAge(c.created_at)}
 										</span>
-										<CaretRightIcon size={14} className="text-ink-3 justify-self-end" />
+										<CaretRightIcon
+											size={14}
+											className="text-ink-3 justify-self-end"
+										/>
 									</Link>
 								</li>
 							))}
@@ -213,13 +228,18 @@ export default function CasesRoute() {
 											<VerdictPill tone={statusTone(c.status)}>
 												{statusLabel(c.status)}
 											</VerdictPill>
-											<span className="pp-mono">{relativeAge(c.created_at)}</span>
+											<span className="pp-mono">
+												{relativeAge(c.created_at)}
+											</span>
 											<span className="pp-mono truncate">
 												{c.id.slice(0, 12)}
 											</span>
 										</div>
 									</div>
-									<CaretRightIcon size={14} className="text-ink-3 mt-1 shrink-0" />
+									<CaretRightIcon
+										size={14}
+										className="text-ink-3 mt-1 shrink-0"
+									/>
 								</Link>
 							</li>
 						))}

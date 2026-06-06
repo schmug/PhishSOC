@@ -18,8 +18,15 @@ import VerdictPill from "~/components/phishsoc/VerdictPill";
 import { statusLabel, statusTone } from "~/components/phishsoc/verdict";
 import { useFeedback } from "~/lib/feedback";
 
-interface CaseEmail { case_id: string; email_id: string; }
-interface CaseObservable { id: string; kind: string; value: string; }
+interface CaseEmail {
+	case_id: string;
+	email_id: string;
+}
+interface CaseObservable {
+	id: string;
+	kind: string;
+	value: string;
+}
 type SummaryStatus = "pending" | "ready" | "failed" | null;
 
 // Per-stage pipeline trace (issue #128). One record per pipeline stage in
@@ -100,16 +107,19 @@ interface CaseRecord {
 const SUMMARY_POLL_INTERVAL_MS = 2500;
 const SUMMARY_POLL_MAX_MS = 60_000;
 
-const OBSERVABLE_TONE: Record<string, "danger" | "suspect" | "info" | "muted"> = {
-	domain: "suspect",
-	url: "suspect",
-	email: "danger",
-	ipv4: "info",
-	ipv6: "info",
-};
+const OBSERVABLE_TONE: Record<string, "danger" | "suspect" | "info" | "muted"> =
+	{
+		domain: "suspect",
+		url: "suspect",
+		email: "danger",
+		ipv4: "info",
+		ipv6: "info",
+	};
 
 function relativeAge(iso: string): string {
-	const ms = Math.max(0, Date.now() - new Date(iso).getTime());
+	// ⚡ Bolt: Use Date.parse instead of new Date().getTime() to prevent
+	// object allocation overhead.
+	const ms = Math.max(0, Date.now() - Date.parse(iso));
 	const m = Math.floor(ms / 60_000);
 	if (m < 1) return "just now";
 	if (m < 60) return `${m}m ago`;
@@ -120,7 +130,10 @@ function relativeAge(iso: string): string {
 }
 
 export default function CaseDetailRoute() {
-	const { mailboxId, caseId } = useParams<{ mailboxId: string; caseId: string }>();
+	const { mailboxId, caseId } = useParams<{
+		mailboxId: string;
+		caseId: string;
+	}>();
 	const feedback = useFeedback();
 	const [data, setData] = useState<CaseRecord | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -143,7 +156,9 @@ export default function CaseDetailRoute() {
 		}
 	}, [mailboxId, caseId]);
 
-	useEffect(() => { load(); }, [load]);
+	useEffect(() => {
+		load();
+	}, [load]);
 
 	// Poll for the AI co-pilot summary (issue #127) while it's still
 	// generating. Stops on any terminal status ('ready' / 'failed') or
@@ -257,7 +272,11 @@ export default function CaseDetailRoute() {
 						{data.title}
 					</h1>
 					<div className="text-[12px] text-ink-3 pp-mono truncate">
-						<BriefcaseIcon size={11} weight="regular" className="inline-block mr-1 align-[-1px]" />
+						<BriefcaseIcon
+							size={11}
+							weight="regular"
+							className="inline-block mr-1 align-[-1px]"
+						/>
 						{data.id}
 					</div>
 				</div>
@@ -300,9 +319,7 @@ export default function CaseDetailRoute() {
 											to={`/mailbox/${encodeURIComponent(mailboxId ?? "")}/emails/inbox?selected=${encodeURIComponent(e.email_id)}`}
 											className="block rounded-md border border-line bg-paper-2 px-3 py-2 text-[12.5px] hover:border-line-strong transition-colors"
 										>
-											<span className="pp-mono text-ink-2">
-												{e.email_id}
-											</span>
+											<span className="pp-mono text-ink-2">{e.email_id}</span>
 										</Link>
 									</li>
 								))}
@@ -423,7 +440,11 @@ interface CoPilotSummaryCardProps {
 	onRetry: () => void;
 }
 
-function CoPilotSummaryCard({ status, summary, onRetry }: CoPilotSummaryCardProps) {
+function CoPilotSummaryCard({
+	status,
+	summary,
+	onRetry,
+}: CoPilotSummaryCardProps) {
 	return (
 		<div className="pp-card p-5" data-testid="copilot-summary-card">
 			<div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-2">
@@ -456,7 +477,11 @@ function CoPilotSummaryCard({ status, summary, onRetry }: CoPilotSummaryCardProp
 					data-testid="copilot-summary-failed"
 				>
 					<div className="flex items-start gap-1.5 text-danger">
-						<WarningIcon size={13} weight="fill" className="mt-[2px] shrink-0" />
+						<WarningIcon
+							size={13}
+							weight="fill"
+							className="mt-[2px] shrink-0"
+						/>
 						<span>Couldn't generate a summary for this case.</span>
 					</div>
 					<button
@@ -486,7 +511,11 @@ function PipelineTraceErrorCard({ reason }: PipelineTraceErrorCardProps) {
 				Pipeline trace
 			</div>
 			<div className="flex items-start gap-1.5 text-[12.5px] text-ink-3">
-				<WarningIcon size={13} weight="fill" className="mt-[2px] shrink-0 text-danger" />
+				<WarningIcon
+					size={13}
+					weight="fill"
+					className="mt-[2px] shrink-0 text-danger"
+				/>
 				<span>
 					Pipeline trace unavailable
 					<span className="pp-mono text-ink-3"> ({reason})</span>

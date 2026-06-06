@@ -6,15 +6,43 @@ import { Loader } from "@cloudflare/kumo";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 
+// ⚡ Bolt: Cache Intl.DateTimeFormat instances to prevent expensive instantiations
+// inside loops (e.g. mapping over table rows).
+// We use the default options for toLocaleString (date and time) by specifying both.
+const defaultDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+	year: "numeric",
+	month: "numeric",
+	day: "numeric",
+	hour: "numeric",
+	minute: "numeric",
+	second: "numeric",
+});
+
+// We use the default options for toLocaleDateString
+const defaultDateFormatter = new Intl.DateTimeFormat(undefined, {
+	year: "numeric",
+	month: "numeric",
+	day: "numeric",
+});
+
 /** RFC 4180 field escape: always wraps in double-quotes, escapes embedded quotes by doubling. */
 export function csvEscapeField(value: string | number): string {
 	return `"${String(value).replace(/"/g, '""')}"`;
 }
 
 export function sourcesToCsv(sources: DmarcSource[]): string {
-	const header = "source_ip,total_count,pass_count,quarantine_count,reject_count,first_seen,last_seen";
+	const header =
+		"source_ip,total_count,pass_count,quarantine_count,reject_count,first_seen,last_seen";
 	const rows = sources.map((s) =>
-		[s.source_ip, s.total_count, s.pass_count, s.quarantine_count, s.reject_count, s.first_seen, s.last_seen]
+		[
+			s.source_ip,
+			s.total_count,
+			s.pass_count,
+			s.quarantine_count,
+			s.reject_count,
+			s.first_seen,
+			s.last_seen,
+		]
 			.map(csvEscapeField)
 			.join(","),
 	);
@@ -167,11 +195,17 @@ function DmarcTimeSeriesChart({ data }: { data: DmarcTimeSeriesPoint[] }) {
 			</svg>
 			<div className="flex items-center gap-4 mt-2 text-xs text-ink-3">
 				<span className="flex items-center gap-1">
-					<span className="inline-block w-3 h-3 rounded-sm" style={{ background: "var(--color-safe, #22c55e)" }} />
+					<span
+						className="inline-block w-3 h-3 rounded-sm"
+						style={{ background: "var(--color-safe, #22c55e)" }}
+					/>
 					Aligned (dkim or spf pass)
 				</span>
 				<span className="flex items-center gap-1">
-					<span className="inline-block w-3 h-3 rounded-sm" style={{ background: "var(--color-danger, #ef4444)" }} />
+					<span
+						className="inline-block w-3 h-3 rounded-sm"
+						style={{ background: "var(--color-danger, #ef4444)" }}
+					/>
 					Failing (both fail)
 				</span>
 			</div>
@@ -195,11 +229,15 @@ export default function DmarcRoute() {
 	const [rollup, setRollup] = useState<DmarcRollup | null>(null);
 	const [showUnknownOnly, setShowUnknownOnly] = useState(false);
 	const [togglingIp, setTogglingIp] = useState<string | null>(null);
-	const [timeseries, setTimeseries] = useState<DmarcTimeSeriesPoint[] | null>(null);
+	const [timeseries, setTimeseries] = useState<DmarcTimeSeriesPoint[] | null>(
+		null,
+	);
 
 	useEffect(() => {
 		if (!mailboxId) return;
-		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/reports?limit=100`)
+		fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/reports?limit=100`,
+		)
 			.then((r) => r.json() as Promise<{ reports: DmarcReport[] }>)
 			.then((r) => {
 				setReports(r.reports);
@@ -211,7 +249,9 @@ export default function DmarcRoute() {
 	useEffect(() => {
 		if (!mailboxId || !domain) return;
 		setSources(null);
-		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/summary?domain=${encodeURIComponent(domain)}&days=${days}`)
+		fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/summary?domain=${encodeURIComponent(domain)}&days=${days}`,
+		)
 			.then((r) => r.json() as Promise<{ sources: DmarcSource[] }>)
 			.then((r) => setSources(r.sources))
 			.catch((e) => console.error("dmarc summary fetch failed", e));
@@ -225,21 +265,36 @@ export default function DmarcRoute() {
 		const domainReports = reports.filter((r) => !domain || r.domain === domain);
 		Promise.all(
 			domainReports.map((rep) =>
-				fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/reports/${encodeURIComponent(rep.id)}/records`)
-					.then((r) => r.json() as Promise<{ records: Array<{ source_ip: string; count: number; disposition?: string | null; dkim_result?: string | null; spf_result?: string | null; auth_results?: DmarcAuthResults | null }> }>)
-					.then((r) => r.records
-						.filter((rec) => rec.source_ip === selectedIp)
-						.map((rec) => ({
-							report_id: rep.id,
-							count: rec.count,
-							disposition: rec.disposition,
-							dkim_result: rec.dkim_result,
-							spf_result: rec.spf_result,
-							auth_results: rec.auth_results,
-							date_range_begin: rep.date_range_begin,
-							date_range_end: rep.date_range_end,
-							org_name: rep.org_name,
-						})),
+				fetch(
+					`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/reports/${encodeURIComponent(rep.id)}/records`,
+				)
+					.then(
+						(r) =>
+							r.json() as Promise<{
+								records: Array<{
+									source_ip: string;
+									count: number;
+									disposition?: string | null;
+									dkim_result?: string | null;
+									spf_result?: string | null;
+									auth_results?: DmarcAuthResults | null;
+								}>;
+							}>,
+					)
+					.then((r) =>
+						r.records
+							.filter((rec) => rec.source_ip === selectedIp)
+							.map((rec) => ({
+								report_id: rep.id,
+								count: rec.count,
+								disposition: rec.disposition,
+								dkim_result: rec.dkim_result,
+								spf_result: rec.spf_result,
+								auth_results: rec.auth_results,
+								date_range_begin: rep.date_range_begin,
+								date_range_end: rep.date_range_end,
+								org_name: rep.org_name,
+							})),
 					)
 					.catch(() => [] as DrillDownRecord[]),
 			),
@@ -260,7 +315,9 @@ export default function DmarcRoute() {
 	useEffect(() => {
 		if (!mailboxId || !domain) return;
 		setTimeseries(null);
-		fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/timeseries?domain=${encodeURIComponent(domain)}&days=${days}`)
+		fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/dmarc/timeseries?domain=${encodeURIComponent(domain)}&days=${days}`,
+		)
 			.then((r) => r.json() as Promise<{ timeseries: DmarcTimeSeriesPoint[] }>)
 			.then((r) => setTimeseries(r.timeseries))
 			.catch((e) => console.error("dmarc timeseries fetch failed", e));
@@ -274,7 +331,9 @@ export default function DmarcRoute() {
 
 	function handleDownloadCsv() {
 		if (!sources || sources.length === 0) return;
-		const blob = new Blob([sourcesToCsv(sources)], { type: "text/csv;charset=utf-8;" });
+		const blob = new Blob([sourcesToCsv(sources)], {
+			type: "text/csv;charset=utf-8;",
+		});
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement("a");
 		a.href = url;
@@ -301,7 +360,7 @@ export default function DmarcRoute() {
 							s.source_ip === source.source_ip
 								? { ...s, legitimate: source.legitimate === 0 ? 1 : 0 }
 								: s,
-					  )
+						)
 					: prev,
 			);
 		} catch (e) {
@@ -312,7 +371,11 @@ export default function DmarcRoute() {
 	}
 
 	if (!reports) {
-		return <div className="flex justify-center py-20"><Loader size="lg" /></div>;
+		return (
+			<div className="flex justify-center py-20">
+				<Loader size="lg" />
+			</div>
+		);
 	}
 
 	if (reports.length === 0) {
@@ -320,14 +383,17 @@ export default function DmarcRoute() {
 			<div className="max-w-3xl px-4 py-6 md:px-8">
 				<h1 className="pp-serif text-ink mb-4">DMARC Reports</h1>
 				<div className="rounded-lg border border-line p-6 text-ink-3">
-					No DMARC reports received yet. Publish <code>rua=mailto:dmarc-reports@your-domain</code>
+					No DMARC reports received yet. Publish{" "}
+					<code>rua=mailto:dmarc-reports@your-domain</code>
 					in your domain's DMARC record to start receiving them.
 				</div>
 			</div>
 		);
 	}
 
-	const activePolicyReport = reports.find((r) => !domain || r.domain === domain);
+	const activePolicyReport = reports.find(
+		(r) => !domain || r.domain === domain,
+	);
 	const displayedSources = sources
 		? showUnknownOnly
 			? sources.filter((s) => s.legitimate === 0)
@@ -340,9 +406,12 @@ export default function DmarcRoute() {
 
 			{rollup && rollup.domains.length > 1 && (
 				<section className="mb-8">
-					<h2 className="text-sm font-semibold text-ink mb-1">All-domain rollup</h2>
+					<h2 className="text-sm font-semibold text-ink mb-1">
+						All-domain rollup
+					</h2>
 					<p className="text-xs text-ink-3 mb-3">
-						Ingested RUA data · last {rollup.window_days} days · sorted by worst alignment first
+						Ingested RUA data · last {rollup.window_days} days · sorted by worst
+						alignment first
 					</p>
 					<div className="overflow-x-auto rounded-lg border border-line">
 						<table className="w-full text-sm">
@@ -366,10 +435,16 @@ export default function DmarcRoute() {
 											onClick={() => setDomain(row.domain)}
 											title={`View ${row.domain} in detail below`}
 										>
-											<td className="px-3 py-2 font-mono text-ink">{row.domain}</td>
+											<td className="px-3 py-2 font-mono text-ink">
+												{row.domain}
+											</td>
 											<td className="px-3 py-2 text-right">{row.total}</td>
-											<td className="px-3 py-2 text-right text-safe">{row.aligned}</td>
-											<td className="px-3 py-2 text-right text-danger">{row.failing}</td>
+											<td className="px-3 py-2 text-right text-safe">
+												{row.aligned}
+											</td>
+											<td className="px-3 py-2 text-right text-danger">
+												{row.failing}
+											</td>
 											<td className="px-3 py-2">
 												<span className={isBad ? "text-danger" : "text-ink"}>
 													{Math.round(rate * 100)}%
@@ -392,7 +467,11 @@ export default function DmarcRoute() {
 						onChange={(e) => setDomain(e.target.value)}
 						className="rounded border border-line bg-paper-3 px-2 py-1 text-sm"
 					>
-						{domains.map((d) => <option key={d} value={d}>{d}</option>)}
+						{domains.map((d) => (
+							<option key={d} value={d}>
+								{d}
+							</option>
+						))}
 					</select>
 				</div>
 				<div className="flex items-center gap-2">
@@ -412,37 +491,49 @@ export default function DmarcRoute() {
 				</div>
 			</div>
 
-			{activePolicyReport && (activePolicyReport.policy_adkim || activePolicyReport.policy_aspf || activePolicyReport.policy_sp || activePolicyReport.policy_pct) && (
-				<div className="mb-6 flex flex-wrap gap-3">
-					{activePolicyReport.policy_adkim && (
-						<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
-							<span className="font-medium text-ink">adkim</span>={activePolicyReport.policy_adkim}
-						</span>
-					)}
-					{activePolicyReport.policy_aspf && (
-						<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
-							<span className="font-medium text-ink">aspf</span>={activePolicyReport.policy_aspf}
-						</span>
-					)}
-					{activePolicyReport.policy_sp && (
-						<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
-							<span className="font-medium text-ink">sp</span>={activePolicyReport.policy_sp}
-						</span>
-					)}
-					{activePolicyReport.policy_pct && (
-						<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
-							<span className="font-medium text-ink">pct</span>={activePolicyReport.policy_pct}%
-						</span>
-					)}
-				</div>
-			)}
+			{activePolicyReport &&
+				(activePolicyReport.policy_adkim ||
+					activePolicyReport.policy_aspf ||
+					activePolicyReport.policy_sp ||
+					activePolicyReport.policy_pct) && (
+					<div className="mb-6 flex flex-wrap gap-3">
+						{activePolicyReport.policy_adkim && (
+							<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
+								<span className="font-medium text-ink">adkim</span>=
+								{activePolicyReport.policy_adkim}
+							</span>
+						)}
+						{activePolicyReport.policy_aspf && (
+							<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
+								<span className="font-medium text-ink">aspf</span>=
+								{activePolicyReport.policy_aspf}
+							</span>
+						)}
+						{activePolicyReport.policy_sp && (
+							<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
+								<span className="font-medium text-ink">sp</span>=
+								{activePolicyReport.policy_sp}
+							</span>
+						)}
+						{activePolicyReport.policy_pct && (
+							<span className="inline-flex items-center gap-1 rounded-full border border-line bg-paper-3 px-2 py-0.5 text-xs text-ink-3">
+								<span className="font-medium text-ink">pct</span>=
+								{activePolicyReport.policy_pct}%
+							</span>
+						)}
+					</div>
+				)}
 
 			<section className="mb-8">
-				<h2 className="text-sm font-semibold text-ink mb-3">Daily aligned vs failing (last {days} days)</h2>
+				<h2 className="text-sm font-semibold text-ink mb-3">
+					Daily aligned vs failing (last {days} days)
+				</h2>
 				{!timeseries ? (
 					<div className="text-ink-3 text-sm">Loading…</div>
 				) : timeseries.length === 0 ? (
-					<div className="text-ink-3 text-sm">No time-series data for this domain.</div>
+					<div className="text-ink-3 text-sm">
+						No time-series data for this domain.
+					</div>
 				) : (
 					<DmarcTimeSeriesChart data={timeseries} />
 				)}
@@ -499,7 +590,8 @@ export default function DmarcRoute() {
 							</thead>
 							<tbody>
 								{displayedSources.map((s) => {
-									const rate = s.total_count > 0 ? s.pass_count / s.total_count : 0;
+									const rate =
+										s.total_count > 0 ? s.pass_count / s.total_count : 0;
 									const suspect = rate < 0.5 && s.total_count >= 5;
 									const isSelected = selectedIp === s.source_ip;
 									const isUnknown = s.legitimate === 0;
@@ -508,16 +600,32 @@ export default function DmarcRoute() {
 										<tr
 											key={s.source_ip}
 											className={`border-t border-line cursor-pointer hover:bg-paper-2 ${suspect ? "bg-paper-3" : ""} ${isSelected ? "ring-1 ring-inset ring-accent" : ""}`}
-											onClick={() => setSelectedIp(isSelected ? null : s.source_ip)}
+											onClick={() =>
+												setSelectedIp(isSelected ? null : s.source_ip)
+											}
 										>
-											<td className="px-3 py-2 font-mono text-ink">{s.source_ip}</td>
-											<td className="px-3 py-2 text-ink-3">{s.label ?? s.source_ip}</td>
-											<td className="px-3 py-2 text-ink-3">{s.country ?? "—"}</td>
-											<td className="px-3 py-2 text-ink-3 text-xs">{s.asn ?? "—"}</td>
+											<td className="px-3 py-2 font-mono text-ink">
+												{s.source_ip}
+											</td>
+											<td className="px-3 py-2 text-ink-3">
+												{s.label ?? s.source_ip}
+											</td>
+											<td className="px-3 py-2 text-ink-3">
+												{s.country ?? "—"}
+											</td>
+											<td className="px-3 py-2 text-ink-3 text-xs">
+												{s.asn ?? "—"}
+											</td>
 											<td className="px-3 py-2 text-right">{s.total_count}</td>
-											<td className="px-3 py-2 text-right text-safe">{s.pass_count}</td>
-											<td className="px-3 py-2 text-right text-suspect">{s.quarantine_count}</td>
-											<td className="px-3 py-2 text-right text-danger">{s.reject_count}</td>
+											<td className="px-3 py-2 text-right text-safe">
+												{s.pass_count}
+											</td>
+											<td className="px-3 py-2 text-right text-suspect">
+												{s.quarantine_count}
+											</td>
+											<td className="px-3 py-2 text-right text-danger">
+												{s.reject_count}
+											</td>
 											<td className="px-3 py-2">
 												<span className={suspect ? "text-danger" : "text-ink"}>
 													{Math.round(rate * 100)}%
@@ -539,7 +647,11 @@ export default function DmarcRoute() {
 														disabled={isToggling}
 														className="text-xs text-ink-3 hover:text-ink underline disabled:opacity-50"
 													>
-														{isToggling ? "…" : isUnknown ? "Mark legitimate" : "Mark unknown"}
+														{isToggling
+															? "…"
+															: isUnknown
+																? "Mark legitimate"
+																: "Mark unknown"}
 													</button>
 												</div>
 											</td>
@@ -573,28 +685,69 @@ export default function DmarcRoute() {
 					) : (
 						<div className="space-y-3">
 							{drillDown.map((entry, i) => (
-								<div key={`${entry.report_id}-${i}`} className="rounded border border-line p-3 text-xs">
+								<div
+									key={`${entry.report_id}-${i}`}
+									className="rounded border border-line p-3 text-xs"
+								>
 									<div className="flex flex-wrap gap-3 mb-2 text-ink-3">
-										{entry.org_name && <span>Reporter: <span className="text-ink">{entry.org_name}</span></span>}
+										{entry.org_name && (
+											<span>
+												Reporter:{" "}
+												<span className="text-ink">{entry.org_name}</span>
+											</span>
+										)}
 										{entry.date_range_begin && (
 											<span>
-												Period: <span className="text-ink">
-													{new Date(Number(entry.date_range_begin) * 1000).toLocaleDateString()} – {new Date(Number(entry.date_range_end) * 1000).toLocaleDateString()}
+												Period:{" "}
+												<span className="text-ink">
+													{defaultDateFormatter.format(
+														Number(entry.date_range_begin) * 1000,
+													)}{" "}
+													–{" "}
+													{defaultDateFormatter.format(
+														Number(entry.date_range_end) * 1000,
+													)}
 												</span>
 											</span>
 										)}
-										<span>Messages: <span className="text-ink">{entry.count}</span></span>
-										{entry.disposition && <span>Disposition: <span className={entry.disposition === "none" ? "text-safe" : "text-danger"}>{entry.disposition}</span></span>}
+										<span>
+											Messages: <span className="text-ink">{entry.count}</span>
+										</span>
+										{entry.disposition && (
+											<span>
+												Disposition:{" "}
+												<span
+													className={
+														entry.disposition === "none"
+															? "text-safe"
+															: "text-danger"
+													}
+												>
+													{entry.disposition}
+												</span>
+											</span>
+										)}
 									</div>
 									{entry.auth_results && (
 										<div className="flex flex-wrap gap-4">
 											{entry.auth_results.dkim.length > 0 && (
 												<div>
-													<div className="font-medium text-ink-3 mb-1">DKIM</div>
+													<div className="font-medium text-ink-3 mb-1">
+														DKIM
+													</div>
 													{entry.auth_results.dkim.map((d, j) => (
 														<div key={j} className="font-mono text-ink">
-															{d.domain}{d.selector ? `/${d.selector}` : ""}&nbsp;
-															<span className={d.result === "pass" ? "text-safe" : "text-danger"}>{d.result}</span>
+															{d.domain}
+															{d.selector ? `/${d.selector}` : ""}&nbsp;
+															<span
+																className={
+																	d.result === "pass"
+																		? "text-safe"
+																		: "text-danger"
+																}
+															>
+																{d.result}
+															</span>
 														</div>
 													))}
 												</div>
@@ -605,7 +758,15 @@ export default function DmarcRoute() {
 													{entry.auth_results.spf.map((s, j) => (
 														<div key={j} className="font-mono text-ink">
 															{s.domain}&nbsp;
-															<span className={s.result === "pass" ? "text-safe" : "text-danger"}>{s.result}</span>
+															<span
+																className={
+																	s.result === "pass"
+																		? "text-safe"
+																		: "text-danger"
+																}
+															>
+																{s.result}
+															</span>
 														</div>
 													))}
 												</div>
@@ -632,14 +793,20 @@ export default function DmarcRoute() {
 							</tr>
 						</thead>
 						<tbody>
-							{reports.filter((r) => !domain || r.domain === domain).map((r) => (
-								<tr key={r.id} className="border-t border-line">
-									<td className="px-3 py-2 text-ink-3">{new Date(r.received_at).toLocaleString()}</td>
-									<td className="px-3 py-2">{r.org_name ?? "unknown"}</td>
-									<td className="px-3 py-2 font-mono">{r.domain}</td>
-									<td className="px-3 py-2">{r.policy_p ?? "none"}</td>
-								</tr>
-							))}
+							{reports
+								.filter((r) => !domain || r.domain === domain)
+								.map((r) => (
+									<tr key={r.id} className="border-t border-line">
+										<td className="px-3 py-2 text-ink-3">
+											{defaultDateTimeFormatter.format(
+												Date.parse(r.received_at),
+											)}
+										</td>
+										<td className="px-3 py-2">{r.org_name ?? "unknown"}</td>
+										<td className="px-3 py-2 font-mono">{r.domain}</td>
+										<td className="px-3 py-2">{r.policy_p ?? "none"}</td>
+									</tr>
+								))}
 						</tbody>
 					</table>
 				</div>
