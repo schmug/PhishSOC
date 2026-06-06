@@ -1324,17 +1324,17 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 	}
 
-	/** Returns IPs from `candidates` that have no row yet in `dmarc_sources`. */
+	/** Returns IPs that still need PTR label enrichment (no row, or label unset). */
 	private getNewDmarcSourceIps(candidates: string[]): string[] {
 		const distinct = [...new Set(candidates)];
 		return distinct.filter((ip) => {
 			const existing = [
 				...this.ctx.storage.sql.exec(
-					`SELECT 1 FROM dmarc_sources WHERE source_ip = ?1`,
+					`SELECT label FROM dmarc_sources WHERE source_ip = ?1`,
 					ip,
 				),
-			];
-			return existing.length === 0;
+			] as Array<{ label: string | null }>;
+			return existing.length === 0 || existing[0].label == null;
 		});
 	}
 
@@ -1345,7 +1345,9 @@ export class MailboxDO extends DurableObject<Env> {
 				const hostname = await resolvePtr(ip);
 				const label = buildDmarcSourceLabel(hostname);
 				this.ctx.storage.sql.exec(
-					`INSERT OR IGNORE INTO dmarc_sources (source_ip, label) VALUES (?1, ?2)`,
+					`INSERT INTO dmarc_sources (source_ip, label) VALUES (?1, ?2)
+					 ON CONFLICT(source_ip) DO UPDATE SET
+					   label = COALESCE(dmarc_sources.label, excluded.label)`,
 					ip,
 					label,
 				);
@@ -1353,7 +1355,8 @@ export class MailboxDO extends DurableObject<Env> {
 				// Best-effort: persist a null-label row so we don't retry on the next ingest.
 				try {
 					this.ctx.storage.sql.exec(
-						`INSERT OR IGNORE INTO dmarc_sources (source_ip, label) VALUES (?1, NULL)`,
+						`INSERT INTO dmarc_sources (source_ip, label) VALUES (?1, NULL)
+						 ON CONFLICT(source_ip) DO NOTHING`,
 						ip,
 					);
 				} catch {
@@ -1624,7 +1627,7 @@ export class MailboxDO extends DurableObject<Env> {
 				`SELECT
 				   r.source_ip as source_ip,
 				   SUM(r.count) as total_count,
-				   SUM(CASE WHEN r.dkim_result = 'pass' AND r.spf_result = 'pass' THEN r.count ELSE 0 END) as pass_count,
+				   SUM(CASE WHEN r.dkim_result = 'pass' OR r.spf_result = 'pass' THEN r.count ELSE 0 END) as pass_count,
 				   SUM(CASE WHEN r.disposition = 'quarantine' THEN r.count ELSE 0 END) as quarantine_count,
 				   SUM(CASE WHEN r.disposition = 'reject' THEN r.count ELSE 0 END) as reject_count,
 				   MIN(rep.received_at) as first_seen,
