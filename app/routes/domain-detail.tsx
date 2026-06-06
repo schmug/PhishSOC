@@ -10,7 +10,11 @@ import {
 } from "@phosphor-icons/react";
 import { Link as RouterLink, useParams } from "react-router";
 import Shell from "~/components/phishsoc/Shell";
-import { useCatchallIntel, useDomainStats, useRufRecords } from "~/queries/domains";
+import {
+	useCatchallIntel,
+	useDomainStats,
+	useRufRecords,
+} from "~/queries/domains";
 import type {
 	CatchallRecentSample,
 	CatchallSourceRollup,
@@ -43,7 +47,12 @@ export default function DomainDetailRoute() {
 				) : isError ? (
 					<DomainError onRetry={() => refetch()} />
 				) : data ? (
-					<DomainBody data={data} rufData={rufQuery.data} catchallData={catchallQuery.data} catchallLoading={catchallQuery.isLoading} />
+					<DomainBody
+						data={data}
+						rufData={rufQuery.data}
+						catchallData={catchallQuery.data}
+						catchallLoading={catchallQuery.isLoading}
+					/>
 				) : null}
 			</div>
 		</Shell>
@@ -53,7 +62,10 @@ export default function DomainDetailRoute() {
 function DomainHeader({
 	domain,
 	data,
-}: { domain: string; data: DomainStats | undefined }) {
+}: {
+	domain: string;
+	data: DomainStats | undefined;
+}) {
 	const subtitle = data
 		? `${data.mailboxes.length} mailbox${data.mailboxes.length === 1 ? "" : "es"}`
 		: "Per-domain operations";
@@ -83,7 +95,8 @@ function DomainError({ onRetry }: { onRetry: () => void }) {
 					Couldn't load this domain
 				</div>
 				<p className="text-[12.5px] text-ink-3 leading-relaxed mb-2">
-					The domain stats endpoint didn't respond. Check the worker logs and retry.
+					The domain stats endpoint didn't respond. Check the worker logs and
+					retry.
 				</p>
 				<button
 					type="button"
@@ -126,7 +139,9 @@ function DomainBody({
 				<DnssecPostureCard posture={data.dnssec} />
 			</div>
 			<MailboxList mailboxes={data.mailboxes} />
-			{data.recentCases.length > 0 && <RecentCasesList cases={data.recentCases} />}
+			{data.recentCases.length > 0 && (
+				<RecentCasesList cases={data.recentCases} />
+			)}
 			{rufData?.enabled && rufData.records.length > 0 && (
 				<RufFailuresTable records={rufData.records} />
 			)}
@@ -172,9 +187,9 @@ const VERDICT_LABEL: Record<keyof OrgVerdictMix, string> = {
 };
 
 function VerdictMixCard({ mix }: { mix: OrgVerdictMix }) {
-	const entries = (Object.keys(VERDICT_LABEL) as Array<keyof OrgVerdictMix>).map(
-		(k) => ({ key: k, label: VERDICT_LABEL[k], count: mix[k] }),
-	);
+	const entries = (
+		Object.keys(VERDICT_LABEL) as Array<keyof OrgVerdictMix>
+	).map((k) => ({ key: k, label: VERDICT_LABEL[k], count: mix[k] }));
 	const total = entries.reduce((sum, e) => sum + e.count, 0);
 	return (
 		<div className="pp-card p-5 lg:col-span-2 flex flex-col gap-3">
@@ -219,7 +234,9 @@ function VerdictMixCard({ mix }: { mix: OrgVerdictMix }) {
 
 function DmarcPostureCard({
 	posture,
-}: { posture: DomainStats["dmarcPosture"] }) {
+}: {
+	posture: DomainStats["dmarcPosture"];
+}) {
 	// All-null posture is the v1 norm — real DMARC report ingestion at the
 	// apex-domain level isn't shipping in this iteration. Render an
 	// "unavailable" affordance rather than misleading defaults.
@@ -275,7 +292,10 @@ function DmarcPostureCard({
 function MtaStsPostureCard({
 	posture,
 	domain,
-}: { posture: DomainStats["mtaStsPosture"]; domain: string }) {
+}: {
+	posture: DomainStats["mtaStsPosture"];
+	domain: string;
+}) {
 	const allNull =
 		posture.mode === null &&
 		posture.mx === null &&
@@ -294,14 +314,14 @@ function MtaStsPostureCard({
 			</div>
 			{allNull ? (
 				<p className="text-[12.5px] text-ink-3">
-					MTA-STS isn't published for this domain (or the lookup failed). Operators
-					configure it by publishing a `_mta-sts` TXT record plus a policy file at
-					`mta-sts.&lt;domain&gt;/.well-known/mta-sts.txt`.
+					MTA-STS isn't published for this domain (or the lookup failed).
+					Operators configure it by publishing a `_mta-sts` TXT record plus a
+					policy file at `mta-sts.&lt;domain&gt;/.well-known/mta-sts.txt`.
 				</p>
 			) : txtPublishedPolicyAbsent ? (
 				<p className="text-[12.5px] text-ink-3">
-					TXT record present (id: <span className="pp-mono">{posture.id}</span>) but
-					policy file unreachable — check that{" "}
+					TXT record present (id: <span className="pp-mono">{posture.id}</span>)
+					but policy file unreachable — check that{" "}
 					<span className="pp-mono">
 						mta-sts.{domain}/.well-known/mta-sts.txt
 					</span>{" "}
@@ -313,9 +333,7 @@ function MtaStsPostureCard({
 					<PostureRow
 						label="mx"
 						value={
-							posture.mx && posture.mx.length > 0
-								? posture.mx.join(", ")
-								: "—"
+							posture.mx && posture.mx.length > 0 ? posture.mx.join(", ") : "—"
 						}
 					/>
 					<PostureRow
@@ -329,9 +347,7 @@ function MtaStsPostureCard({
 	);
 }
 
-function BimiPostureCard({
-	posture,
-}: { posture: DomainStats["bimiPosture"] }) {
+function BimiPostureCard({ posture }: { posture: DomainStats["bimiPosture"] }) {
 	return (
 		<div className="pp-card p-5">
 			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
@@ -342,16 +358,16 @@ function BimiPostureCard({
 				<p className="text-[12.5px] text-ink-3">not configured</p>
 			) : (
 				<p className="text-[12.5px] text-ink">
-					{posture.hasVmc ? "configured (with VMC)" : "configured (without VMC)"}
+					{posture.hasVmc
+						? "configured (with VMC)"
+						: "configured (without VMC)"}
 				</p>
 			)}
 		</div>
 	);
 }
 
-function SpfPostureCard({
-	posture,
-}: { posture: DomainStats["spfPosture"] }) {
+function SpfPostureCard({ posture }: { posture: DomainStats["spfPosture"] }) {
 	const allNull =
 		posture.record === null &&
 		posture.allQualifier === null &&
@@ -370,13 +386,14 @@ function SpfPostureCard({
 				</p>
 			) : (
 				<dl className="space-y-1.5 text-[12.5px]">
-					<PostureRow
-						label="all"
-						value={posture.allQualifier ?? "—"}
-					/>
+					<PostureRow label="all" value={posture.allQualifier ?? "—"} />
 					<PostureRow
 						label="mechanisms"
-						value={posture.mechanismCount === null ? "—" : String(posture.mechanismCount)}
+						value={
+							posture.mechanismCount === null
+								? "—"
+								: String(posture.mechanismCount)
+						}
 					/>
 					<PostureRow
 						label="includes"
@@ -400,7 +417,9 @@ function SpfPostureCard({
 
 function TlsRptPostureCard({
 	posture,
-}: { posture: DomainStats["tlsRptPosture"] }) {
+}: {
+	posture: DomainStats["tlsRptPosture"];
+}) {
 	// Per #168 constraint: "Unavailable" (configured=null) and "genuinely
 	// missing" (configured=false) render the SAME empty-state affordance.
 	// Operators don't need to distinguish "lookup blip" from "no record" at
@@ -451,7 +470,11 @@ function TlsRptPostureCard({
 	);
 }
 
-function DkimSourceBadge({ source }: { source?: "observed" | "probed" | "both" }) {
+function DkimSourceBadge({
+	source,
+}: {
+	source?: "observed" | "probed" | "both";
+}) {
 	if (!source || source === "observed") return null;
 	const label = source === "both" ? "observed+probed" : "probed";
 	return (
@@ -461,9 +484,7 @@ function DkimSourceBadge({ source }: { source?: "observed" | "probed" | "both" }
 	);
 }
 
-function DkimPostureCard({
-	posture,
-}: { posture: DomainStats["dkimPosture"] }) {
+function DkimPostureCard({ posture }: { posture: DomainStats["dkimPosture"] }) {
 	// Per #170 constraint: "Unavailable" (published=null) and "genuinely
 	// missing" (published=false) render the SAME affordance — the operator
 	// just sees "missing" and re-checks on the next refresh. The KV layer
@@ -477,18 +498,20 @@ function DkimPostureCard({
 			</div>
 			{selectors.length === 0 ? (
 				<p className="text-[12.5px] text-ink-3">
-					No DKIM selectors observed signing as this domain (`d=`) in the
-					last 30 days. Selectors are lifted from messages where
-					`header.d=` matches this domain — mail your mailboxes receive
-					from other senders is signed under their own `d=`, so those
-					selectors don't appear here. Each selector is resolved at
-					`&lt;selector&gt;._domainkey.&lt;domain&gt;` to confirm the
-					record is still published.
+					No DKIM selectors observed signing as this domain (`d=`) in the last
+					30 days. Selectors are lifted from messages where `header.d=` matches
+					this domain — mail your mailboxes receive from other senders is signed
+					under their own `d=`, so those selectors don't appear here. Each
+					selector is resolved at `&lt;selector&gt;._domainkey.&lt;domain&gt;`
+					to confirm the record is still published.
 				</p>
 			) : (
 				<dl className="space-y-1.5 text-[12.5px]">
 					{selectors.map((s) => (
-						<div key={s.selector} className="flex items-baseline justify-between gap-3">
+						<div
+							key={s.selector}
+							className="flex items-baseline justify-between gap-3"
+						>
 							<dt className="text-ink-3 flex items-center">
 								{s.selector}
 								<DkimSourceBadge source={s.source} />
@@ -503,6 +526,15 @@ function DkimPostureCard({
 		</div>
 	);
 }
+
+// ⚡ Bolt: Cache Intl.DateTimeFormat instances to prevent expensive instantiations
+// inside loops (e.g. mapping over table rows).
+const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+	month: "short",
+	day: "numeric",
+	hour: "2-digit",
+	minute: "2-digit",
+});
 
 function RufFailuresTable({ records }: { records: DmarcRufRecord[] }) {
 	return (
@@ -527,12 +559,7 @@ function RufFailuresTable({ records }: { records: DmarcRufRecord[] }) {
 							<tr key={r.id} className="align-top">
 								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-3 whitespace-nowrap">
 									{r.received_at
-										? new Date(r.received_at).toLocaleString(undefined, {
-												month: "short",
-												day: "numeric",
-												hour: "2-digit",
-												minute: "2-digit",
-											})
+										? dateTimeFormatter.format(Date.parse(r.received_at))
 										: "—"}
 								</td>
 								<td className="py-2 pr-4 pp-mono text-ink-2">
@@ -571,7 +598,9 @@ function DnssecPostureCard({ posture }: { posture: DnssecPosture }) {
 				<ShieldCheckIcon size={12} />
 				DNSSEC
 			</div>
-			<p className={`text-[12.5px] ${posture.signed ? "text-ink" : "text-ink-3"}`}>
+			<p
+				className={`text-[12.5px] ${posture.signed ? "text-ink" : "text-ink-3"}`}
+			>
 				{statusText}
 			</p>
 		</div>
@@ -587,9 +616,7 @@ function PostureRow({ label, value }: { label: string; value: string }) {
 	);
 }
 
-function MailboxList({
-	mailboxes,
-}: { mailboxes: DomainStats["mailboxes"] }) {
+function MailboxList({ mailboxes }: { mailboxes: DomainStats["mailboxes"] }) {
 	return (
 		<div className="pp-card p-5">
 			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
@@ -619,9 +646,7 @@ function MailboxList({
 	);
 }
 
-function RecentCasesList({
-	cases,
-}: { cases: DomainStats["recentCases"] }) {
+function RecentCasesList({ cases }: { cases: DomainStats["recentCases"] }) {
 	return (
 		<div className="pp-card p-5">
 			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
@@ -675,22 +700,36 @@ function CatchallProbesCard({
 			</div>
 			{empty ? (
 				<p className="text-[12.5px] text-ink-3">
-					No catch-all probe activity recorded. Enable <span className="pp-mono">catchall_intel</span> on this domain to start collecting directory-harvest data.
+					No catch-all probe activity recorded. Enable{" "}
+					<span className="pp-mono">catchall_intel</span> on this domain to
+					start collecting directory-harvest data.
 				</p>
 			) : (
 				<div className="space-y-5">
 					<dl className="grid grid-cols-3 gap-4">
 						<div>
-							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">Probes</dt>
-							<dd className="pp-serif text-[28px] leading-none text-ink">{data.totals.probe_count}</dd>
+							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">
+								Probes
+							</dt>
+							<dd className="pp-serif text-[28px] leading-none text-ink">
+								{data.totals.probe_count}
+							</dd>
 						</div>
 						<div>
-							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">Sources</dt>
-							<dd className="pp-serif text-[28px] leading-none text-ink">{data.totals.distinct_sources}</dd>
+							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">
+								Sources
+							</dt>
+							<dd className="pp-serif text-[28px] leading-none text-ink">
+								{data.totals.distinct_sources}
+							</dd>
 						</div>
 						<div>
-							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">Local-parts tried</dt>
-							<dd className="pp-serif text-[28px] leading-none text-ink">{data.totals.distinct_localparts}</dd>
+							<dt className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-1">
+								Local-parts tried
+							</dt>
+							<dd className="pp-serif text-[28px] leading-none text-ink">
+								{data.totals.distinct_localparts}
+							</dd>
 						</div>
 					</dl>
 					{data.topSources.length > 0 && (
@@ -705,7 +744,11 @@ function CatchallProbesCard({
 	);
 }
 
-function CatchallTopSourcesTable({ sources }: { sources: CatchallSourceRollup[] }) {
+function CatchallTopSourcesTable({
+	sources,
+}: {
+	sources: CatchallSourceRollup[];
+}) {
 	return (
 		<div>
 			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
@@ -724,12 +767,21 @@ function CatchallTopSourcesTable({ sources }: { sources: CatchallSourceRollup[] 
 					</thead>
 					<tbody className="divide-y divide-line">
 						{sources.map((s) => (
-							<tr key={`${s.source_ip}:${s.sender_domain}`} className="align-top">
+							<tr
+								key={`${s.source_ip}:${s.sender_domain}`}
+								className="align-top"
+							>
 								<td className="py-2 pr-4 pp-mono text-ink-2">{s.source_ip}</td>
 								<td className="py-2 pr-4 text-ink-2">{s.sender_domain}</td>
-								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-2 text-right">{s.count}</td>
-								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-2 text-right">{s.distinct_localparts}</td>
-								<td className="py-2 pp-mono tabular-nums text-ink-2 text-right">{s.max_score}</td>
+								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-2 text-right">
+									{s.count}
+								</td>
+								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-2 text-right">
+									{s.distinct_localparts}
+								</td>
+								<td className="py-2 pp-mono tabular-nums text-ink-2 text-right">
+									{s.max_score}
+								</td>
 							</tr>
 						))}
 					</tbody>
@@ -739,7 +791,11 @@ function CatchallTopSourcesTable({ sources }: { sources: CatchallSourceRollup[] 
 	);
 }
 
-function CatchallRecentSamplesTable({ samples }: { samples: CatchallRecentSample[] }) {
+function CatchallRecentSamplesTable({
+	samples,
+}: {
+	samples: CatchallRecentSample[];
+}) {
 	return (
 		<div>
 			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
@@ -760,18 +816,19 @@ function CatchallRecentSamplesTable({ samples }: { samples: CatchallRecentSample
 						{samples.map((s) => (
 							<tr key={s.id} className="align-top">
 								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-3 whitespace-nowrap">
-									{new Date(s.ts).toLocaleString(undefined, {
-										month: "short",
-										day: "numeric",
-										hour: "2-digit",
-										minute: "2-digit",
-									})}
+									{dateTimeFormatter.format(Date.parse(s.ts))}
 								</td>
 								{/* attacker-controlled fields — rendered as text; React escapes by default */}
-								<td className="py-2 pr-4 pp-mono text-ink-2 max-w-[10rem] truncate">{s.localpart}</td>
-								<td className="py-2 pr-4 text-ink-2 max-w-[12rem] truncate">{s.sender}</td>
+								<td className="py-2 pr-4 pp-mono text-ink-2 max-w-[10rem] truncate">
+									{s.localpart}
+								</td>
+								<td className="py-2 pr-4 text-ink-2 max-w-[12rem] truncate">
+									{s.sender}
+								</td>
 								<td className="py-2 pr-4 pp-mono text-ink-2">{s.source_ip}</td>
-								<td className="py-2 pp-mono tabular-nums text-ink-2">{s.score} · {s.band}</td>
+								<td className="py-2 pp-mono tabular-nums text-ink-2">
+									{s.score} · {s.band}
+								</td>
 							</tr>
 						))}
 					</tbody>

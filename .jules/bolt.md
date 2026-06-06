@@ -12,3 +12,6 @@
 ## 2026-05-29 - Optimize Thread Message Plain Text Extraction
 **Learning:** `stripHtml` calls `htmlToPlainText` which parses HTML via a character-walking tokenizer. This occurs repeatedly during every re-render of thread rows in `ThreadMessage.tsx` (via `stripHtml(email.body || "").slice(0, 80)`). For threads with large or complex HTML bodies, this CPU-intensive re-parsing on every UI update loop can cause noticeable jank.
 **Action:** Implemented a bounded `Map` cache (size 1000) inside `stripHtml` in `app/lib/utils.ts` to memoize the plain text extraction for identical HTML strings, mirroring the existing optimization pattern used for `getSnippetText` and `formatParticipants`. This effectively eliminates redundant HTML parsing overhead during thread view rendering.
+## 2026-06-06 - Optimize Date Handling in Render Loops
+**Learning:** Instantiating `new Date` or calling `.toLocaleString()` inside loops and array sorting methods causes significant object allocation and CPU overhead. Benchmarks showed `Intl.DateTimeFormat` instantiation and `new Date` instantiation are much slower than `Date.parse()` and cached formatters.
+**Action:** Use `Date.parse()` for timestamp comparisons and cache `Intl.DateTimeFormat` instances module-globally rather than recreating them inside component render loops.
