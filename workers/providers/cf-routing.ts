@@ -15,7 +15,9 @@
 
 import PostalMime from "postal-mime";
 import type { Env } from "../types";
-import type { NormalizedInbound } from "./types";
+import type { MailboxInbound, CatchallInbound } from "./types";
+import { getDomainSettings } from "../lib/domain-settings";
+import { getOrgSettings } from "../lib/org-settings";
 
 const MAX_EMAIL_SIZE = 25 * 1024 * 1024;
 
@@ -44,17 +46,20 @@ async function streamToArrayBuffer(
 }
 
 /**
- * Normalise a CF Email Routing event into `NormalizedInbound`.
+ * Normalise a CF Email Routing event into a discriminated-union inbound value.
  *
- * Returns `null` when the email should be silently ignored (no matching
- * mailbox recipient or the mailbox does not exist); callers should return
- * without rethrowing in that case.  Any other failure is thrown so CF
- * Email Routing can retry or bounce the message.
+ * - `MailboxInbound`  — recipient matched a registered mailbox.
+ * - `CatchallInbound` — no registered mailbox, but recipient is on an owned
+ *                       domain with `catchall_intel.enabled`.
+ * - `null`            — silently drop (unowned domain, disabled catch-all, or
+ *                       an EMAIL_ADDRESSES member whose mailbox JSON is missing).
+ *
+ * Any parse/stream failure throws so CF Email Routing can retry or bounce.
  */
 export async function normalizeInbound(
 	event: { raw: ReadableStream; rawSize: number },
 	env: Env,
-): Promise<NormalizedInbound | null> {
+): Promise<MailboxInbound | CatchallInbound | null> {
 	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
 	const parsedEmail = await new PostalMime().parse(rawEmail);
 
@@ -67,22 +72,78 @@ export async function normalizeInbound(
 		.map((t) => (t as { address?: string }).address?.toLowerCase())
 		.filter((a): a is string => Boolean(a));
 
-	let mailboxId: string | undefined;
 	if (allowedAddresses.length > 0) {
-		mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
-		if (!mailboxId) {
-			console.log("Ignoring email: no recipient matches EMAIL_ADDRESSES.");
+		// Step 1: find a registered mailbox among allowed addresses.
+		const registered = allRecipients.filter((addr) => allowedAddresses.includes(addr));
+		for (const addr of registered) {
+			if (await env.BUCKET.head(`mailboxes/${addr}.json`)) {
+				return { kind: "mailbox", rawEmail: rawEmail.buffer as ArrayBuffer, parsedEmail, mailboxId: addr };
+			}
+		}
+		if (registered.length > 0) {
+			// An address matched EMAIL_ADDRESSES but has no mailbox JSON — keep today's drop.
+			console.log("Ignoring email: registered address has no mailbox.");
 			return null;
 		}
+		// No address matched EMAIL_ADDRESSES — try catch-all for all recipients.
+		return resolveCatchall(allRecipients, rawEmail, parsedEmail, env);
 	} else {
-		mailboxId = allRecipients[0];
+		// No EMAIL_ADDRESSES configured — single-recipient mode (existing behaviour).
+		const mailboxId = allRecipients[0];
+		if (!mailboxId) throw new Error("received email with no valid recipient address");
+		if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) {
+			console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`);
+			return null;
+		}
+		return { kind: "mailbox", rawEmail: rawEmail.buffer as ArrayBuffer, parsedEmail, mailboxId };
 	}
-	if (!mailboxId) throw new Error("received email with no valid recipient address");
+}
 
-	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) {
-		console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`);
-		return null;
+async function getOwnedDomains(env: Env): Promise<string[]> {
+	const seed = ((env.DOMAINS ?? "") as string).split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
+	try {
+		const org = await getOrgSettings(env);
+		const orgDomains = ((org.domains as string[] | undefined) ?? []).map((d) => d.toLowerCase());
+		const seen = new Set<string>();
+		const out: string[] = [];
+		for (const d of [...seed, ...orgDomains]) {
+			if (!seen.has(d)) { seen.add(d); out.push(d); }
+		}
+		return out;
+	} catch {
+		return seed;
 	}
+}
 
-	return { rawEmail: rawEmail.buffer as ArrayBuffer, parsedEmail, mailboxId };
+async function resolveCatchall(
+	recipients: string[],
+	rawEmail: Uint8Array,
+	parsedEmail: Awaited<ReturnType<PostalMime["parse"]>>,
+	env: Env,
+): Promise<CatchallInbound | null> {
+	const ownedDomains = await getOwnedDomains(env);
+	for (const addr of recipients) {
+		const at = addr.lastIndexOf("@");
+		if (at < 0) continue;
+		const domain = addr.slice(at + 1).toLowerCase();
+		if (!ownedDomains.includes(domain)) continue;
+		let settings;
+		try {
+			settings = await getDomainSettings(env, domain);
+		} catch {
+			continue;
+		}
+		const ci = settings.catchall_intel;
+		if (!ci?.enabled) continue;
+		return {
+			kind: "catchall",
+			rawEmail: rawEmail.buffer as ArrayBuffer,
+			parsedEmail,
+			domain,
+			retentionDays: ci.retention_days ?? 30,
+			sampleLimit: ci.sample_limit ?? 50,
+		};
+	}
+	console.log("Ignoring email: no recipient matches EMAIL_ADDRESSES.");
+	return null;
 }

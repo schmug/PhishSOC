@@ -100,6 +100,7 @@ function makeRufEmail(): Email {
 
 function makeNormalized(): NormalizedInbound {
 	return {
+		kind: "mailbox",
 		rawEmail: new ArrayBuffer(0),
 		parsedEmail: makeRufEmail(),
 		mailboxId: MAILBOX_ID,

@@ -472,6 +472,12 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 			// Off by default — strip when disabled or empty so absent-key semantics
 			// are preserved and a fresh save doesn't persist an inert block.
 			return deepEqual(value, { enabled: false }) || deepEqual(value, {});
+		case "catchall_intel":
+			// Off by default — strip the disabled default so absent-key semantics
+			// are preserved; an operator explicitly enabling it will survive.
+			return deepEqual(value, { enabled: false, retention_days: 30, sample_limit: 50 })
+				|| deepEqual(value, { enabled: false })
+				|| deepEqual(value, {});
 		default:
 			return false;
 	}
