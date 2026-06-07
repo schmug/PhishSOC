@@ -2,6 +2,9 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import { formatQuotedDate } from "../../shared/dates";
+import { Folders } from "../../shared/folders";
+import { htmlToPlainText } from "../../shared/html-text";
 /**
  * Shared email helpers to eliminate duplication across API routes, MCP, and agent.
  *
@@ -9,11 +12,8 @@
  * threading, HTML utilities, and tool-logic (getFullEmail / getFullThread).
  */
 import type { MailboxDO } from "../durableObject";
-import type { EmailFull } from "./schemas";
-import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
-import { formatQuotedDate } from "../../shared/dates";
-import { htmlToPlainText } from "../../shared/html-text";
+import type { EmailFull } from "./schemas";
 
 // ── DO Stub ────────────────────────────────────────────────────────
 
@@ -57,10 +57,14 @@ export function validateSender(
 	mailboxId: string,
 ): { toStr: string; fromEmail: string; fromDomain: string } {
 	const toStr = (Array.isArray(to) ? to.join(", ") : to).toLowerCase();
-	const fromEmail = (typeof from === "string" ? from : from.email).toLowerCase();
+	const fromEmail = (
+		typeof from === "string" ? from : from.email
+	).toLowerCase();
 
 	if (fromEmail !== mailboxId.toLowerCase()) {
-		throw new SenderValidationError("From address must match the mailbox email address");
+		throw new SenderValidationError(
+			"From address must match the mailbox email address",
+		);
 	}
 
 	const fromDomain = fromEmail.split("@")[1];
@@ -142,7 +146,9 @@ export async function resolveOriginalEmail(
 	email: EmailFull,
 ): Promise<EmailFull> {
 	if (email.folder_id === Folders.DRAFT && email.in_reply_to) {
-		const realOriginal = (await stub.getEmail(email.in_reply_to)) as EmailFull | null;
+		const realOriginal = (await stub.getEmail(
+			email.in_reply_to,
+		)) as EmailFull | null;
 		if (realOriginal) return realOriginal;
 	}
 	return email;
@@ -199,7 +205,7 @@ export function buildQuotedReplyBlock(original: {
 	body?: string;
 }): string {
 	if (!original.body) return "";
-	
+
 	// HTML-escape sender and date to prevent injection
 	const originalSender = escapeHtml(original.sender || "unknown");
 	const originalDate = escapeHtml(formatEmailDate(original.date || ""));
@@ -253,9 +259,12 @@ export async function getFullThread(
 	});
 
 	// Already sorted ASC by the DO query, but ensure consistency
-	enriched.sort(
-		(a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-	);
+	// ⚡ Bolt: Optimize sorting by replacing `new Date(b.date).getTime()` with `Date.parse(b.date)`
+	enriched.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
 
-	return { thread_id: threadId, message_count: enriched.length, messages: enriched };
+	return {
+		thread_id: threadId,
+		message_count: enriched.length,
+		messages: enriched,
+	};
 }
