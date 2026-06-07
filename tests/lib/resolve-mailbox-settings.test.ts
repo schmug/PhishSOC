@@ -701,6 +701,28 @@ describe("getOrgSettings — module-scope ETag cache", () => {
 		expect(bucket.__getCalls).toHaveLength(2);
 		expect(bucket.__getCalls[1].ifNoneMatch).toBeNull();
 	});
+
+	it("does not wipe the org tier when a stored blob carries a legacy hub key", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				agentModel: "@cf/org/custom",
+				domains: ["acme.example"],
+				security: { enabled: true },
+				intel: {
+					hub: {
+						url: "https://hub.example.com",
+						org_uuid: "org-1",
+						api_key_secret_name: "MASTER_DB_PASSWORD",
+					},
+				},
+			},
+		});
+		const settings = await getOrgSettings(makeEnv(bucket));
+		expect(settings.agentModel).toBe("@cf/org/custom");
+		expect(settings.domains).toEqual(["acme.example"]);
+		expect(settings.security?.enabled).toBe(true);
+		expect(settings.intel?.hub).toBeUndefined();
+	});
 });
 
 describe("stripDefaultEqual", () => {
@@ -969,6 +991,28 @@ describe("getDomainSettings — module-scope ETag cache", () => {
 		);
 		expect(absentCalls).toHaveLength(2);
 		expect(absentCalls[1].ifNoneMatch).toBeNull();
+	});
+
+	it("does not wipe the domain tier when a stored blob carries a legacy hub key", async () => {
+		const bucket = makeFakeBucket({
+			"domains/acme.example.json": {
+				agentModel: "@cf/domain/custom",
+				catchall_intel: { enabled: true, retention_days: 14, sample_limit: 25 },
+				security: { enabled: true },
+				intel: {
+					hub: {
+						url: "https://hub.example.com",
+						org_uuid: "org-1",
+						api_key_secret_name: "MASTER_DB_PASSWORD",
+					},
+				},
+			},
+		});
+		const settings = await getDomainSettings(makeEnv(bucket), "acme.example");
+		expect(settings.agentModel).toBe("@cf/domain/custom");
+		expect(settings.catchall_intel?.enabled).toBe(true);
+		expect(settings.security?.enabled).toBe(true);
+		expect(settings.intel?.hub).toBeUndefined();
 	});
 });
 

@@ -14,6 +14,7 @@
  * other.
  */
 
+import { parseSettingsLenient } from "../../shared/mailbox-settings";
 import {
 	DomainSettings,
 	parseDomainSettings,
@@ -90,7 +91,9 @@ export async function getDomainSettings(
 
 	try {
 		const raw = await obj.json<Record<string, unknown>>();
-		const parsed = parseDomainSettings(raw) ?? {};
+		// Read-side lenient parse: legacy intel.hub/feed secret names must not
+		// wipe catchall_intel, security, etc. on the domain tier (#415 follow-up).
+		const parsed = parseSettingsLenient(DomainSettings, raw);
 		cache.set(key, { etag: obj.etag ?? null, settings: parsed });
 		return parsed;
 	} catch {
