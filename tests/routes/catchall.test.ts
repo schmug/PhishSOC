@@ -225,7 +225,25 @@ describe("normalizeInbound — catch-all path", () => {
 		expect(result).toBeNull();
 	});
 
-	it("selects the first owned+enabled recipient with multiple To addresses", async () => {
+	it("with empty EMAIL_ADDRESSES: routes to catch-all when first recipient has no mailbox", async () => {
+		const result = await runNormalize(
+			["probe@acme.example"],
+			{
+				emailAddresses: [],
+				mailboxes: [],
+				domains: "acme.example",
+				domainSettings: {
+					"acme.example": { catchall_intel: { enabled: true, retention_days: 30, sample_limit: 50 } },
+				},
+			},
+		);
+		expect(result?.kind).toBe("catchall");
+		if (result?.kind === "catchall") {
+			expect(result.domain).toBe("acme.example");
+		}
+	});
+
+	it("with empty EMAIL_ADDRESSES: picks first owned+enabled among multiple To addresses", async () => {
 		const result = await runNormalize(
 			["catchall@unowned.example", "probe@acme.example"],
 			{
@@ -237,10 +255,10 @@ describe("normalizeInbound — catch-all path", () => {
 				},
 			},
 		);
-		// No EMAIL_ADDRESSES configured → single-recipient mode: uses first recipient
-		// "catchall@unowned.example" which has no mailbox → returns null
-		// (The multi-recipient catch-all test applies when EMAIL_ADDRESSES is set)
-		expect(result).toBeNull();
+		expect(result?.kind).toBe("catchall");
+		if (result?.kind === "catchall") {
+			expect(result.domain).toBe("acme.example");
+		}
 	});
 
 	it("with EMAIL_ADDRESSES set: picks first owned+enabled among non-registered recipients", async () => {

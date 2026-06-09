@@ -1182,5 +1182,42 @@ describe("parseSettingsLenient — read-path leniency for legacy non-prefixed se
 		expect(parsed.intel?.hub?.api_key_secret_name).toBe("HUB_SECRET_OK");
 		expect(parsed.intel?.feeds).toHaveLength(1);
 	});
+
+	it("getOrgSettings preserves security when a legacy hub key fails strict parse", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true },
+				intel: {
+					hub: {
+						url: "https://hub.example.com",
+						org_uuid: "org-1",
+						api_key_secret_name: "MASTER_DB_PASSWORD",
+					},
+				},
+			},
+		});
+		const settings = await getOrgSettings(makeEnv(bucket));
+		expect(settings.security?.enabled).toBe(true);
+		expect(settings.intel?.hub).toBeUndefined();
+	});
+
+	it("getDomainSettings preserves catchall_intel when a legacy hub key fails strict parse", async () => {
+		const bucket = makeFakeBucket({
+			"domains/acme.example.json": {
+				catchall_intel: { enabled: true, retention_days: 14, sample_limit: 25 },
+				intel: {
+					hub: {
+						url: "https://hub.example.com",
+						org_uuid: "org-1",
+						api_key_secret_name: "MASTER_DB_PASSWORD",
+					},
+				},
+			},
+		});
+		const settings = await getDomainSettings(makeEnv(bucket), "acme.example");
+		expect(settings.catchall_intel?.enabled).toBe(true);
+		expect(settings.catchall_intel?.retention_days).toBe(14);
+		expect(settings.intel?.hub).toBeUndefined();
+	});
 });
 

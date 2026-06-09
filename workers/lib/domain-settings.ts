@@ -18,6 +18,7 @@ import {
 	DomainSettings,
 	parseDomainSettings,
 } from "../../shared/domain-settings";
+import { parseSettingsLenient } from "../../shared/mailbox-settings";
 
 interface DomainSettingsCacheEntry {
 	etag: string | null;
@@ -90,7 +91,7 @@ export async function getDomainSettings(
 
 	try {
 		const raw = await obj.json<Record<string, unknown>>();
-		const parsed = parseDomainSettings(raw) ?? {};
+		const parsed = parseSettingsLenient(DomainSettings, raw);
 		cache.set(key, { etag: obj.etag ?? null, settings: parsed });
 		return parsed;
 	} catch {
