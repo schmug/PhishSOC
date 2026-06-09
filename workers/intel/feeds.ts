@@ -88,9 +88,9 @@ function resolveFeeds(env: Env, settings: MailboxIntelSettings): FeedDefinition[
 	for (const f of settings.feeds ?? []) {
 		const base = byId.get(f.id);
 		const headers: Record<string, string> = { ...(f.headers ?? {}) };
-			// Prevent confused deputy / secret exfiltration via unconstrained secret access.
-			// Only allow access to explicitly designated feed secrets.
-			if (f.auth_secret && f.auth_secret.startsWith("FEED_SECRET_")) {
+		// Prevent confused deputy / secret exfiltration via unconstrained secret access.
+		// Only allow access to explicitly designated feed secrets.
+		if (f.auth_secret && f.auth_secret.startsWith("FEED_SECRET_")) {
 			const secretValue = (env as unknown as Record<string, string>)[f.auth_secret];
 			if (secretValue) headers["Authorization"] = secretValue;
 		}
