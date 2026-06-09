@@ -58,14 +58,15 @@ export function scoreOffHours(
 	// Range is inclusive-start, exclusive-end so `end_hour = 19` treats 19:00
 	// as off-hours. Handles wrapped windows (night-shift style, e.g. start=22,
 	// end=6) for completeness even though BEC signal goes the other way.
-	const inHours = start <= end
-		? hour >= start && hour < end
-		: hour >= start || hour < end;
+	const inHours =
+		start <= end ? hour >= start && hour < end : hour >= start || hour < end;
 
 	if (inHours) return { score: 0, reasons: [] };
 	return {
 		score: 10,
-		reasons: [`received outside business hours (${String(hour).padStart(2, "0")}:00 ${hours.timezone})`],
+		reasons: [
+			`received outside business hours (${String(hour).padStart(2, "0")}:00 ${hours.timezone})`,
+		],
 	};
 }
 
@@ -76,16 +77,26 @@ function clampHour(v: number, fallback: number): number {
 	return i;
 }
 
-interface LocalParts { hour: number; weekday: number; }
+interface LocalParts {
+	hour: number;
+	weekday: number;
+}
+
+const FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
 
 function localDateParts(timezone: string, at: Date): LocalParts | null {
 	try {
-		const fmt = new Intl.DateTimeFormat("en-US", {
-			timeZone: timezone,
-			hour: "numeric",
-			hour12: false,
-			weekday: "short",
-		});
+		let fmt = FORMATTER_CACHE.get(timezone);
+		if (!fmt) {
+			// ⚡ Bolt: Cache Intl.DateTimeFormat instances keyed by timezone to prevent expensive instantiations
+			fmt = new Intl.DateTimeFormat("en-US", {
+				timeZone: timezone,
+				hour: "numeric",
+				hour12: false,
+				weekday: "short",
+			});
+			FORMATTER_CACHE.set(timezone, fmt);
+		}
 		const parts = fmt.formatToParts(at);
 		let hour = NaN;
 		let weekdayName = "";
@@ -105,5 +116,11 @@ function localDateParts(timezone: string, at: Date): LocalParts | null {
 }
 
 const WEEKDAY_INDEX: Record<string, number> = {
-	Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+	Sun: 0,
+	Mon: 1,
+	Tue: 2,
+	Wed: 3,
+	Thu: 4,
+	Fri: 5,
+	Sat: 6,
 };
