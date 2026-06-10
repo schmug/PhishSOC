@@ -1,0 +1,72 @@
+name: Bumblebee
+
+# Supply-chain exposure scan: matches the repo's two committed npm lockfiles
+# (package-lock.json, hub/package-lock.json) against curated incident catalogs
+# of known-trojaned package versions. Adoption decision and incident runbook:
+# docs/bumblebee-evaluation.md (issue #413). Match handling / SLA:
+# docs/security-policies.md section 3.
+
+on:
+  schedule:
+    # Mondays 07:27 UTC — offset from CodeQL's "27 6 * * 1".
+    - cron: "27 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: bumblebee-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Exposure scan (npm lockfiles)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Exposure catalogs pinned to an upstream commit, not a branch — catalog
+      # content is a trust input, so pin bumps must land as reviewed PRs.
+      - name: Checkout pinned upstream exposure catalogs
+        uses: actions/checkout@v4
+        with:
+          repository: perplexityai/bumblebee
+          ref: bf685dde34e2d0a7cfea6a232b515fb53fcd7622
+          path: bumblebee-upstream
+          sparse-checkout: threat_intel
+
+      # Pinned release binary, sha256-verified against the checksum recorded
+      # here (sourced from the release's checksums.txt). NEVER `go install
+      # @latest` — an unpinned scanner is itself a supply-chain exposure.
+      - name: Fetch and verify Bumblebee v0.1.1
+        run: |
+          curl -fsSLO https://github.com/perplexityai/bumblebee/releases/download/v0.1.1/bumblebee_0.1.1_linux_amd64.tar.gz
+          echo "0ef1c56c85a67c10f7211883c0eb5fb902de705cc30bbca0bc6f4d60941547da  bumblebee_0.1.1_linux_amd64.tar.gz" | sha256sum -c -
+          tar -xzf bumblebee_0.1.1_linux_amd64.tar.gz
+
+      - name: Selftest
+        run: ./bumblebee selftest
+
+      # --exposure-catalog pointed at a directory merges all *.json in it
+      # (non-recursive). The checked-out catalog files are not lockfiles, so
+      # scanning the workspace they sit in yields no records from them.
+      - name: Scan repository against pinned catalogs
+        run: ./bumblebee scan --profile project --root "$GITHUB_WORKSPACE" --exposure-catalog ./bumblebee-upstream/threat_intel/ > scan.ndjson
+
+      # REQUIRED gate: bumblebee's exit code does NOT reflect findings — this
+      # jq pass is the actual failure mechanism. Fails the job on any
+      # `finding` record, on a missing/duplicated `scan_summary`, or on a
+      # summary whose status is not "complete" (partial/timed-out run).
+      - name: Gate on findings and scan completeness
+        run: |
+          jq -s -e '([.[]|select(.record_type=="finding")]|length==0) and ([.[]|select(.record_type=="scan_summary")]|length==1) and (all(.[]|select(.record_type=="scan_summary"); .status=="complete"))' scan.ndjson
+
+      - name: Upload scan NDJSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bumblebee-scan
+          path: scan.ndjson
+          retention-days: 30

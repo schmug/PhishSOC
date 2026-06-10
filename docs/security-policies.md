@@ -1,9 +1,10 @@
 # Security Policies
 
 This document defines PhishSOC's remediation SLAs and merge-gate policies for
-vulnerabilities surfaced by automated security tooling: Dependabot (SCA) and
-CodeQL (SAST). It satisfies OSPS Baseline L3 requirements OSPS-VM-05.01,
-OSPS-VM-05.02, and OSPS-VM-06.01.
+vulnerabilities surfaced by automated security tooling: Dependabot (SCA),
+CodeQL (SAST), and Bumblebee (supply-chain exposure scanning). It satisfies
+OSPS Baseline L3 requirements OSPS-VM-05.01, OSPS-VM-05.02, and
+OSPS-VM-06.01.
 
 ---
 
@@ -131,7 +132,48 @@ Suppressing a High alert without a second-maintainer sign-off is not allowed.
 
 ---
 
-## 3. Consistency with coordinated-disclosure timeline
+## 3. Exposure scanning — Bumblebee
+
+Bumblebee matches the repo's two committed npm lockfiles
+(`package-lock.json`, `hub/package-lock.json`) against curated catalogs of
+known-trojaned package versions. See
+[`docs/bumblebee-evaluation.md`](bumblebee-evaluation.md) for the adoption
+decision, scope, and the assemble-on-advisory incident runbook.
+
+### 3.1 Cadence
+
+| Trigger | Mechanism |
+|---------|-----------|
+| Weekly (Mondays, 07:27 UTC) | [`.github/workflows/bumblebee.yml`](../.github/workflows/bumblebee.yml), pinned binary + pinned upstream catalogs |
+| On advisory (incident) | Assemble-on-advisory runbook in [`docs/bumblebee-evaluation.md`](bumblebee-evaluation.md) — local run against a campaign-specific catalog |
+
+### 3.2 Match handling
+
+**A catalog match (any NDJSON `finding` record) is treated as a Critical SCA
+finding** and inherits the Critical 7-day SLA from section 1.2, with
+immediate day-0 triage on top:
+
+1. Verify the match against the originating advisory (package, version,
+   campaign).
+2. Remove or replace the affected version in the lockfile.
+3. Rotate any credentials the trojaned package could have read at install or
+   build time (npm tokens, CI secrets, wrangler/Cloudflare API tokens).
+
+Unlike Dependabot severity labels, there is no lower band: an exposure
+catalog only contains versions already confirmed malicious, so every match
+is Critical by construction.
+
+### 3.3 Alert path
+
+The workflow's jq gate fails the job on any `finding` record — or on an
+incomplete scan (missing `scan_summary`, status not `complete`) — so the
+alert path is the failed-scheduled-workflow notification to repository
+maintainers. The full `scan.ndjson` is uploaded as a workflow artifact
+(30-day retention) and serves as the evidence record for triage.
+
+---
+
+## 4. Consistency with coordinated-disclosure timeline
 
 The SLAs above are intentionally consistent with the vulnerability-disclosure
 timeline in [`.github/SECURITY.md`](../.github/SECURITY.md):
@@ -142,6 +184,7 @@ timeline in [`.github/SECURITY.md`](../.github/SECURITY.md):
 | Fix or mitigation for high-severity issue | 30 days |
 | SCA High/Critical fix (Dependabot) | 7 days (stricter, because fixes are automated) |
 | SAST High fix (CodeQL) | 14 days |
+| Exposure-catalog match (Bumblebee) | 7 days, with day-0 triage (section 3.2) |
 
 The 7-day SCA window is stricter than the external-report SLA because
 Dependabot PRs are largely automated — the marginal effort to merge a
@@ -150,15 +193,16 @@ engineering judgment needed to fix a code-level finding.
 
 ---
 
-## 4. Tooling references
+## 5. Tooling references
 
 | Tool | Configuration | Dashboard |
 |------|--------------|-----------|
 | Dependabot (SCA) | [`.github/dependabot.yml`](../.github/dependabot.yml) | GitHub → Security → Dependabot alerts |
 | CodeQL (SAST) | [`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) | GitHub → Security → Code scanning alerts |
+| Bumblebee (exposure) | [`.github/workflows/bumblebee.yml`](../.github/workflows/bumblebee.yml) | GitHub → Actions → Bumblebee runs + NDJSON artifacts |
 
 ---
 
 *This document was introduced to satisfy OSPS Baseline L3 controls
 OSPS-VM-05.01 (SCA policy), OSPS-VM-05.02 (SCA merge gate), and
-OSPS-VM-06.01 (SAST policy). Last updated: 2026-05-28.*
+OSPS-VM-06.01 (SAST policy). Last updated: 2026-06-10.*
