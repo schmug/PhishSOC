@@ -50,10 +50,49 @@ export interface DmarcRecord {
 	auth_results?: DmarcAuthResults;
 }
 
-/** Gunzip an arraybuffer using the runtime's DecompressionStream. */
-export async function gunzip(buf: ArrayBuffer): Promise<ArrayBuffer> {
+/** Hard cap on decompressed DMARC RUA payload — mirrors the TLS-RPT / RUF siblings. */
+export const DMARC_MAX_DECOMPRESSED_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Gunzip an arraybuffer using the runtime's DecompressionStream.
+ *
+ * Reads chunks incrementally and stops as soon as accumulated bytes exceed
+ * maxBytes, so a gzip bomb is rejected mid-stream rather than after the
+ * full payload has been materialised in memory.
+ *
+ * Returns null when the cap is exceeded; throws on malformed gzip input.
+ */
+export async function gunzip(
+	buf: ArrayBuffer,
+	maxBytes: number = DMARC_MAX_DECOMPRESSED_BYTES,
+): Promise<ArrayBuffer | null> {
 	const stream = new Response(buf).body!.pipeThrough(new DecompressionStream("gzip"));
-	return new Response(stream).arrayBuffer();
+	const reader = stream.getReader();
+	const chunks: Uint8Array[] = [];
+	let accumulated = 0;
+	let capExceeded = false;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			accumulated += value.byteLength;
+			if (accumulated > maxBytes) {
+				capExceeded = true;
+				break;
+			}
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	if (capExceeded) return null;
+	const out = new Uint8Array(accumulated);
+	let offset = 0;
+	for (const chunk of chunks) {
+		out.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return out.buffer as ArrayBuffer;
 }
 
 /** Read the first XML-looking text out of a raw buffer. */
