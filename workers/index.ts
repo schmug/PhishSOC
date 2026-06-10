@@ -6,7 +6,7 @@ import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
 import type { MailboxInbound, CatchallInbound } from "./providers/types";
-import { attachmentObjectKey, storeAttachments, type StoredAttachment } from "./lib/attachments";
+import { attachmentObjectKey, MAX_ATTACHMENTS_PER_EMAIL, type StoredAttachment } from "./lib/attachments";
 import {
 	validateSender,
 	SenderValidationError,
@@ -1306,16 +1306,30 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
 
+	const allAttachments = parsedEmail.attachments ?? [];
+	const attachmentsToStore = allAttachments.slice(0, MAX_ATTACHMENTS_PER_EMAIL);
+	const attachmentsTruncated = allAttachments.length - attachmentsToStore.length;
+	if (attachmentsTruncated > 0) {
+		console.warn(`receiveEmail: truncating ${attachmentsTruncated} attachment(s) for messageId=${messageId}; exceeds MAX_ATTACHMENTS_PER_EMAIL=${MAX_ATTACHMENTS_PER_EMAIL}`);
+	}
+
 	const attachmentData: StoredAttachment[] = [];
-	if (parsedEmail.attachments) {
-		for (const att of parsedEmail.attachments) {
+	const writtenKeys: string[] = [];
+	try {
+		for (const att of attachmentsToStore) {
 			const attId = crypto.randomUUID();
 			const filename = (att.filename || "untitled").replace(/[\/\\:*?"<>|\x00-\x1f]/g, "_");
-			await env.BUCKET.put(attachmentObjectKey(messageId, attId, filename), att.content);
+			const key = attachmentObjectKey(messageId, attId, filename);
+			await env.BUCKET.put(key, att.content);
+			writtenKeys.push(key);
 			attachmentData.push({ id: attId, email_id: messageId, filename, mimetype: att.mimeType,
 				size: typeof att.content === "string" ? att.content.length : att.content.byteLength,
 				content_id: att.contentId || null, disposition: att.disposition || "attachment" });
 		}
+	} catch (e) {
+		// Clean up already-written blobs so no orphaned R2 objects are left behind.
+		await Promise.allSettled(writtenKeys.map((k) => env.BUCKET.delete(k)));
+		throw e;
 	}
 
 	const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ? m[1] : s.trim().split(/\s+/)[0]; };
