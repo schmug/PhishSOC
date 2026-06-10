@@ -47,6 +47,25 @@ updates:
           - "@react-router/*"
           - "workers-ai-provider"
 
+  - package-ecosystem: npm
+    directory: "/hub"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    versioning-strategy: increase-if-necessary
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        patterns:
+          - "*"
+      production-dependencies:
+        dependency-type: production
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
