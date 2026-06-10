@@ -297,7 +297,7 @@ const RECEIVED_IPV6_RE = /(?:IPv6:)?([0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7})/gi;
  *     fact that Email Routing's outermost `Received:` line records the
  *     real client IP).
  */
-function isPrivateOrLoopbackIp(ip: string): boolean {
+export function isPrivateOrLoopbackIp(ip: string): boolean {
 	const lower = ip.toLowerCase().replace(/^ipv6:/, "");
 	// IPv4
 	if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(lower)) {
