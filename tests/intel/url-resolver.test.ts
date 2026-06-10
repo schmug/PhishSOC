@@ -6,8 +6,10 @@ const DOH_HOST = "cloudflare-dns.com";
 /**
  * Minimal fetch stub that plays back scripted responses by URL.
  *
- * DoH A-record queries to cloudflare-dns.com are intercepted and answered
- * from `dohMap` (hostname → IPv4 strings). When a hostname is absent from
+ * DoH A/AAAA queries to cloudflare-dns.com are intercepted and answered
+ * from `dohMap` (hostname → IP strings, IPv4 and/or IPv6). Entries are
+ * routed by record type: dotted-quads answer A queries (type 1), colon
+ * forms answer AAAA queries (type 28). When a hostname is absent from
  * `dohMap`, the answer section is empty — the SSRF guard treats an empty
  * answer as "no private IPs found" and allows the request.
  */
@@ -20,9 +22,13 @@ function stubFetch(
 		const parsed = new URL(url);
 		if (parsed.hostname === DOH_HOST) {
 			const name = parsed.searchParams.get("name") ?? "";
-			const ips = dohMap[name] ?? [];
+			const qtype = parsed.searchParams.get("type") ?? "A";
+			const ips = (dohMap[name] ?? []).filter((ip) =>
+				qtype === "AAAA" ? ip.includes(":") : !ip.includes(":"),
+			);
+			const typeNum = qtype === "AAAA" ? 28 : 1;
 			return new Response(
-				JSON.stringify({ Answer: ips.map((ip) => ({ type: 1, data: ip })) }),
+				JSON.stringify({ Answer: ips.map((ip) => ({ type: typeNum, data: ip })) }),
 				{ status: 200, headers: { "content-type": "application/dns-json" } },
 			);
 		}
@@ -179,5 +185,74 @@ describe("resolveUrl SSRF guard", () => {
 		}) as typeof fetch;
 		const r = await resolveUrl("https://legit.example/", fetchImpl);
 		expect(r?.final_status).toBe(200);
+	});
+});
+
+describe("resolveUrl SSRF guard — residual gaps (GHSA-vpmq-j44v-vjr6)", () => {
+	it("blocks an IPv4-mapped IPv6 loopback literal (http://[::ffff:127.0.0.1]/) before the first fetch", async () => {
+		// WHATWG URL serializes the hostname to [::ffff:7f00:1]; the guard must
+		// unwrap the embedded IPv4 and treat it as loopback.
+		const r = await resolveUrl("http://[::ffff:127.0.0.1]/admin", stubFetch({}));
+		expect(r?.final_status).toBe(0);
+	});
+
+	it("blocks an IPv4-mapped IPv6 RFC-1918 literal (http://[::ffff:10.0.0.1]/)", async () => {
+		const r = await resolveUrl("http://[::ffff:10.0.0.1]/internal", stubFetch({}));
+		expect(r?.final_status).toBe(0);
+	});
+
+	it("blocks the unspecified-address literals 0.0.0.0 and [::]", async () => {
+		const r4 = await resolveUrl("http://0.0.0.0/", stubFetch({}));
+		expect(r4?.final_status).toBe(0);
+		const r6 = await resolveUrl("http://[::]/", stubFetch({}));
+		expect(r6?.final_status).toBe(0);
+	});
+
+	it("blocks a hostname whose AAAA record resolves to ::1", async () => {
+		const fetchImpl = stubFetch(
+			{},
+			{ "v6-loopback.example": ["::1"] },
+		);
+		const r = await resolveUrl("http://v6-loopback.example/", fetchImpl);
+		expect(r?.final_status).toBe(0);
+	});
+
+	it("blocks a hostname whose AAAA record resolves to a unique-local (fc00::/7) address", async () => {
+		const fetchImpl = stubFetch(
+			{},
+			{ "v6-ula.example": ["fd12:3456:789a::1"] },
+		);
+		const r = await resolveUrl("http://v6-ula.example/", fetchImpl);
+		expect(r?.final_status).toBe(0);
+	});
+
+	it("blocks a redirect to a hostname whose AAAA record is private even when its A record is public", async () => {
+		const fetchImpl = stubFetch(
+			{
+				"https://short.example/go": new Response("", {
+					status: 302,
+					headers: { location: "https://dual.corp.example/portal" },
+				}),
+			},
+			{ "dual.corp.example": ["93.184.216.34", "fc00::5"] },
+		);
+		const r = await resolveUrl("https://short.example/go", fetchImpl);
+		// Chain stopped at short.example; the private-v6 hop was never fetched.
+		expect(r?.resolved).toBe("https://short.example/go");
+	});
+
+	it("allows a hostname with public A and AAAA records (no happy-path regression)", async () => {
+		const fetchImpl = stubFetch(
+			{
+				"https://dualstack.example/page": new Response("<title>Hi</title>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+			},
+			{ "dualstack.example": ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"] },
+		);
+		const r = await resolveUrl("https://dualstack.example/page", fetchImpl);
+		expect(r?.final_status).toBe(200);
+		expect(r?.resolved).toBe("https://dualstack.example/page");
 	});
 });

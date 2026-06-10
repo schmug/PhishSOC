@@ -301,24 +301,96 @@ export function isPrivateOrLoopbackIp(ip: string): boolean {
 	const lower = ip.toLowerCase().replace(/^ipv6:/, "");
 	// IPv4
 	if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(lower)) {
-		const parts = lower.split(".").map((p) => parseInt(p, 10));
-		if (parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true;
-		const [a, b] = parts;
-		if (a === 10) return true;
-		if (a === 127) return true;
-		if (a === 172 && b >= 16 && b <= 31) return true;
-		if (a === 192 && b === 168) return true;
-		if (a === 169 && b === 254) return true;
-		if (a === 0) return true;
-		return false;
+		return isPrivateOrLoopbackIpv4(lower);
 	}
 	// IPv6
 	if (lower === "::1") return true;
+	if (lower === "::") return true; // unspecified address
 	if (lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb")) return true;
 	if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
+	// IPv4-mapped (::ffff:0:0/96) and NAT64 well-known prefix (64:ff9b::/96)
+	// embed an IPv4 address in the low 32 bits. WHATWG URL serializes
+	// http://[::ffff:127.0.0.1]/ to the hex form ::ffff:7f00:1, so both the
+	// dotted-quad and hex spellings must unwrap to the embedded IPv4 and
+	// re-run the IPv4 private/loopback checks (GHSA-vpmq-j44v-vjr6).
+	if (lower.includes(":")) {
+		const groups = expandIpv6(lower);
+		if (groups) {
+			if (groups.every((g) => g === 0)) return true; // expanded unspecified (::)
+			if (groups[7] === 1 && groups.slice(0, 7).every((g) => g === 0)) return true; // expanded ::1
+			const isV4Mapped =
+				groups[0] === 0 && groups[1] === 0 && groups[2] === 0 &&
+				groups[3] === 0 && groups[4] === 0 && groups[5] === 0xffff;
+			const isNat64 =
+				groups[0] === 0x64 && groups[1] === 0xff9b &&
+				groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0;
+			if (isV4Mapped || isNat64) {
+				const embedded = `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
+				return isPrivateOrLoopbackIpv4(embedded);
+			}
+		}
+	}
 	// Treat anything that's not a recognisable IP as "skip" rather than "use".
 	if (!/[0-9]/.test(lower)) return true;
 	return false;
+}
+
+/** IPv4 private/loopback/link-local/unspecified check on a dotted-quad string. */
+function isPrivateOrLoopbackIpv4(ip: string): boolean {
+	const parts = ip.split(".").map((p) => parseInt(p, 10));
+	if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true;
+	const [a, b] = parts;
+	if (a === 10) return true;
+	if (a === 127) return true;
+	if (a === 172 && b >= 16 && b <= 31) return true;
+	if (a === 192 && b === 168) return true;
+	if (a === 169 && b === 254) return true;
+	if (a === 0) return true;
+	return false;
+}
+
+/**
+ * Expand an IPv6 textual address into its 8 hextet values (0–0xffff).
+ * Handles `::` zero-compression and a trailing embedded dotted-quad
+ * (`::ffff:127.0.0.1`). Returns null when the string is not a parseable
+ * IPv6 address — callers treat null as "not an IPv6 literal".
+ */
+function expandIpv6(ip: string): number[] | null {
+	let s = ip;
+	// Convert a trailing embedded dotted-quad into its two hextets so the
+	// rest of the parse only deals with hex groups.
+	if (s.includes(".")) {
+		const lastColon = s.lastIndexOf(":");
+		if (lastColon === -1) return null;
+		const quad = s.slice(lastColon + 1).split(".");
+		if (quad.length !== 4) return null;
+		const bytes = quad.map((p) => (/^\d{1,3}$/.test(p) ? parseInt(p, 10) : NaN));
+		if (bytes.some((n) => Number.isNaN(n) || n > 255)) return null;
+		const hi = ((bytes[0] << 8) | bytes[1]).toString(16);
+		const lo = ((bytes[2] << 8) | bytes[3]).toString(16);
+		s = `${s.slice(0, lastColon + 1)}${hi}:${lo}`;
+	}
+	const halves = s.split("::");
+	if (halves.length > 2) return null;
+	const parseGroups = (part: string): number[] | null => {
+		if (part === "") return [];
+		const out: number[] = [];
+		for (const g of part.split(":")) {
+			if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+			out.push(parseInt(g, 16));
+		}
+		return out;
+	};
+	const head = parseGroups(halves[0]);
+	if (head === null) return null;
+	if (halves.length === 1) {
+		return head.length === 8 ? head : null;
+	}
+	const tail = parseGroups(halves[1]);
+	if (tail === null) return null;
+	const fill = 8 - head.length - tail.length;
+	if (fill < 1) return null; // `::` must stand for at least one zero group
+	return [...head, ...new Array<number>(fill).fill(0), ...tail];
 }
 
 /**
