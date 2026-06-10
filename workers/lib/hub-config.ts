@@ -9,6 +9,7 @@
  * from `c.env` at call time so an org can rotate without rewriting blobs.
  */
 
+import { hostAllowed } from "./host-allowlist";
 import { resolveMailboxSettings } from "./mailbox-settings";
 
 export interface HubConfig {
@@ -21,6 +22,8 @@ export interface HubConfig {
 
 interface BucketEnv {
 	BUCKET: R2Bucket;
+	/** Operator-set hostname allowlist for `cfg.url` — see `workers/types.ts`. */
+	HUB_ALLOWED_HOSTS?: string;
 }
 
 /** Returns the resolved hub config for a mailbox, or null when neither
@@ -37,6 +40,12 @@ export async function loadHubConfig(
 	// Prevent confused deputy / secret exfiltration via unconstrained secret access.
 	// Only allow access to explicitly designated hub secrets.
 	if (!cfg.api_key_secret_name.startsWith("HUB_SECRET_")) return null;
+	// Pin the destination too (GHSA-jfj6-w954-96vg f29): `cfg.url` is
+	// teammate-editable settings data, so the secret named above may only be
+	// sent to an https host on the operator-set `HUB_ALLOWED_HOSTS` env
+	// allowlist. Off-allowlist (or no allowlist configured) → treat the hub
+	// as not configured rather than ship the credential to an arbitrary URL.
+	if (!hostAllowed(cfg.url, env.HUB_ALLOWED_HOSTS)) return null;
 	return {
 		url: cfg.url,
 		org_uuid: cfg.org_uuid,

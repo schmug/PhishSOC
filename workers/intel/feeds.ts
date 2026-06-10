@@ -32,6 +32,7 @@ import {
 } from "./bloom";
 import { findCidrMatch, parseCidr, parseIpv4, type Ipv4Cidr } from "./cidr";
 import { getMailboxStub, listMailboxes } from "../lib/email-helpers";
+import { hostAllowed } from "../lib/host-allowlist";
 import { resolveMailboxSettings } from "../lib/mailbox-settings";
 
 const EXACT_KEY_CAP = 2000; // per-feed cap — we only fast-path confirm up to this many
@@ -81,22 +82,45 @@ async function loadMailboxIntelSettings(env: Env, mailboxId: string): Promise<Ma
 	}
 }
 
+/**
+ * Hostnames of the built-in default feeds. Always part of the
+ * credential-destination allowlist below: a secret-bearing override of an
+ * operator-trusted default feed keeps working with no extra config.
+ */
+const DEFAULT_FEED_HOSTS: string[] = DEFAULT_FEEDS.map((f) => safeHostname(f.url)).filter(
+	(h): h is string => h !== null,
+);
+
 function resolveFeeds(env: Env, settings: MailboxIntelSettings): FeedDefinition[] {
 	const defaults = settings.feeds && settings.feeds.length > 0 ? [] : DEFAULT_FEEDS;
 	const byId = new Map<string, FeedDefinition>(DEFAULT_FEEDS.map((f) => [f.id, f]));
 	const user: FeedDefinition[] = [];
 	for (const f of settings.feeds ?? []) {
 		const base = byId.get(f.id);
+		const url = f.url ?? base?.url ?? "";
 		const headers: Record<string, string> = { ...(f.headers ?? {}) };
-			// Prevent confused deputy / secret exfiltration via unconstrained secret access.
-			// Only allow access to explicitly designated feed secrets.
-			if (f.auth_secret && f.auth_secret.startsWith("FEED_SECRET_")) {
+		// Prevent confused deputy / secret exfiltration via unconstrained secret access.
+		// Two conditions, both required (GHSA-jfj6-w954-96vg f27):
+		//   1. Only explicitly designated feed secrets (`FEED_SECRET_` prefix)
+		//      may be referenced from settings.
+		//   2. The destination host must be pinned: the feed URL is
+		//      teammate-editable, so the secret is only attached when the URL
+		//      is https AND its hostname is on the operator-set
+		//      `FEED_ALLOWED_HOSTS` env allowlist (or is a built-in
+		//      DEFAULT_FEEDS host). Off-allowlist feeds still fetch — public
+		//      no-secret feeds are never blocked — they just never carry the
+		//      credential.
+		if (
+			f.auth_secret &&
+			f.auth_secret.startsWith("FEED_SECRET_") &&
+			hostAllowed(url, env.FEED_ALLOWED_HOSTS, DEFAULT_FEED_HOSTS)
+		) {
 			const secretValue = (env as unknown as Record<string, string>)[f.auth_secret];
 			if (secretValue) headers["Authorization"] = secretValue;
 		}
 		user.push({
 			id: f.id,
-			url: f.url ?? base?.url ?? "",
+			url,
 			kind: f.kind ?? base?.kind ?? "url",
 			refreshHours: f.refresh_hours ?? base?.refreshHours ?? 6,
 			description: base?.description ?? "User-configured feed",
