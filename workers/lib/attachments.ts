@@ -8,6 +8,9 @@
  */
 import type { Env } from "../types";
 
+/** Hard per-message cap to prevent subrequest exhaustion from crafted messages. */
+export const MAX_ATTACHMENTS_PER_EMAIL = 100;
+
 export interface StoredAttachment {
 	id: string;
 	email_id: string;
@@ -56,8 +59,14 @@ export async function storeAttachments(
 ): Promise<StoredAttachment[]> {
 	if (!attachments?.length) return [];
 
+	const toStore = attachments.slice(0, MAX_ATTACHMENTS_PER_EMAIL);
+	const truncated = attachments.length - toStore.length;
+	if (truncated > 0) {
+		console.warn(`storeAttachments: truncating ${truncated} attachment(s) for emailId=${emailId}; exceeds MAX_ATTACHMENTS_PER_EMAIL=${MAX_ATTACHMENTS_PER_EMAIL}`);
+	}
+
 	const results: StoredAttachment[] = [];
-	for (const att of attachments) {
+	for (const att of toStore) {
 		const attachmentId = crypto.randomUUID();
 		// Sanitize filename to prevent path traversal in R2 keys
 		const safeFilename = (att.filename || "untitled").replace(/[\/\\:*?"<>|\x00-\x1f]/g, "_");
