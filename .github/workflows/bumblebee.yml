@@ -28,14 +28,14 @@ jobs:
       # persist-credentials: false on both checkouts — nothing after checkout
       # needs git credentials, and this job executes a third-party binary over
       # the workspace, whose .git/config would otherwise hold the GITHUB_TOKEN.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
       # Exposure catalogs pinned to an upstream commit, not a branch — catalog
       # content is a trust input, so pin bumps must land as reviewed PRs.
       - name: Checkout pinned upstream exposure catalogs
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: perplexityai/bumblebee
           ref: bf685dde34e2d0a7cfea6a232b515fb53fcd7622
@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload scan NDJSON
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bumblebee-scan
           path: scan.ndjson
