@@ -11,6 +11,7 @@ import { normalizeInbound } from "./providers/cf-routing";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
 import { confirmRoute } from "./routes/confirm";
+import { callerAllowedForMailbox, emailAgentMailboxIdFromPath } from "./lib/mailbox-acl";
 import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
@@ -114,6 +115,24 @@ app.route("/", apiApp);
 
 // Agent WebSocket routing - must be before React Router catch-all
 app.all("/agents/*", async (c) => {
+	// Per-mailbox ACL enforcement for the EmailAgent path — parity with the
+	// HTTP `requireMailbox` and MCP `verifyMailbox` gates (#27/#295). The agent
+	// instance name IS the mailboxId (attacker-chosen via the connection URL),
+	// and the full email toolset is built for it, so without this check any
+	// teammate admitted by the shared CF Access policy could read and mutate
+	// any other mailbox over the agent WebSocket. Runs after the global CF
+	// Access JWT middleware (token verified-present) and before
+	// `routeAgentRequest`, covering both the WebSocket upgrade and HTTP.
+	const mailboxId = emailAgentMailboxIdFromPath(new URL(c.req.url).pathname);
+	if (mailboxId) {
+		const allowed = await callerAllowedForMailbox(
+			c.env,
+			mailboxId,
+			c.req.header("cf-access-jwt-assertion"),
+			import.meta.env.DEV,
+		);
+		if (!allowed) return c.json({ error: "Forbidden" }, 403);
+	}
 	const response = await routeAgentRequest(c.req.raw, c.env);
 	if (response) return response;
 	return c.text("Agent not found", 404);

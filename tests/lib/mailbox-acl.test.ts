@@ -2,9 +2,25 @@
 
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import { callerInAcl, callerGroupsFromJwt, readMailboxAcl, writeMailboxAcl, deleteMailboxAcl } from "../../workers/lib/mailbox-acl";
+import {
+	callerInAcl,
+	callerGroupsFromJwt,
+	callerEmailFromJwt,
+	callerAllowedForMailbox,
+	emailAgentMailboxIdFromPath,
+	readMailboxAcl,
+	writeMailboxAcl,
+	deleteMailboxAcl,
+} from "../../workers/lib/mailbox-acl";
 import type { MailboxAcl } from "../../workers/lib/mailbox-acl";
 import { requireMailbox } from "../../workers/lib/mailbox";
+
+// Helper: build a fake (unsigned) JWT carrying arbitrary claims (email/groups).
+// decodeJwt from jose just base64url-decodes the payload — no sig check needed.
+function makeFakeJwt(claims: Record<string, unknown>): string {
+	const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+	return `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify(claims))}.`;
+}
 
 // Helper: build a fake (unsigned) JWT carrying the given groups claim.
 // decodeJwt from jose just base64url-decodes the payload — no sig check needed.
@@ -384,5 +400,170 @@ describe("requireMailbox — group-grant ACL (#295)", () => {
 		const app = makeFakeMailboxAppWithJwt(store, "eve@example.com", null);
 		const res = await app.fetch("/mailboxes/alice@example.com/test");
 		expect(res.status).toBe(403);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// callerEmailFromJwt — identity from the verified token, never a header (f17)
+// ---------------------------------------------------------------------------
+
+describe("callerEmailFromJwt", () => {
+	it("returns null for absent/malformed tokens", () => {
+		expect(callerEmailFromJwt(null)).toBeNull();
+		expect(callerEmailFromJwt(undefined)).toBeNull();
+		expect(callerEmailFromJwt("")).toBeNull();
+		expect(callerEmailFromJwt("not.a.jwt")).toBeNull();
+	});
+
+	it("returns the email claim from a valid token", () => {
+		expect(callerEmailFromJwt(makeFakeJwt({ email: "alice@example.com" }))).toBe("alice@example.com");
+	});
+
+	it("returns null when the token has no email claim (e.g. a service token)", () => {
+		expect(callerEmailFromJwt(makeFakeJwt({ common_name: "svc-token" }))).toBeNull();
+		expect(callerEmailFromJwt(makeFakeJwt({ groups: ["soc-analysts"] }))).toBeNull();
+	});
+
+	it("returns null for a non-string or empty email claim", () => {
+		expect(callerEmailFromJwt(makeFakeJwt({ email: 42 }))).toBeNull();
+		expect(callerEmailFromJwt(makeFakeJwt({ email: "" }))).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// emailAgentMailboxIdFromPath — only the per-mailbox EmailAgent path (f15)
+// ---------------------------------------------------------------------------
+
+describe("emailAgentMailboxIdFromPath", () => {
+	it("extracts the mailboxId from an EmailAgent path", () => {
+		expect(emailAgentMailboxIdFromPath("/agents/email-agent/alice@example.com")).toBe("alice@example.com");
+	});
+
+	it("extracts it for deeper sub-paths (chat / websocket endpoints)", () => {
+		expect(emailAgentMailboxIdFromPath("/agents/email-agent/alice@example.com/get-messages")).toBe(
+			"alice@example.com",
+		);
+	});
+
+	it("URL-decodes the mailboxId segment", () => {
+		expect(emailAgentMailboxIdFromPath("/agents/email-agent/alice%40example.com")).toBe("alice@example.com");
+	});
+
+	it("returns null for OrgAgent and other agents (not gated here)", () => {
+		expect(emailAgentMailboxIdFromPath("/agents/org-agent/default")).toBeNull();
+	});
+
+	it("returns null for non-agent or incomplete paths", () => {
+		expect(emailAgentMailboxIdFromPath("/api/v1/mailboxes/alice@example.com/emails")).toBeNull();
+		expect(emailAgentMailboxIdFromPath("/agents/email-agent")).toBeNull();
+		expect(emailAgentMailboxIdFromPath("/agents")).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// callerAllowedForMailbox — agent-path ACL core, fail-closed in prod (f15/f17)
+// ---------------------------------------------------------------------------
+
+describe("callerAllowedForMailbox", () => {
+	const mailboxId = "alice@example.com";
+	const aclKey = `mailboxes-acl/${mailboxId}.json`;
+	const aliceAcl: MailboxAcl = { owner: mailboxId, members: [mailboxId], groups: ["soc-analysts"] };
+	const env = (store: Record<string, string>) => ({ BUCKET: makeR2Stub(store) as unknown as R2Bucket });
+
+	it("allows when no ACL blob exists (backwards-compat)", async () => {
+		expect(await callerAllowedForMailbox(env({}), mailboxId, makeFakeJwt({ email: "eve@evil.com" }), false)).toBe(
+			true,
+		);
+	});
+
+	it("allows a member identified by the verified-JWT email", async () => {
+		const e = env({ [aclKey]: JSON.stringify(aliceAcl) });
+		expect(await callerAllowedForMailbox(e, mailboxId, makeFakeJwt({ email: mailboxId }), false)).toBe(true);
+	});
+
+	it("allows a caller in a granted group (groups from the JWT)", async () => {
+		const e = env({ [aclKey]: JSON.stringify(aliceAcl) });
+		expect(
+			await callerAllowedForMailbox(e, mailboxId, makeFakeJwt({ email: "bob@example.com", groups: ["soc-analysts"] }), false),
+		).toBe(true);
+	});
+
+	it("DENIES a non-member teammate (the f15 cross-tenant bypass)", async () => {
+		const e = env({ [aclKey]: JSON.stringify(aliceAcl) });
+		expect(await callerAllowedForMailbox(e, mailboxId, makeFakeJwt({ email: "eve@example.com" }), false)).toBe(false);
+	});
+
+	it("DENIES (fail-closed) in prod when the JWT carries no email — e.g. a service token", async () => {
+		const e = env({ [aclKey]: JSON.stringify(aliceAcl) });
+		expect(await callerAllowedForMailbox(e, mailboxId, makeFakeJwt({ common_name: "svc" }), false)).toBe(false);
+		expect(await callerAllowedForMailbox(e, mailboxId, null, false)).toBe(false);
+	});
+
+	it("ignores a forged email header — identity comes only from the JWT", async () => {
+		// No JWT email claim → denied, even though a caller could set any
+		// cf-access-authenticated-user-email header on a direct-origin request.
+		const e = env({ [aclKey]: JSON.stringify(aliceAcl) });
+		expect(await callerAllowedForMailbox(e, mailboxId, makeFakeJwt({}), false)).toBe(false);
+	});
+
+	it("allows in dev mode (no CF Access in front) regardless of ACL", async () => {
+		const e = env({ [aclKey]: JSON.stringify(aliceAcl) });
+		expect(await callerAllowedForMailbox(e, mailboxId, null, true)).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Agent-route gate — wires emailAgentMailboxIdFromPath + callerAllowedForMailbox
+// the same way workers/app.ts does, asserting the 403 the route returns (f15).
+// ---------------------------------------------------------------------------
+
+describe("agent-route ACL gate (f15)", () => {
+	const mailboxId = "alice@example.com";
+	const aclKey = `mailboxes-acl/${mailboxId}.json`;
+	const aliceAcl: MailboxAcl = { owner: mailboxId, members: [mailboxId] };
+
+	function makeAgentGateApp(store: Record<string, string>, jwt: string | null) {
+		const bucket = makeR2Stub(store);
+		const app = new Hono<{ Bindings: { BUCKET: typeof bucket } }>();
+		// Mirror of the workers/app.ts "/agents/*" handler (isDev=false → prod).
+		app.all("/agents/*", async (c) => {
+			const id = emailAgentMailboxIdFromPath(new URL(c.req.url).pathname);
+			if (id) {
+				const allowed = await callerAllowedForMailbox(c.env, id, c.req.header("cf-access-jwt-assertion"), false);
+				if (!allowed) return c.json({ error: "Forbidden" }, 403);
+			}
+			return c.json({ routed: true }); // stand-in for routeAgentRequest
+		});
+		return {
+			fetch: (path: string) => {
+				const headers: Record<string, string> = {};
+				if (jwt) headers["cf-access-jwt-assertion"] = jwt;
+				return app.request(path, { headers }, { BUCKET: bucket as unknown as R2Bucket });
+			},
+		};
+	}
+
+	it("returns 403 for a teammate not in the mailbox ACL (cross-tenant bypass closed)", async () => {
+		const app = makeAgentGateApp({ [aclKey]: JSON.stringify(aliceAcl) }, makeFakeJwt({ email: "eve@example.com" }));
+		const res = await app.fetch("/agents/email-agent/alice@example.com");
+		expect(res.status).toBe(403);
+	});
+
+	it("returns 403 when the JWT has no email claim (header-strip / service token)", async () => {
+		const app = makeAgentGateApp({ [aclKey]: JSON.stringify(aliceAcl) }, makeFakeJwt({ common_name: "svc" }));
+		const res = await app.fetch("/agents/email-agent/alice@example.com");
+		expect(res.status).toBe(403);
+	});
+
+	it("allows a member through the gate", async () => {
+		const app = makeAgentGateApp({ [aclKey]: JSON.stringify(aliceAcl) }, makeFakeJwt({ email: mailboxId }));
+		const res = await app.fetch("/agents/email-agent/alice@example.com");
+		expect(res.status).toBe(200);
+	});
+
+	it("does not gate the OrgAgent path", async () => {
+		const app = makeAgentGateApp({ [aclKey]: JSON.stringify(aliceAcl) }, makeFakeJwt({ email: "eve@example.com" }));
+		const res = await app.fetch("/agents/org-agent/default");
+		expect(res.status).toBe(200);
 	});
 });
