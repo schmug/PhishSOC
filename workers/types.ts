@@ -29,4 +29,22 @@ export interface Env extends Cloudflare.Env {
 	 * When absent, the yaramail callback route returns 503.
 	 */
 	YARAMAIL_CALLBACK_SECRET?: string;
+	/**
+	 * Comma-separated hostname allowlist for the community-hub URL
+	 * (GHSA-jfj6-w954-96vg f29). A `HUB_SECRET_*` API key is only resolved
+	 * and sent when `intel.hub.url` is https AND its hostname is on this
+	 * list. Unset/empty → hub credentials are never released, so operators
+	 * MUST set this (e.g. `hub.example.com`) to use a hub secret. Pinning
+	 * the destination in env (not settings) is the point: settings are
+	 * teammate-editable, env vars are operator-only.
+	 */
+	HUB_ALLOWED_HOSTS?: string;
+	/**
+	 * Comma-separated hostname allowlist for credential-bearing intel-feed
+	 * fetches (GHSA-jfj6-w954-96vg f27). A `FEED_SECRET_*` Authorization
+	 * header is only attached when the feed URL is https AND its hostname
+	 * is on this list or belongs to a built-in `DEFAULT_FEEDS` entry.
+	 * Off-allowlist feeds still fetch — they just never carry the secret.
+	 */
+	FEED_ALLOWED_HOSTS?: string;
 }

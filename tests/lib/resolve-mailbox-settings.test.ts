@@ -647,7 +647,11 @@ describe("resolveMailboxSettings — intel.hub inheritance (#121 audit Q1)", () 
 			"org/settings.json": { intel: { hub: orgHub } },
 			[MAILBOX_KEY]: {},
 		});
-		const cfg = await loadHubConfig(makeEnv(bucket), MAILBOX_ID);
+		// Since GHSA-jfj6-w954-96vg (f29), loadHubConfig also requires the hub
+		// URL host to be on the operator-set HUB_ALLOWED_HOSTS env allowlist —
+		// see tests/lib/host-allowlist.test.ts for that surface.
+		const env = { ...makeEnv(bucket), HUB_ALLOWED_HOSTS: "hub.example.com" };
+		const cfg = await loadHubConfig(env, MAILBOX_ID);
 		expect(cfg).not.toBeNull();
 		expect(cfg?.url).toBe(orgHub.url);
 		expect(cfg?.org_uuid).toBe(orgHub.org_uuid);
