@@ -10,7 +10,12 @@
 import { createMiddleware } from "hono/factory";
 import type { MailboxDO } from "../durableObject";
 import type { Env } from "../types";
-import { readMailboxAcl, callerInAcl, callerGroupsFromJwt } from "./mailbox-acl";
+import {
+	readMailboxAcl,
+	callerInAcl,
+	callerGroupsFromJwt,
+	callerEmailFromJwt,
+} from "./mailbox-acl";
 
 export type MailboxContext = {
 	Bindings: Env;
@@ -24,9 +29,13 @@ export const requireMailbox = createMiddleware<MailboxContext>(async (c, next) =
 	if (!rawId) return c.json({ error: "Mailbox ID required" }, 400);
 	const mailboxId = decodeURIComponent(rawId);
 
-	const callerEmail = c.req.header("cf-access-authenticated-user-email") ?? null;
-	// Groups sourced from the verified CF Access JWT (already checked by the global middleware).
-	const callerGroups = callerGroupsFromJwt(c.req.header("cf-access-jwt-assertion"));
+	// Identity and groups sourced from the VERIFIED CF Access JWT (signature
+	// already checked by the global middleware in workers/app.ts) — never from
+	// the cf-access-authenticated-user-email header, which is decoupled from
+	// the token and forgeable on a direct-to-origin request (f17).
+	const jwtToken = c.req.header("cf-access-jwt-assertion");
+	const callerEmail = callerEmailFromJwt(jwtToken);
+	const callerGroups = callerGroupsFromJwt(jwtToken);
 	const key = `mailboxes/${mailboxId}.json`;
 
 	// Parallel: existence check + ACL read (#27)
@@ -36,7 +45,11 @@ export const requireMailbox = createMiddleware<MailboxContext>(async (c, next) =
 	]);
 
 	if (!obj) return c.json({ error: "Not found" }, 404);
-	if (!callerInAcl(acl, callerEmail, callerGroups)) return c.json({ error: "Forbidden" }, 403);
+	// Fail closed in production when no JWT email is present (f17); local dev
+	// (no CF Access in front → no token) keeps the legacy allow.
+	if (!callerInAcl(acl, callerEmail, callerGroups, import.meta.env.DEV)) {
+		return c.json({ error: "Forbidden" }, 403);
+	}
 
 	const ns = c.env.MAILBOX;
 	const id = ns.idFromName(mailboxId);
