@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	emptyVerdict,
 	extractReceivedFromIp,
+	isPrivateOrLoopbackIp,
 	parseAuthResults,
 	scoreAuth,
 } from "../../workers/security/auth";
@@ -402,5 +403,53 @@ describe("extractReceivedFromIp", () => {
 				header("Received", "from sender [203.0.113.55] by mx"),
 			]),
 		).toBe("203.0.113.55");
+	});
+});
+
+describe("isPrivateOrLoopbackIp — IPv4-mapped IPv6, NAT64, unspecified (GHSA-vpmq-j44v-vjr6)", () => {
+	it("blocks IPv4-mapped IPv6 loopback in dotted form (::ffff:127.0.0.1)", () => {
+		expect(isPrivateOrLoopbackIp("::ffff:127.0.0.1")).toBe(true);
+	});
+
+	it("blocks IPv4-mapped IPv6 loopback in hex form (::ffff:7f00:1)", () => {
+		// WHATWG URL serializes http://[::ffff:127.0.0.1]/ to this hex form.
+		expect(isPrivateOrLoopbackIp("::ffff:7f00:1")).toBe(true);
+	});
+
+	it("blocks IPv4-mapped RFC-1918 space in dotted and hex forms", () => {
+		expect(isPrivateOrLoopbackIp("::ffff:10.0.0.1")).toBe(true);
+		expect(isPrivateOrLoopbackIp("::ffff:a00:1")).toBe(true); // 10.0.0.1
+		expect(isPrivateOrLoopbackIp("::ffff:192.168.1.50")).toBe(true);
+		expect(isPrivateOrLoopbackIp("::ffff:169.254.169.254")).toBe(true);
+	});
+
+	it("blocks fully-expanded IPv4-mapped loopback (0:0:0:0:0:ffff:7f00:1)", () => {
+		expect(isPrivateOrLoopbackIp("0:0:0:0:0:ffff:7f00:1")).toBe(true);
+	});
+
+	it("blocks the unspecified addresses 0.0.0.0 and ::", () => {
+		expect(isPrivateOrLoopbackIp("0.0.0.0")).toBe(true);
+		expect(isPrivateOrLoopbackIp("::")).toBe(true);
+		expect(isPrivateOrLoopbackIp("0:0:0:0:0:0:0:0")).toBe(true);
+	});
+
+	it("blocks NAT64-wrapped private/loopback (64:ff9b::/96 with embedded private v4)", () => {
+		expect(isPrivateOrLoopbackIp("64:ff9b::7f00:1")).toBe(true); // 127.0.0.1
+		expect(isPrivateOrLoopbackIp("64:ff9b::127.0.0.1")).toBe(true);
+		expect(isPrivateOrLoopbackIp("64:ff9b::a9fe:a9fe")).toBe(true); // 169.254.169.254
+	});
+
+	it("still allows public addresses, including public IPv4-mapped and NAT64 forms", () => {
+		expect(isPrivateOrLoopbackIp("8.8.8.8")).toBe(false);
+		expect(isPrivateOrLoopbackIp("::ffff:8.8.8.8")).toBe(false);
+		expect(isPrivateOrLoopbackIp("::ffff:808:808")).toBe(false); // 8.8.8.8
+		expect(isPrivateOrLoopbackIp("64:ff9b::808:808")).toBe(false);
+		expect(isPrivateOrLoopbackIp("2606:4700:4700::1111")).toBe(false);
+	});
+
+	it("keeps blocking the existing IPv6 private ranges", () => {
+		expect(isPrivateOrLoopbackIp("::1")).toBe(true);
+		expect(isPrivateOrLoopbackIp("fe80::1")).toBe(true);
+		expect(isPrivateOrLoopbackIp("fd00::1")).toBe(true);
 	});
 });
