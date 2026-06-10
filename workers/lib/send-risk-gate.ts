@@ -25,11 +25,16 @@ export type SendRiskGateResult =
 /**
  * Classify outbound send risk and enforce step-up confirmation for tier ≥ 1.
  * Shared by POST /emails, /reply, and /forward so none can bypass send-risk.
+ *
+ * `consumeJti` must atomically mark the token's jti as consumed and return
+ * true only on the first consume — use the per-mailbox DO's `consumeJti`
+ * method (INSERT OR IGNORE with rowsWritten check) at every call site.
  */
 export async function enforceSendRiskConfirmation(
 	env: GateEnv,
 	confirmationToken: string | undefined,
 	input: SendRiskGateInput,
+	consumeJti: (jti: string) => Promise<boolean>,
 ): Promise<SendRiskGateResult> {
 	const risk = classifySend({
 		to: input.to,
@@ -75,6 +80,7 @@ export async function enforceSendRiskConfirmation(
 		input.mailboxId,
 		payloadHash,
 		BLOOM_KV,
+		consumeJti,
 	);
 	if (!verified) {
 		return { ok: false, status: 401, body: { error: "invalid or expired confirmation token" } };

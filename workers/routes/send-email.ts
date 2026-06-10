@@ -67,6 +67,7 @@ sendEmailRoutes.post("/emails", async (c) => {
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
 			createdBy,
 		},
+		(jti) => (c.var.mailboxStub as any).consumeJti(jti),
 	);
 	if (!gate.ok) return c.json(gate.body, gate.status);
 

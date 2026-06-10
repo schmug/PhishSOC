@@ -286,6 +286,14 @@ describe("POST /api/v1/confirm — replay protection", () => {
 			Buffer.from(token.split(".")[1], "base64url").toString(),
 		);
 
+		// Shared atomic-consume callback (simulates DO INSERT OR IGNORE)
+		const consumed = new Set<string>();
+		const consumeJti = (jti: string): Promise<boolean> => {
+			if (consumed.has(jti)) return Promise.resolve(false);
+			consumed.add(jti);
+			return Promise.resolve(true);
+		};
+
 		// First verify — should succeed
 		const first = await verifyConfirmationToken(
 			token,
@@ -293,16 +301,18 @@ describe("POST /api/v1/confirm — replay protection", () => {
 			payload.mailboxId,
 			payload.payloadHash,
 			kv as unknown as KVNamespace,
+			consumeJti,
 		);
 		expect(first).not.toBeNull();
 
-		// Second verify — jti already deleted, should fail
+		// Second verify — jti already consumed, should fail
 		const second = await verifyConfirmationToken(
 			token,
 			SECRET,
 			payload.mailboxId,
 			payload.payloadHash,
 			kv as unknown as KVNamespace,
+			consumeJti,
 		);
 		expect(second).toBeNull();
 	});

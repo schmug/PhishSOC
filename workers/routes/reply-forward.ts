@@ -44,6 +44,7 @@ export async function handleReplyEmail(c: AppContext) {
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
 			createdBy,
 		},
+		(jti) => (stub as any).consumeJti(jti),
 	);
 	if (!gate.ok) return c.json(gate.body, gate.status);
 	const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
@@ -151,6 +152,7 @@ export async function handleForwardEmail(c: AppContext) {
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
 			createdBy,
 		},
+		(jti) => (stub as any).consumeJti(jti),
 	);
 	if (!gate.ok) return c.json(gate.body, gate.status);
 	const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
