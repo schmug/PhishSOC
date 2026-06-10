@@ -1340,11 +1340,23 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	let subjectMatchedThread = false;
 
 	if (!inReplyTo && emailReferences.length === 0) {
-		const authVerdict = parseAuthResults(parsedEmail.headers);
+		// GHSA-m9f6-j7mm-wc4m: subject-merge requires From:-aligned,
+		// trustworthy authentication. SPF authenticates the envelope
+		// MAIL-FROM and DKIM the signing d= domain — neither is aligned to
+		// the From: header an attacker spoofs, so spf=pass / dkim=pass alone
+		// must NOT unlock thread merging. Only dmarc=pass implies alignment,
+		// and it only counts when reported by an operator-trusted
+		// authserv-id (`authVerdict.trusted`) — same invariant as
+		// `evaluateHardAllow` in workers/security/triage.ts. Without the
+		// trusted gate, a forged Authentication-Results header claiming
+		// dmarc=pass is honored on default deployments (empty
+		// trusted_authserv_ids).
+		const { security } = await resolveMailboxSettings(env, mailboxId);
+		const authVerdict = parseAuthResults(parsedEmail.headers, {
+			trustedAuthservIds: security.trusted_authserv_ids,
+		});
 		const senderIsAuthenticated =
-			authVerdict.dmarc === "pass" ||
-			authVerdict.spf === "pass" ||
-			authVerdict.dkim === "pass";
+			authVerdict.dmarc === "pass" && authVerdict.trusted === true;
 		if (senderIsAuthenticated) {
 			const subjectThread = await (stub as any).findThreadBySubject(parsedEmail.subject || "", parsedEmail.from?.address || undefined);
 			if (subjectThread) {

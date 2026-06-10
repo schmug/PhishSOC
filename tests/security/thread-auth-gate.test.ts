@@ -1,15 +1,32 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 /**
- * receiveEmail-level regression for subject-match thread-splicing fix (issue #463).
+ * receiveEmail-level regression for subject-match thread-splicing fix
+ * (issue #463, hardened for GHSA-m9f6-j7mm-wc4m).
+ *
+ * The subject-merge gate must require From:-aligned, trustworthy
+ * authentication before splicing a referenceless message into an existing
+ * thread:
+ *
+ *   - SPF authenticates the envelope MAIL-FROM and DKIM the signing d=
+ *     domain — neither is aligned to the From: header an attacker spoofs,
+ *     so spf=pass / dkim=pass alone must NOT unlock the merge.
+ *   - Only dmarc=pass implies From: alignment, and it only counts when
+ *     reported by an operator-trusted authserv-id (`authVerdict.trusted`),
+ *     mirroring `evaluateHardAllow` in workers/security/triage.ts —
+ *     otherwise a forged Authentication-Results header claiming dmarc=pass
+ *     is honored on default deployments (empty trusted_authserv_ids).
  *
  * Verifies that:
- *   - Unauthenticated sender (all auth headers fail/none) → findThreadBySubject NOT called
- *   - Authenticated sender (dmarc=pass) → findThreadBySubject IS called; thread adopted
- *   - Authenticated sender (spf=pass) → findThreadBySubject IS called; thread adopted
- *   - Authenticated sender (dkim=pass) → findThreadBySubject IS called; thread adopted
- *   - Quarantined + subject-matched → detachEmailFromThread IS called
- *   - Blocked + subject-matched → detachEmailFromThread IS called
+ *   - dmarc=fail + spf=pass + dkim=pass (forged splice) → NOT merged; own thread_id
+ *   - spf=pass only → NOT merged
+ *   - dkim=pass only → NOT merged
+ *   - dmarc=pass from a trusted authserv-id → merged (happy path intact)
+ *   - dmarc=pass with empty trusted_authserv_ids (default deploy, forged
+ *     Authentication-Results) → NOT merged
+ *   - dmarc=pass from an UNtrusted authserv-id on a configured deploy → NOT merged
+ *   - Unauthenticated sender (all fail / no headers) → NOT merged
+ *   - Quarantined/blocked + subject-matched → detachEmailFromThread IS called
  *   - Quarantined without subject-match → detachEmailFromThread NOT called
  */
 
@@ -57,9 +74,10 @@ const mockedPipeline = vi.mocked(runSecurityPipeline);
 
 const MAILBOX_ID = "inbox@example.com";
 const EXISTING_THREAD_ID = "existing-thread-uuid";
+const TRUSTED_AUTHSERV = "authserv.example";
 
-function makeAuthHeader(spf: string, dkim: string, dmarc: string) {
-	return { key: "Authentication-Results", value: `authserv.example; spf=${spf}; dkim=${dkim}; dmarc=${dmarc}` };
+function makeAuthHeader(spf: string, dkim: string, dmarc: string, authservId: string = TRUSTED_AUTHSERV) {
+	return { key: "Authentication-Results", value: `${authservId}; spf=${spf}; dkim=${dkim}; dmarc=${dmarc}` };
 }
 
 function makeEmail(authHeader?: { key: string; value: string }): Email {
@@ -100,13 +118,23 @@ function makeCtx(): ExecutionContext {
 	return { waitUntil: vi.fn() } as unknown as ExecutionContext;
 }
 
-const BASE_SETTINGS = {
-	security: { enabled: true, ruf_ingestion: { enabled: false }, thresholds: {} },
-	autoDraft: { enabled: false },
-	raw: undefined,
-} as unknown as Awaited<ReturnType<typeof resolveMailboxSettings>>;
+function makeSettings(trustedAuthservIds: string[]) {
+	return {
+		security: {
+			enabled: true,
+			ruf_ingestion: { enabled: false },
+			thresholds: {},
+			trusted_authserv_ids: trustedAuthservIds,
+		},
+		autoDraft: { enabled: false },
+		raw: undefined,
+	} as unknown as Awaited<ReturnType<typeof resolveMailboxSettings>>;
+}
 
-describe("receiveEmail — subject-match thread-auth gate (issue #463)", () => {
+/** Default deploy for these tests: operator HAS configured a trusted authserv-id. */
+const BASE_SETTINGS = makeSettings([TRUSTED_AUTHSERV]);
+
+describe("receiveEmail — subject-match thread-auth gate (issue #463 / GHSA-m9f6-j7mm-wc4m)", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockedResolve.mockResolvedValue(BASE_SETTINGS);
@@ -117,7 +145,70 @@ describe("receiveEmail — subject-match thread-auth gate (issue #463)", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("unauthenticated sender: findThreadBySubject NOT called", async () => {
+	it("forged splice (dmarc=fail, spf=pass, dkim=pass): NOT merged; gets its own thread_id", async () => {
+		const stub = makeMailboxStub(EXISTING_THREAD_ID);
+		const email = makeEmail(makeAuthHeader("pass", "pass", "fail"));
+		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
+
+		expect(stub.findThreadBySubject).not.toHaveBeenCalled();
+		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { id: string; thread_id: string }];
+		expect(emailArgs.thread_id).not.toBe(EXISTING_THREAD_ID);
+		// Own thread: a referenceless unauthenticated message threads to itself.
+		expect(emailArgs.thread_id).toBe(emailArgs.id);
+	});
+
+	it("spf=pass alone: findThreadBySubject NOT called (SPF is not From-aligned)", async () => {
+		const stub = makeMailboxStub(EXISTING_THREAD_ID);
+		const email = makeEmail(makeAuthHeader("pass", "none", "none"));
+		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
+
+		expect(stub.findThreadBySubject).not.toHaveBeenCalled();
+		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { id: string; thread_id: string }];
+		expect(emailArgs.thread_id).toBe(emailArgs.id);
+	});
+
+	it("dkim=pass alone: findThreadBySubject NOT called (DKIM d= is not From-aligned)", async () => {
+		const stub = makeMailboxStub(EXISTING_THREAD_ID);
+		const email = makeEmail(makeAuthHeader("none", "pass", "none"));
+		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
+
+		expect(stub.findThreadBySubject).not.toHaveBeenCalled();
+		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { id: string; thread_id: string }];
+		expect(emailArgs.thread_id).toBe(emailArgs.id);
+	});
+
+	it("dmarc=pass from trusted authserv-id: findThreadBySubject IS called; thread adopted", async () => {
+		const stub = makeMailboxStub(EXISTING_THREAD_ID);
+		const email = makeEmail(makeAuthHeader("fail", "none", "pass"));
+		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
+
+		expect(stub.findThreadBySubject).toHaveBeenCalledOnce();
+		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { thread_id: string }];
+		expect(emailArgs.thread_id).toBe(EXISTING_THREAD_ID);
+	});
+
+	it("dmarc=pass with empty trusted_authserv_ids (default deploy): forged Authentication-Results NOT honored", async () => {
+		mockedResolve.mockResolvedValue(makeSettings([]));
+		const stub = makeMailboxStub(EXISTING_THREAD_ID);
+		const email = makeEmail(makeAuthHeader("pass", "pass", "pass"));
+		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
+
+		expect(stub.findThreadBySubject).not.toHaveBeenCalled();
+		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { id: string; thread_id: string }];
+		expect(emailArgs.thread_id).toBe(emailArgs.id);
+	});
+
+	it("dmarc=pass from an UNtrusted authserv-id on a configured deploy: NOT merged", async () => {
+		const stub = makeMailboxStub(EXISTING_THREAD_ID);
+		const email = makeEmail(makeAuthHeader("pass", "pass", "pass", "attacker.example"));
+		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
+
+		expect(stub.findThreadBySubject).not.toHaveBeenCalled();
+		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { id: string; thread_id: string }];
+		expect(emailArgs.thread_id).toBe(emailArgs.id);
+	});
+
+	it("unauthenticated sender (all fail): findThreadBySubject NOT called", async () => {
 		const stub = makeMailboxStub(EXISTING_THREAD_ID);
 		const email = makeEmail(makeAuthHeader("fail", "fail", "fail"));
 		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
@@ -135,40 +226,10 @@ describe("receiveEmail — subject-match thread-auth gate (issue #463)", () => {
 		expect(stub.findThreadBySubject).not.toHaveBeenCalled();
 	});
 
-	it("authenticated (dmarc=pass): findThreadBySubject IS called; thread adopted", async () => {
-		const stub = makeMailboxStub(EXISTING_THREAD_ID);
-		const email = makeEmail(makeAuthHeader("fail", "none", "pass"));
-		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
-
-		expect(stub.findThreadBySubject).toHaveBeenCalledOnce();
-		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { thread_id: string }];
-		expect(emailArgs.thread_id).toBe(EXISTING_THREAD_ID);
-	});
-
-	it("authenticated (spf=pass): findThreadBySubject IS called; thread adopted", async () => {
-		const stub = makeMailboxStub(EXISTING_THREAD_ID);
-		const email = makeEmail(makeAuthHeader("pass", "none", "none"));
-		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
-
-		expect(stub.findThreadBySubject).toHaveBeenCalledOnce();
-		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { thread_id: string }];
-		expect(emailArgs.thread_id).toBe(EXISTING_THREAD_ID);
-	});
-
-	it("authenticated (dkim=pass): findThreadBySubject IS called; thread adopted", async () => {
-		const stub = makeMailboxStub(EXISTING_THREAD_ID);
-		const email = makeEmail(makeAuthHeader("none", "pass", "none"));
-		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
-
-		expect(stub.findThreadBySubject).toHaveBeenCalledOnce();
-		const [, emailArgs] = stub.createEmail.mock.calls[0] as [unknown, { thread_id: string }];
-		expect(emailArgs.thread_id).toBe(EXISTING_THREAD_ID);
-	});
-
 	it("quarantined + subject-matched: detachEmailFromThread IS called", async () => {
 		mockedPipeline.mockResolvedValue({ verdict: { action: "quarantine", score: 80, signals: [], explanation: "" }, skipped: false } as never);
 		const stub = makeMailboxStub(EXISTING_THREAD_ID);
-		const email = makeEmail(makeAuthHeader("pass", "none", "none"));
+		const email = makeEmail(makeAuthHeader("pass", "pass", "pass"));
 		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
 
 		expect(stub.moveEmail).toHaveBeenCalledWith(expect.any(String), "quarantine");
@@ -178,7 +239,7 @@ describe("receiveEmail — subject-match thread-auth gate (issue #463)", () => {
 	it("blocked + subject-matched: detachEmailFromThread IS called", async () => {
 		mockedPipeline.mockResolvedValue({ verdict: { action: "block", score: 95, signals: [], explanation: "" }, skipped: false } as never);
 		const stub = makeMailboxStub(EXISTING_THREAD_ID);
-		const email = makeEmail(makeAuthHeader("pass", "none", "none"));
+		const email = makeEmail(makeAuthHeader("pass", "pass", "pass"));
 		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
 
 		expect(stub.moveEmail).toHaveBeenCalledWith(expect.any(String), "quarantine");
@@ -189,7 +250,7 @@ describe("receiveEmail — subject-match thread-auth gate (issue #463)", () => {
 		mockedPipeline.mockResolvedValue({ verdict: { action: "quarantine", score: 80, signals: [], explanation: "" }, skipped: false } as never);
 		// findThreadBySubject returns null — no subject match
 		const stub = makeMailboxStub(null);
-		const email = makeEmail(makeAuthHeader("pass", "none", "none"));
+		const email = makeEmail(makeAuthHeader("pass", "pass", "pass"));
 		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
 
 		expect(stub.moveEmail).toHaveBeenCalledWith(expect.any(String), "quarantine");
