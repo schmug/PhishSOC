@@ -28,6 +28,7 @@ import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline } from "./security";
+import { parseAuthResults } from "./security/auth";
 import { runDeepScan } from "./intel/deep-scan";
 import { isDmarcReport, ingestDmarcReport, isDmarcRuf, ingestDmarcRuf } from "./dmarc/ingest";
 import { dmarcRoutes } from "./routes/dmarc";
@@ -1336,10 +1337,21 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	const inReplyTo = parsedEmail.inReplyTo ? extractMsgId(parsedEmail.inReplyTo) : null;
 	const emailReferences = parsedEmail.references ? parsedEmail.references.split(/\s+/).filter(Boolean).map(extractMsgId) : [];
 	let threadId = emailReferences[0] || inReplyTo || messageId;
+	let subjectMatchedThread = false;
 
 	if (!inReplyTo && emailReferences.length === 0) {
-		const subjectThread = await (stub as any).findThreadBySubject(parsedEmail.subject || "", parsedEmail.from?.address || undefined);
-		if (subjectThread) threadId = subjectThread;
+		const authVerdict = parseAuthResults(parsedEmail.headers);
+		const senderIsAuthenticated =
+			authVerdict.dmarc === "pass" ||
+			authVerdict.spf === "pass" ||
+			authVerdict.dkim === "pass";
+		if (senderIsAuthenticated) {
+			const subjectThread = await (stub as any).findThreadBySubject(parsedEmail.subject || "", parsedEmail.from?.address || undefined);
+			if (subjectThread) {
+				threadId = subjectThread;
+				subjectMatchedThread = true;
+			}
+		}
 	}
 
 	const originalMessageId = parsedEmail.messageId ? extractMsgId(parsedEmail.messageId) : null;
@@ -1455,6 +1467,9 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 		securityVerdict = result.verdict;
 		if (securityVerdict?.action === "quarantine" || securityVerdict?.action === "block") {
 			await stub.moveEmail(messageId, Folders.QUARANTINE);
+			if (subjectMatchedThread) {
+				await (stub as any).detachEmailFromThread(messageId);
+			}
 		}
 		if (runRecorded) {
 			// Skipped runs (mailbox security disabled) are marked with a

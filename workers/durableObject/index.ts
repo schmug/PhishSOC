@@ -580,6 +580,13 @@ export class MailboxDO extends DurableObject<Env> {
 		return this.getEmail(id);
 	}
 
+	async detachEmailFromThread(id: string): Promise<void> {
+		this.ctx.storage.sql.exec(
+			`UPDATE emails SET thread_id = id WHERE id = ?1`,
+			id,
+		);
+	}
+
 	async markThreadRead(threadId: string) {
 		this.ctx.storage.sql.exec(
 			`UPDATE emails SET read = 1 WHERE thread_id = ? AND read = 0`,
@@ -824,12 +831,13 @@ export class MailboxDO extends DurableObject<Env> {
 			if (rowSubject !== normalized) continue;
 
 			if (normalizedSender) {
-				const threadSenders = String((row as any).senders || "");
-				const threadRecipients = String((row as any).recipients || "");
-				const allParticipants = `${threadSenders},${threadRecipients}`;
-				if (!allParticipants.includes(normalizedSender)) {
-					continue;
-				}
+				const participantSet = new Set(
+					[
+						...String((row as any).senders || "").split(","),
+						...String((row as any).recipients || "").split(","),
+					].map((a) => a.trim()).filter(Boolean),
+				);
+				if (!participantSet.has(normalizedSender)) continue;
 			}
 
 			return String((row as any).thread_id);
@@ -2190,4 +2198,16 @@ export class MailboxDO extends DurableObject<Env> {
 			.offset(offset)
 			.all();
 	}
+}
+
+/**
+ * Returns true when `senderAddress` is an exact member of the comma-separated
+ * GROUP_CONCAT participant lists produced by `findThreadBySubject`'s SQL query.
+ * Exported for unit testing the exact-address (non-substring) invariant.
+ */
+export function _isKnownParticipant(senders: string, recipients: string, senderAddress: string): boolean {
+	const participantSet = new Set(
+		[...senders.split(","), ...recipients.split(",")].map((a) => a.trim()).filter(Boolean),
+	);
+	return participantSet.has(senderAddress);
 }
