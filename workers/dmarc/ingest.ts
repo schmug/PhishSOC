@@ -15,11 +15,14 @@
 import type { Email } from "postal-mime";
 import type { Env } from "../types";
 import { getMailboxStub } from "../lib/email-helpers";
-import { bufferToXmlText, gunzip, parseDmarcXml } from "./parser";
+import { bufferToXmlText, DMARC_MAX_DECOMPRESSED_BYTES, gunzip, parseDmarcXml } from "./parser";
 import { parseDmarcRuf } from "./ruf-parser";
 import type { RufIngestionSettings } from "../security/defaults";
 
 export { isDmarcRuf } from "./ruf-parser";
+
+/** Hard cap on records per aggregate report before the bulk DO insert. */
+const DMARC_MAX_RECORDS = 1_000;
 
 /** Heuristic: does this parsed email look like a DMARC aggregate report? */
 export function isDmarcReport(parsed: Email): boolean {
@@ -54,6 +57,12 @@ export async function ingestDmarcReport(
 		if (fn.endsWith(".xml.gz") || (att.mimeType ?? "").toLowerCase() === "application/gzip") {
 			try {
 				const decompressed = await gunzip(raw);
+				if (decompressed === null) {
+					return {
+						ingested: false,
+						reason: `decompressed DMARC payload exceeds ${DMARC_MAX_DECOMPRESSED_BYTES}-byte cap`,
+					};
+				}
 				xmlText = bufferToXmlText(decompressed);
 				break;
 			} catch (e) {
@@ -87,7 +96,8 @@ export async function ingestDmarcReport(
 		policy_pct: report.policy_pct ?? null,
 		raw_r2_key: null,
 	};
-	const recordsToInsert = report.records.map((r) => ({
+	const cappedRecords = report.records.slice(0, DMARC_MAX_RECORDS);
+	const recordsToInsert = cappedRecords.map((r) => ({
 		id: crypto.randomUUID(),
 		source_ip: r.source_ip,
 		count: r.count,
