@@ -227,11 +227,10 @@ describe("runDeepScan + CrowdSec CTI", () => {
 			new URL(String(c[0])).hostname === "cti.api.crowdsec.net",
 		);
 		expect(ctiCalls.length).toBe(0);
-		// And no DoH calls — the CTI stage gates DoH on the API key.
-		const dohCalls = fetchMock.mock.calls.filter((c) =>
-			new URL(String(c[0])).hostname === "cloudflare-dns.com",
-		);
-		expect(dohCalls.length).toBe(0);
+		// SSRF-guard DoH calls (cloudflare-dns.com) are now made by resolveUrl
+		// for every URL hop regardless of CTI configuration; the CTI-stage
+		// resolveHostsToIps is still gated on the API key.  Only assert that
+		// no CTI API calls happened.
 		// No CTI reasons.
 		expect(result.reasons.join(" ")).not.toMatch(/redirect target IP/);
 	});
