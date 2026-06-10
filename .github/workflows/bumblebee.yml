@@ -25,7 +25,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # persist-credentials: false on both checkouts — nothing after checkout
+      # needs git credentials, and this job executes a third-party binary over
+      # the workspace, whose .git/config would otherwise hold the GITHUB_TOKEN.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Exposure catalogs pinned to an upstream commit, not a branch — catalog
       # content is a trust input, so pin bumps must land as reviewed PRs.
@@ -36,6 +41,7 @@ jobs:
           ref: bf685dde34e2d0a7cfea6a232b515fb53fcd7622
           path: bumblebee-upstream
           sparse-checkout: threat_intel
+          persist-credentials: false
 
       # Pinned release binary, sha256-verified against the checksum recorded
       # here (sourced from the release's checksums.txt). NEVER `go install
