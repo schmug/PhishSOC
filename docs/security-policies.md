@@ -10,7 +10,8 @@ OSPS-VM-05.02, and OSPS-VM-06.01.
 ## 1. SCA (Software Composition Analysis) — Dependabot
 
 Dependabot runs weekly (every Monday, 07:00 UTC) and opens PRs against the
-`main` branch for npm packages and GitHub Actions. See
+`main` branch for npm packages and GitHub Actions. Both npm manifests are
+covered: the root app (`/`) and the community hub sub-app (`/hub`). See
 [`.github/dependabot.yml`](../.github/dependabot.yml) for the full
 configuration.
 
