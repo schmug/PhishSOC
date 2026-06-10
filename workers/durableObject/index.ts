@@ -2180,6 +2180,24 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 	}
 
+	// ── Confirmation-token single-use consume (issue #461) ───────────────────
+
+	/**
+	 * Atomically consume a jti. Returns true if the jti was newly inserted
+	 * (this call wins the race), false if it was already consumed.
+	 *
+	 * INSERT OR IGNORE on a PRIMARY KEY is an atomic test-and-set in DO SQLite:
+	 * the DO serializes all JS execution, so rowsWritten === 1 means exactly
+	 * one caller consumed the token.
+	 */
+	async consumeJti(jti: string): Promise<boolean> {
+		const cursor = this.ctx.storage.sql.exec(
+			`INSERT OR IGNORE INTO consumed_jti (jti) VALUES (?1)`,
+			jti,
+		);
+		return cursor.rowsWritten === 1;
+	}
+
 	/** List RUF records, optionally filtered by domain. Newest first, max 200. */
 	async listDmarcRufRecords(
 		options: { domain?: string; limit?: number; offset?: number } = {},

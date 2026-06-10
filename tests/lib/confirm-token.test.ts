@@ -80,6 +80,15 @@ describe("verifyConfirmationToken", () => {
 		return signConfirmationToken(payload, SECRET);
 	}
 
+	/** Simulates the DO's atomic INSERT OR IGNORE using a plain Set. */
+	function makeConsumeJti(consumed = new Set<string>()) {
+		return (jti: string): Promise<boolean> => {
+			if (consumed.has(jti)) return Promise.resolve(false);
+			consumed.add(jti);
+			return Promise.resolve(true);
+		};
+	}
+
 	it("succeeds on first use and returns the payload", async () => {
 		const kv = makeKv({ "confirm-jti:abc": "1" });
 		const token = await mintWithJti("abc");
@@ -90,6 +99,7 @@ describe("verifyConfirmationToken", () => {
 			BASE.mailboxId,
 			BASE.payloadHash,
 			kv as unknown as KVNamespace,
+			makeConsumeJti(),
 		);
 
 		expect(result).not.toBeNull();
@@ -99,24 +109,28 @@ describe("verifyConfirmationToken", () => {
 		expect(result!.jti).toBe("abc");
 	});
 
-	it("deletes the jti from KV after successful verification (replay protection)", async () => {
+	it("calls consumeJti on success and not before the KV check (replay protection)", async () => {
 		const kv = makeKv({ "confirm-jti:abc2": "1" });
 		const token = await mintWithJti("abc2");
+		const consumed = new Set<string>();
 
-		await verifyConfirmationToken(
+		const result = await verifyConfirmationToken(
 			token,
 			SECRET,
 			BASE.mailboxId,
 			BASE.payloadHash,
 			kv as unknown as KVNamespace,
+			makeConsumeJti(consumed),
 		);
 
-		expect(kv._store["confirm-jti:abc2"]).toBeUndefined();
+		expect(result).not.toBeNull();
+		expect(consumed.has("abc2")).toBe(true);
 	});
 
 	it("returns null on second use of the same token (replay)", async () => {
 		const kv = makeKv({ "confirm-jti:abc3": "1" });
 		const token = await mintWithJti("abc3");
+		const consumeJti = makeConsumeJti();
 
 		const first = await verifyConfirmationToken(
 			token,
@@ -124,6 +138,7 @@ describe("verifyConfirmationToken", () => {
 			BASE.mailboxId,
 			BASE.payloadHash,
 			kv as unknown as KVNamespace,
+			consumeJti,
 		);
 		expect(first).not.toBeNull();
 
@@ -133,8 +148,23 @@ describe("verifyConfirmationToken", () => {
 			BASE.mailboxId,
 			BASE.payloadHash,
 			kv as unknown as KVNamespace,
+			consumeJti,
 		);
 		expect(second).toBeNull();
+	});
+
+	it("concurrent calls: exactly one succeeds (atomic jti consume)", async () => {
+		const kv = makeKv({ "confirm-jti:race": "1" });
+		const token = await mintWithJti("race");
+		const consumeJti = makeConsumeJti();
+
+		const [r1, r2] = await Promise.all([
+			verifyConfirmationToken(token, SECRET, BASE.mailboxId, BASE.payloadHash, kv as unknown as KVNamespace, consumeJti),
+			verifyConfirmationToken(token, SECRET, BASE.mailboxId, BASE.payloadHash, kv as unknown as KVNamespace, consumeJti),
+		]);
+
+		const successes = [r1, r2].filter(Boolean);
+		expect(successes).toHaveLength(1);
 	});
 
 	it("returns null when jti is not in KV (never issued or already consumed)", async () => {
@@ -147,6 +177,7 @@ describe("verifyConfirmationToken", () => {
 			BASE.mailboxId,
 			BASE.payloadHash,
 			kv as unknown as KVNamespace,
+			makeConsumeJti(),
 		);
 		expect(result).toBeNull();
 	});
@@ -161,6 +192,7 @@ describe("verifyConfirmationToken", () => {
 			"other@example.com", // wrong mailboxId
 			BASE.payloadHash,
 			kv as unknown as KVNamespace,
+			makeConsumeJti(),
 		);
 		expect(result).toBeNull();
 	});
@@ -175,6 +207,7 @@ describe("verifyConfirmationToken", () => {
 			BASE.mailboxId,
 			"b".repeat(64), // wrong hash
 			kv as unknown as KVNamespace,
+			makeConsumeJti(),
 		);
 		expect(result).toBeNull();
 	});
@@ -189,6 +222,7 @@ describe("verifyConfirmationToken", () => {
 			BASE.mailboxId,
 			BASE.payloadHash,
 			kv as unknown as KVNamespace,
+			makeConsumeJti(),
 		);
 		expect(result).toBeNull();
 	});

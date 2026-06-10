@@ -454,6 +454,7 @@ export async function toolSendReply(
 			subject: params.subject,
 			body: params.bodyHtml,
 		},
+		(jti) => (stub as any).consumeJti(jti),
 	);
 	if (!gate.ok) {
 		const body = gate.body;
@@ -564,6 +565,7 @@ export async function toolSendEmail(
 			body: params.bodyHtml,
 			attachments: params.attachments?.map((a) => ({ filename: a.filename })),
 		},
+		(jti) => (stub as any).consumeJti(jti),
 	);
 	if (!gate.ok) {
 		const body = gate.body;

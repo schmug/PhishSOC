@@ -48,6 +48,7 @@ describe("enforceSendRiskConfirmation — payload binding", () => {
 				body,
 				bcc: "exfil@evil.com",
 			},
+			() => Promise.resolve(true),
 		);
 
 		expect(gate.ok).toBe(false);
@@ -77,6 +78,7 @@ describe("enforceSendRiskConfirmation — agent tier and tier downgrade", () => 
 				body: "Following up on the invoice.",
 				createdBy: "agent",
 			},
+			() => Promise.resolve(true),
 		);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
@@ -101,6 +103,7 @@ describe("enforceSendRiskConfirmation — agent tier and tier downgrade", () => 
 			{ CONFIRMATION_TOKEN_SECRET: SECRET, BLOOM_KV: kv },
 			token,
 			{ mailboxId: MAILBOX_ID, to, subject, body },
+			() => Promise.resolve(true),
 		);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
@@ -127,6 +130,7 @@ describe("enforceSendRiskConfirmation — fail closed on missing bindings", () =
 				subject: "Please wire transfer $10,000",
 				body: "Urgent.",
 			},
+			() => Promise.resolve(true),
 		);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
@@ -144,6 +148,7 @@ describe("enforceSendRiskConfirmation — fail closed on missing bindings", () =
 				subject: "Please wire transfer $10,000",
 				body: "Urgent.",
 			},
+			() => Promise.resolve(true),
 		);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;

@@ -525,6 +525,21 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE dmarc_sources ADD COLUMN country TEXT;
         `,
 	},
+	{
+		// Atomic single-use jti consume for step-up confirmation tokens (issue #461).
+		// KV has no compare-and-swap, so the previous get-then-delete was a
+		// non-atomic race. The DO serializes all JS execution, so an
+		// INSERT OR IGNORE with a PRIMARY KEY constraint is the atomic gate:
+		// only the request whose INSERT creates a row (rowsWritten === 1) may proceed.
+		// The KV get-check is still used to verify the token was legitimately issued.
+		name: "25_consumed_jti",
+		sql: `
+            CREATE TABLE IF NOT EXISTS consumed_jti (
+                jti TEXT PRIMARY KEY,
+                consumed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        `,
+	},
 ];
 
 /**

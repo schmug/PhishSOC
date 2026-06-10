@@ -71,7 +71,11 @@ export async function signConfirmationToken(
 /**
  * Verifies a one-shot confirmation token. Returns the payload on success,
  * null if the token is invalid, expired, or has already been used.
- * Consumes the jti on success (replay protection).
+ *
+ * Replay protection is enforced by `consumeJti`: it must atomically record
+ * the jti as consumed and return true only when this is the first consume
+ * (e.g. INSERT OR IGNORE into the per-mailbox DO SQLite with rowsWritten check).
+ * The `bloomKv` get-check verifies the token was legitimately issued.
  */
 export async function verifyConfirmationToken(
 	token: string,
@@ -79,6 +83,7 @@ export async function verifyConfirmationToken(
 	mailboxId: string,
 	payloadHash: string,
 	bloomKv: KVNamespace,
+	consumeJti: (jti: string) => Promise<boolean>,
 ): Promise<ConfirmationTokenPayload | null> {
 	let raw: Record<string, unknown>;
 	try {
@@ -97,7 +102,7 @@ export async function verifyConfirmationToken(
 	const exists = await bloomKv.get(jtiKey);
 	if (!exists) return null;
 
-	await bloomKv.delete(jtiKey);
+	if (!(await consumeJti(jti))) return null;
 
 	return {
 		tier: raw.tier as 0 | 1 | 2,

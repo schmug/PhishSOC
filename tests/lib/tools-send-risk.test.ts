@@ -94,6 +94,7 @@ function makeKv(initial: Record<string, string> = {}) {
 
 function makeStub(opts: { sendRateLimitError?: string | null } = {}) {
 	const sentEmails: unknown[] = [];
+	const consumedJtis = new Set<string>();
 	return {
 		async checkSendRateLimit() {
 			return opts.sendRateLimitError ?? null;
@@ -104,6 +105,11 @@ function makeStub(opts: { sendRateLimitError?: string | null } = {}) {
 		async createEmail(_folder: unknown, email: unknown) {
 			sentEmails.push(email);
 			return {};
+		},
+		async consumeJti(jti: string): Promise<boolean> {
+			if (consumedJtis.has(jti)) return false;
+			consumedJtis.add(jti);
+			return true;
 		},
 		_sentEmails: sentEmails,
 	};
