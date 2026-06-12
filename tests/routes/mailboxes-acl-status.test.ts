@@ -12,9 +12,22 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { requireMailbox, type MailboxContext } from "../../workers/lib/mailbox";
 import { aclMemberRoutes } from "../../workers/routes/acl-members";
-import { readMailboxAcl, writeMailboxAcl, callerInAcl } from "../../workers/lib/mailbox-acl";
+import {
+	readMailboxAcl,
+	writeMailboxAcl,
+	callerInAcl,
+	callerEmailFromJwt,
+} from "../../workers/lib/mailbox-acl";
 import { listMailboxes } from "../../workers/lib/email-helpers";
 import type { MailboxAcl } from "../../workers/lib/mailbox-acl";
+
+// Helper: build a fake (unsigned) JWT carrying arbitrary claims. Identity is
+// decoded from the cf-access-jwt-assertion token (f17), never from the
+// cf-access-authenticated-user-email header.
+function makeFakeJwt(claims: Record<string, unknown>): string {
+	const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+	return `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify(claims))}.`;
+}
 
 // ---------------------------------------------------------------------------
 // In-memory R2 stub (supports head / get / put / delete / list)
@@ -51,20 +64,27 @@ function makeR2Stub(initial: Record<string, string> = {}) {
 // Minimal list-endpoint app (replicates GET /api/v1/mailboxes from index.ts)
 // ---------------------------------------------------------------------------
 
-function makeListApp(bucketStore: Record<string, string>, callerEmail: string | null) {
+function makeListApp(
+	bucketStore: Record<string, string>,
+	callerEmail: string | null,
+	dev = true,
+) {
 	const bucket = makeR2Stub(bucketStore);
 	const MAILBOX = { idFromName: () => "fake-id", get: () => ({}) };
 
 	const app = new Hono<{ Bindings: { BUCKET: typeof bucket; MAILBOX: typeof MAILBOX } }>();
 
 	app.get("/api/v1/mailboxes", async (c) => {
+		// Mirror of the production handler in workers/index.ts (f17). Keep in
+		// sync: the show-all branch is dev-only; production fails closed for a
+		// missing caller email (scoped mailboxes hidden, unscoped still shown).
 		const caller = callerEmail;
 		const allMailboxes = await listMailboxes(c.env.BUCKET as unknown as R2Bucket);
 		const acls = await Promise.all(
 			allMailboxes.map((m) => readMailboxAcl(c.env as unknown as { BUCKET: R2Bucket }, m.id)),
 		);
 
-		if (!caller) {
+		if (!caller && dev) {
 			return c.json(
 				allMailboxes.map((m, i) => ({
 					...m,
@@ -76,7 +96,7 @@ function makeListApp(bucketStore: Record<string, string>, callerEmail: string | 
 
 		const visible = allMailboxes
 			.map((m, i) => ({ mailbox: m, acl: acls[i] }))
-			.filter(({ acl }) => callerInAcl(acl, caller));
+			.filter(({ acl }) => callerInAcl(acl, caller, [], dev));
 
 		return c.json(
 			visible.map(({ mailbox, acl }) => ({
@@ -117,7 +137,8 @@ function makeLockDownApp(bucketStore: Record<string, string>, callerEmail: strin
 	return {
 		post(mailboxId: string) {
 			const hdrs: Record<string, string> = {};
-			if (callerEmail) hdrs["cf-access-authenticated-user-email"] = callerEmail;
+			// Caller identity travels in the fake verified JWT (f17).
+			if (callerEmail) hdrs["cf-access-jwt-assertion"] = makeFakeJwt({ email: callerEmail });
 			return app.request(
 				`/api/v1/mailboxes/${mailboxId}/acl`,
 				{ method: "POST", headers: hdrs },
@@ -274,8 +295,10 @@ function makeBulkLockDownApp(bucketStore: Record<string, string>, callerEmail: s
 	const app = new Hono<{ Bindings: { BUCKET: typeof bucket; MAILBOX: typeof MAILBOX } }>();
 
 	app.post("/api/v1/mailboxes/bulk-lockdown", async (c) => {
+		// Mirror of the production handler in workers/index.ts (f17): owner
+		// identity from the verified JWT, never the email header. Keep in sync.
 		const caller =
-			c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+			callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 
 		if (!caller) {
 			return c.json({ error: "CF Access email required" }, 400);
@@ -313,9 +336,10 @@ function makeBulkLockDownApp(bucketStore: Record<string, string>, callerEmail: s
 	});
 
 	return {
-		post() {
-			const hdrs: Record<string, string> = {};
-			if (callerEmail) hdrs["cf-access-authenticated-user-email"] = callerEmail;
+		post(extraHeaders: Record<string, string> = {}) {
+			const hdrs: Record<string, string> = { ...extraHeaders };
+			// Caller identity travels in the fake verified JWT (f17).
+			if (callerEmail) hdrs["cf-access-jwt-assertion"] = makeFakeJwt({ email: callerEmail });
 			return app.request(
 				"/api/v1/mailboxes/bulk-lockdown",
 				{ method: "POST", headers: hdrs },
@@ -429,5 +453,65 @@ describe("POST /api/v1/mailboxes/bulk-lockdown (#294)", () => {
 		const body = await res.json() as { locked: number; skipped: number; errors: string[] };
 		expect(body.locked).toBe(1);
 		expect(body.errors).toHaveLength(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// f17 — fail-closed listing and JWT-derived bulk lock-down owner
+// ---------------------------------------------------------------------------
+
+describe("GET /api/v1/mailboxes — fail-closed in production (f17)", () => {
+	const aliceKey = `mailboxes/alice@example.com.json`;
+	const aliceAclKey = `mailboxes-acl/alice@example.com.json`;
+	const bobKey = `mailboxes/bob@example.com.json`;
+	const aliceAcl: MailboxAcl = { owner: "alice@example.com", members: ["alice@example.com"] };
+
+	it("hides scoped mailboxes (but keeps unscoped) when no caller email exists in production", async () => {
+		const store = {
+			[aliceKey]: "{}",
+			[aliceAclKey]: JSON.stringify(aliceAcl),
+			[bobKey]: "{}", // unscoped — backwards-compat, stays visible
+		};
+		const { fetch } = makeListApp(store, null, /* dev */ false);
+		const res = await fetch();
+		expect(res.status).toBe(200);
+		const body = await res.json() as Array<{ id: string }>;
+		expect(body.map((m) => m.id)).toEqual(["bob@example.com"]);
+	});
+
+	it("still shows everything for a null caller in dev mode", async () => {
+		const store = {
+			[aliceKey]: "{}",
+			[aliceAclKey]: JSON.stringify(aliceAcl),
+			[bobKey]: "{}",
+		};
+		const { fetch } = makeListApp(store, null, /* dev */ true);
+		const res = await fetch();
+		const body = await res.json() as Array<{ id: string }>;
+		expect(body).toHaveLength(2);
+	});
+});
+
+describe("POST /api/v1/mailboxes/bulk-lockdown — owner from the verified JWT (f17)", () => {
+	const aliceKey = `mailboxes/alice@example.com.json`;
+	const aliceAclKey = `mailboxes-acl/alice@example.com.json`;
+
+	it("a forged cf-access-authenticated-user-email header cannot seed ownership", async () => {
+		const store = { [aliceKey]: "{}" };
+		const { post, bucket } = makeBulkLockDownApp(store, null);
+		// Forged header, no JWT email → 400, nothing written.
+		const res = await post({ "cf-access-authenticated-user-email": "mallory@example.com" });
+		expect(res.status).toBe(400);
+		expect(bucket._store[aliceAclKey]).toBeUndefined();
+	});
+
+	it("owner comes from the JWT email even when a different header is forged", async () => {
+		const store = { [aliceKey]: "{}" };
+		const { post, bucket } = makeBulkLockDownApp(store, "operator@example.com");
+		const res = await post({ "cf-access-authenticated-user-email": "mallory@example.com" });
+		expect(res.status).toBe(200);
+		const stored = JSON.parse(bucket._store[aliceAclKey]) as MailboxAcl;
+		expect(stored.owner).toBe("operator@example.com");
+		expect(stored.members).not.toContain("mallory@example.com");
 	});
 });

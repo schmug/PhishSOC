@@ -6,12 +6,15 @@
  *
  * Only the mailbox owner (the email stored in `acl.owner`) may call these
  * write endpoints. A caller admitted by CF Access but not the owner receives
- * 403. The ACL blob is not a settings tier; `stripDefaultEqual` is not used.
+ * 403. Caller identity is decoded from the VERIFIED CF Access JWT
+ * (`callerEmailFromJwt`) — never from the forgeable
+ * `cf-access-authenticated-user-email` header (f17). The ACL blob is not a
+ * settings tier; `stripDefaultEqual` is not used.
  */
 
 import { Hono } from "hono";
 import { requireMailbox, type MailboxContext } from "../lib/mailbox";
-import { readMailboxAcl, writeMailboxAcl } from "../lib/mailbox-acl";
+import { readMailboxAcl, writeMailboxAcl, callerEmailFromJwt } from "../lib/mailbox-acl";
 
 export const aclMemberRoutes = new Hono<MailboxContext>();
 
@@ -25,7 +28,7 @@ aclMemberRoutes.use("*", requireMailbox);
 aclMemberRoutes.get("/", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 
 	const acl = await readMailboxAcl(c.env, mailboxId);
 	if (!acl) {
@@ -45,7 +48,7 @@ aclMemberRoutes.get("/", async (c) => {
 aclMemberRoutes.post("/", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 
 	if (!callerEmail) {
 		return c.json({ error: "CF Access email required to lock down a mailbox" }, 400);
@@ -65,7 +68,7 @@ aclMemberRoutes.post("/", async (c) => {
 aclMemberRoutes.post("/members", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 
 	const acl = await readMailboxAcl(c.env, mailboxId);
 	if (!acl || callerEmail !== acl.owner) {
@@ -98,7 +101,7 @@ aclMemberRoutes.post("/members", async (c) => {
 aclMemberRoutes.post("/transfer", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 
 	const acl = await readMailboxAcl(c.env, mailboxId);
 	if (!acl || callerEmail !== acl.owner) {
@@ -127,7 +130,7 @@ aclMemberRoutes.post("/transfer", async (c) => {
 aclMemberRoutes.delete("/members/:memberEmail", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 	const memberEmail = decodeURIComponent(c.req.param("memberEmail")!).toLowerCase();
 
 	const acl = await readMailboxAcl(c.env, mailboxId);
@@ -156,7 +159,7 @@ aclMemberRoutes.delete("/members/:memberEmail", async (c) => {
 aclMemberRoutes.post("/groups", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 
 	const acl = await readMailboxAcl(c.env, mailboxId);
 	if (!acl || callerEmail !== acl.owner) {
@@ -181,7 +184,7 @@ aclMemberRoutes.post("/groups", async (c) => {
 aclMemberRoutes.delete("/groups/:groupName", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 	const groupName = decodeURIComponent(c.req.param("groupName")!);
 
 	const acl = await readMailboxAcl(c.env, mailboxId);

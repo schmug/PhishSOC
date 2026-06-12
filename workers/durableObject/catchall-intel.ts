@@ -42,28 +42,29 @@ export interface CatchallProbeEvent {
 	sampleLimit: number;
 }
 
+/** Public API shape for `GET /api/v1/domains/:domain/catchall-intel` (#427). */
 export interface CatchallSummary {
-	totals: { count: number; distinctSources: number };
+	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
 	topSources: Array<{
-		sourceIp: string;
-		senderDomain: string;
+		source_ip: string;
+		sender_domain: string;
 		count: number;
-		distinctLocalparts: number;
-		maxScore: number;
-		firstSeen: string;
-		lastSeen: string;
+		distinct_localparts: number;
+		max_score: number;
+		first_seen: string;
+		last_seen: string;
 	}>;
 	recent: Array<{
 		id: string;
 		ts: string;
-		sourceIp: string;
-		senderDomain: string;
+		source_ip: string;
+		sender_domain: string;
 		sender: string;
 		localpart: string;
-		subjectSnippet: string;
+		subject_snippet: string;
 		score: number;
 		band: string;
-		signals: string[];
+		signals_json: string;
 	}>;
 }
 
@@ -145,13 +146,19 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 	const limit = Math.max(1, Math.min(opts.limit, 100));
 
 	const totalRows = [
-		...sql.exec<{ count: number | null; distinctSources: number }>(
-			`SELECT SUM(count) as count, COUNT(*) as distinctSources FROM probe_rollup`,
+		...sql.exec<{ probe_count: number | null; distinct_sources: number }>(
+			`SELECT SUM(count) as probe_count, COUNT(*) as distinct_sources FROM probe_rollup`,
+		),
+	];
+	const localpartRows = [
+		...sql.exec<{ distinct_localparts: number }>(
+			`SELECT COUNT(DISTINCT localpart) as distinct_localparts FROM probe_localparts`,
 		),
 	];
 	const totals = {
-		count: totalRows[0]?.count ?? 0,
-		distinctSources: totalRows[0]?.distinctSources ?? 0,
+		probe_count: Number(totalRows[0]?.probe_count ?? 0) || 0,
+		distinct_sources: totalRows[0]?.distinct_sources ?? 0,
+		distinct_localparts: localpartRows[0]?.distinct_localparts ?? 0,
 	};
 
 	const topSources = [
@@ -164,16 +171,16 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 			limit,
 		),
 	].map((r) => ({
-		sourceIp: r.source_ip,
-		senderDomain: r.sender_domain,
+		source_ip: r.source_ip,
+		sender_domain: r.sender_domain,
 		count: r.count,
-		distinctLocalparts: r.distinct_localparts,
-		maxScore: r.max_score,
-		firstSeen: r.first_seen,
-		lastSeen: r.last_seen,
+		distinct_localparts: r.distinct_localparts,
+		max_score: r.max_score,
+		first_seen: r.first_seen,
+		last_seen: r.last_seen,
 	}));
 
-	const recentRows = [
+	const recent = [
 		...sql.exec<{
 			id: string; ts: string; source_ip: string; sender_domain: string;
 			sender: string; localpart: string; subject_snippet: string;
@@ -186,19 +193,17 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 	].map((r) => ({
 		id: r.id,
 		ts: r.ts,
-		sourceIp: r.source_ip,
-		senderDomain: r.sender_domain,
+		source_ip: r.source_ip,
+		sender_domain: r.sender_domain,
 		sender: r.sender,
 		localpart: r.localpart,
-		subjectSnippet: r.subject_snippet,
+		subject_snippet: r.subject_snippet,
 		score: r.score,
 		band: r.band,
-		signals: (() => {
-			try { return JSON.parse(r.signals_json) as string[]; } catch { return []; }
-		})(),
+		signals_json: r.signals_json,
 	}));
 
-	return { totals, topSources, recent: recentRows };
+	return { totals, topSources, recent };
 }
 
 export class CatchallIntelDO extends DurableObject<Env> {

@@ -91,7 +91,11 @@ export async function deleteMailboxAcl(
  *
  * - `acl === null`: no ACL written yet → allow anyone (backwards-compat for
  *   pre-#27 mailboxes and single-user deploys).
- * - `callerEmail` falsy: CF Access not in front (local dev) → allow.
+ * - `callerEmail` falsy: FAIL CLOSED in production (f17) — a missing email
+ *   means the verified JWT carried no `email` claim (service token, or a
+ *   direct-to-origin request whose identity could not be established), and
+ *   granting access there is the cross-tenant bypass. Only local dev
+ *   (`isDev === true`, no CF Access in front) is allowed through.
  * - Otherwise: caller must appear in `acl.members` (case-insensitive) OR
  *   belong to one of the `acl.groups` listed (matched against `callerGroups`
  *   sourced from the verified CF Access JWT via `callerGroupsFromJwt`).
@@ -100,9 +104,10 @@ export function callerInAcl(
 	acl: MailboxAcl | null,
 	callerEmail: string | null | undefined,
 	callerGroups: string[] = [],
+	isDev: boolean = false,
 ): boolean {
 	if (acl === null) return true;
-	if (!callerEmail) return true;
+	if (!callerEmail) return isDev;
 	const lower = callerEmail.toLowerCase();
 	if (acl.members.some((m) => m.toLowerCase() === lower)) return true;
 	if (acl.groups?.some((g) => callerGroups.includes(g))) return true;
@@ -172,5 +177,5 @@ export async function callerAllowedForMailbox(
 	if (isDev) return true;
 	const email = callerEmailFromJwt(jwtToken);
 	if (!email) return false;
-	return callerInAcl(acl, email, callerGroupsFromJwt(jwtToken));
+	return callerInAcl(acl, email, callerGroupsFromJwt(jwtToken), isDev);
 }

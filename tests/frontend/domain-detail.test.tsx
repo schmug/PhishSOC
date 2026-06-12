@@ -344,7 +344,7 @@ describe("DomainDetailRoute", () => {
 			],
 			recent: [
 				{
-					id: 1,
+					id: "1",
 					ts: "2026-06-05T12:00:00Z",
 					source_ip: "198.51.100.5",
 					sender_domain: "evil.example",

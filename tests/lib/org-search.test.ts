@@ -34,6 +34,29 @@ describe("mailboxesForOrgSearch (#27 ACL)", () => {
 		const visible = mailboxesForOrgSearch(mailboxes, acls, "bob@acme.com", ["soc"]);
 		expect(visible).toHaveLength(1);
 	});
+
+	it("FAILS CLOSED in production on a null caller email — scoped hidden, unscoped kept (f17)", () => {
+		const mailboxes = [
+			{ id: "scoped@acme.com", email: "scoped@acme.com" },
+			{ id: "unscoped@acme.com", email: "unscoped@acme.com" },
+		];
+		const acls: Array<MailboxAcl | null> = [
+			{ owner: "alice@acme.com", members: ["alice@acme.com"] },
+			null, // no ACL → backwards-compat allow
+		];
+		const visible = mailboxesForOrgSearch(mailboxes, acls, null, [], false);
+		expect(visible.map((m) => m.id)).toEqual(["unscoped@acme.com"]);
+	});
+
+	it("keeps scoped mailboxes visible for a null caller only in dev mode (f17)", () => {
+		const mailboxes = [{ id: "scoped@acme.com", email: "scoped@acme.com" }];
+		const acls: Array<MailboxAcl | null> = [
+			{ owner: "alice@acme.com", members: ["alice@acme.com"] },
+		];
+		expect(mailboxesForOrgSearch(mailboxes, acls, null, [], true)).toHaveLength(1);
+		// Default (no isDev argument) must behave like production.
+		expect(mailboxesForOrgSearch(mailboxes, acls, null, [])).toHaveLength(0);
+	});
 });
 
 describe("aggregateOrgSearch", () => {

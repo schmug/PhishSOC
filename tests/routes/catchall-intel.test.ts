@@ -8,8 +8,22 @@
  * so the full worker graph isn't loaded. The DO is stubbed inline.
  */
 
+import { DatabaseSync } from "node:sqlite";
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("cloudflare:workers", () => ({
+	DurableObject: class {
+		ctx: unknown;
+		env: unknown;
+		constructor(state: unknown, env: unknown) { this.ctx = state; this.env = env; }
+	},
+}));
+import {
+	_getSummaryImpl,
+	_recordProbeImpl,
+	type SqlLike,
+} from "../../workers/durableObject/catchall-intel";
 
 // ---------------------------------------------------------------------------
 // Types (mirrors workers/index.ts definitions)
@@ -26,7 +40,7 @@ interface CatchallSourceRollup {
 }
 
 interface CatchallRecentSample {
-	id: number;
+	id: string;
 	ts: string;
 	source_ip: string;
 	sender_domain: string;
@@ -122,7 +136,7 @@ const populated: CatchallSummary = {
 	],
 	recent: [
 		{
-			id: 1,
+			id: "sample-1",
 			ts: "2026-06-05T12:00:00Z",
 			source_ip: "198.51.100.5",
 			sender_domain: "evil.example",
@@ -146,6 +160,71 @@ const populated: CatchallSummary = {
 // the middleware is the gate. These tests exercise the handler contract only.
 
 describe("GET /api/v1/domains/:domain/catchall-intel (#427)", () => {
+	it("returns the real CatchallIntelDO summary shape (not a mocked API-only stub)", async () => {
+		const db = new DatabaseSync(":memory:");
+		db.exec(`
+			CREATE TABLE probe_rollup (
+				source_ip TEXT NOT NULL, sender_domain TEXT NOT NULL,
+				count INTEGER NOT NULL DEFAULT 1,
+				distinct_localparts INTEGER NOT NULL DEFAULT 0,
+				max_score INTEGER NOT NULL DEFAULT 0,
+				first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+				PRIMARY KEY (source_ip, sender_domain)
+			);
+			CREATE TABLE probe_localparts (
+				source_ip TEXT NOT NULL, sender_domain TEXT NOT NULL,
+				localpart TEXT NOT NULL, last_seen TEXT NOT NULL,
+				PRIMARY KEY (source_ip, sender_domain, localpart)
+			);
+			CREATE TABLE probe_recent (
+				id TEXT PRIMARY KEY, ts TEXT NOT NULL,
+				source_ip TEXT NOT NULL, sender_domain TEXT NOT NULL,
+				sender TEXT NOT NULL, localpart TEXT NOT NULL,
+				subject_snippet TEXT NOT NULL, score INTEGER NOT NULL,
+				band TEXT NOT NULL, signals_json TEXT NOT NULL
+			);
+		`);
+		const sql: SqlLike = {
+			exec<T = Record<string, unknown>>(query: string, ...params: unknown[]) {
+				return db.prepare(query).all(...params) as Iterable<T>;
+			},
+		};
+		_recordProbeImpl(sql, {
+			ts: "2026-06-05T12:00:00Z",
+			sourceIp: "198.51.100.5",
+			senderDomain: "evil.example",
+			sender: "probe@evil.example",
+			localpart: "admin",
+			subjectSnippet: "Test",
+			score: 75,
+			band: "high",
+			signals: ["spf=fail"],
+			retentionDays: 30,
+			sampleLimit: 50,
+		});
+
+		const do_ = {
+			idFromName: (name: string) => ({ id: name }),
+			get: (_id: { id: string }) => ({
+				getCatchallSummary: async (opts: { limit: number }) => _getSummaryImpl(sql, opts),
+			}),
+		};
+		const app = makeApp(do_);
+		const res = await app.request(
+			"/api/v1/domains/acme.com/catchall-intel",
+			{},
+			{ CATCHALL_INTEL: do_ },
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as CatchallSummary;
+		expect(body.totals.probe_count).toBe(1);
+		expect(body.totals.distinct_sources).toBe(1);
+		expect(body.totals.distinct_localparts).toBe(1);
+		expect(body.topSources[0].source_ip).toBe("198.51.100.5");
+		expect(body.recent[0].localpart).toBe("admin");
+		expect(body.recent[0].signals_json).toBe(JSON.stringify(["spf=fail"]));
+	});
+
 	it("returns { totals, topSources, recent } for a domain with probe data", async () => {
 		const do_ = makeCatchallIntelDO(populated);
 		const app = makeApp(do_);
