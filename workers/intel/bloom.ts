@@ -7,8 +7,8 @@
  *
  * Purpose: cheap "is this URL/domain on a known-bad list" test without
  * shipping a multi-MB list to every hot-path request. A positive match
- * still triggers a secondary exact-match lookup (`BLOOM_KV.get(exact:<value>)`)
- * before we act on it — bloom false-positives must not cause blocking.
+ * still triggers a secondary exact-blob set-membership check before we act
+ * on it — bloom false-positives must not cause blocking.
  *
  * Sizing: m = ceil(-n * ln(p) / (ln(2))^2), k = ceil((m/n) * ln(2))
  * For n = 100k entries, p = 0.01 → m ≈ 958k bits (≈120KB), k ≈ 7.
