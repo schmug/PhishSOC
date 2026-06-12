@@ -11,6 +11,9 @@
  *   2. refreshAllFeeds skips a feed whose last_fetched_at is within refreshHours.
  *   3. The exact-match read path still confirms values that appear in the blob
  *      and reports bloom-only hits as unconfirmed.
+ *   4. A 304 renews the required blobs' TTLs (re-put same value) instead of
+ *      letting them expire under sustained 304s, and a missing blob forces an
+ *      unconditional refetch (#484).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,9 +30,11 @@ const MAILBOX_ID = "user@example.com";
 function makeCountingKv() {
 	const store = new Map<string, string | Uint8Array>();
 	const putKeys: string[] = [];
+	const putCalls: Array<{ key: string; opts?: { expirationTtl?: number } }> = [];
 	return {
 		store,
 		putKeys,
+		putCalls,
 		async get(key: string, type?: "text" | "arrayBuffer") {
 			const val = store.get(key);
 			if (val === undefined) return null;
@@ -41,9 +46,14 @@ function makeCountingKv() {
 			}
 			return val;
 		},
-		async put(key: string, value: string | Uint8Array, _opts?: unknown) {
+		async put(
+			key: string,
+			value: string | Uint8Array | ArrayBuffer,
+			opts?: { expirationTtl?: number },
+		) {
 			putKeys.push(key);
-			store.set(key, value);
+			putCalls.push({ key, opts });
+			store.set(key, value instanceof ArrayBuffer ? new Uint8Array(value) : value);
 		},
 	};
 }
@@ -77,15 +87,22 @@ function makeEnv(opts: {
 	mailboxSettings: unknown;
 	kv?: ReturnType<typeof makeCountingKv>;
 	feedState?: FeedStateRow | null;
-}): { env: Env; kv: ReturnType<typeof makeCountingKv> } {
+}): {
+	env: Env;
+	kv: ReturnType<typeof makeCountingKv>;
+	upserts: Array<{ feedId: string; data: Record<string, unknown> }>;
+} {
 	const kv = opts.kv ?? makeCountingKv();
 	const state = opts.feedState !== undefined ? opts.feedState : null;
+	const upserts: Array<{ feedId: string; data: Record<string, unknown> }> = [];
 
 	const stub = {
 		async getIntelFeedState(_feedId: string) {
 			return state;
 		},
-		async upsertIntelFeedState(_feedId: string, _data: unknown) {},
+		async upsertIntelFeedState(feedId: string, data: unknown) {
+			upserts.push({ feedId, data: data as Record<string, unknown> });
+		},
 	};
 
 	const mailboxNs = {
@@ -118,7 +135,7 @@ function makeEnv(opts: {
 		MAILBOX: mailboxNs,
 	} as unknown as Env;
 
-	return { env, kv };
+	return { env, kv, upserts };
 }
 
 function feedBody(n: number): string {
@@ -410,5 +427,208 @@ describe("exact-match read path (exact blob)", () => {
 
 		expect(result).not.toBeNull();
 		expect(result?.confirmed).toBe(false);
+	});
+});
+
+// ── Tests: blob TTL renewal under sustained 304s (#484) ──────────────────────
+
+describe("blob TTL renewal on 304 (#484)", () => {
+	function staleFetchedAt(hoursAgo: number): string {
+		return new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString();
+	}
+
+	function urlFeedSettings() {
+		return {
+			intel: {
+				feeds: [
+					{
+						id: "test-feed",
+						url: "https://test.example/feed.txt",
+						kind: "url",
+						refresh_hours: 6,
+					},
+				],
+			},
+		};
+	}
+
+	/** Seed both required blobs for a url-kind feed, returning the seeded values. */
+	function seedUrlBlobs(kv: ReturnType<typeof makeCountingKv>) {
+		const bloom = createBloom(10);
+		addToBloom(bloom, "https://evil.example/phish");
+		const bloomBytes = serializeBloom(bloom);
+		const exactJson = JSON.stringify(["https://evil.example/phish"]);
+		kv.store.set("intel:test-feed:bloom", bloomBytes);
+		kv.store.set("intel:test-feed:exact-blob", exactJson);
+		return { bloomBytes, exactJson };
+	}
+
+	it("304 with blobs present re-puts bloom + exact blobs with a fresh TTL (≤ required-blob writes)", async () => {
+		vi.stubGlobal("fetch", async () => new Response(null, { status: 304 }));
+		const kv = makeCountingKv();
+		const { bloomBytes, exactJson } = seedUrlBlobs(kv);
+		const { env } = makeEnv({
+			mailboxSettings: urlFeedSettings(),
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 1,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		// exactly the two required blobs — no extra writes
+		expect([...kv.putKeys].sort()).toEqual([
+			"intel:test-feed:bloom",
+			"intel:test-feed:exact-blob",
+		]);
+		// every renewal put carries a fresh TTL: max(6h * 4, 86400) = 86400
+		for (const call of kv.putCalls) {
+			expect(call.opts?.expirationTtl).toBe(86400);
+		}
+		// rewrite-same-value renewal: blob contents unchanged
+		expect(kv.store.get("intel:test-feed:bloom")).toEqual(bloomBytes);
+		expect(kv.store.get("intel:test-feed:exact-blob")).toBe(exactJson);
+	});
+
+	it("304 on an ip-cidr feed re-puts the cidrs blob (write count = 1)", async () => {
+		vi.stubGlobal("fetch", async () => new Response(null, { status: 304 }));
+		const kv = makeCountingKv();
+		const cidrJson = JSON.stringify([{ n: 16909056, m: 4294901760, p: 16 }]);
+		kv.store.set("intel:spamhaus-drop:cidrs", cidrJson);
+		const { env } = makeEnv({
+			mailboxSettings: {
+				intel: {
+					// base DEFAULT_FEEDS entry supplies kind: "ip-cidr"
+					feeds: [
+						{ id: "spamhaus-drop", url: "https://test.example/drop.txt", refresh_hours: 12 },
+					],
+				},
+			},
+			kv,
+			feedState: makeFeedState({
+				feed_id: "spamhaus-drop",
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(13),
+				entry_count: 1,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		expect(kv.putKeys).toEqual(["intel:spamhaus-drop:cidrs"]);
+		expect(kv.putCalls[0]?.opts?.expirationTtl).toBe(12 * 4 * 3600);
+		expect(kv.store.get("intel:spamhaus-drop:cidrs")).toBe(cidrJson);
+	});
+
+	it("304 upserts a fresh last_fetched_at preserving etag and entry_count (keeps the refreshHours gate)", async () => {
+		vi.stubGlobal("fetch", async () => new Response(null, { status: 304 }));
+		const kv = makeCountingKv();
+		seedUrlBlobs(kv);
+		const before = Date.now();
+		const { env, upserts } = makeEnv({
+			mailboxSettings: urlFeedSettings(),
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 7,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		expect(upserts).toHaveLength(1);
+		const data = upserts[0].data as {
+			last_fetched_at: string;
+			etag: string | null;
+			entry_count: number;
+		};
+		expect(new Date(data.last_fetched_at).getTime()).toBeGreaterThanOrEqual(before);
+		expect(data.etag).toBe('"abc"');
+		expect(data.entry_count).toBe(7);
+	});
+
+	it("missing required blob → fetch omits If-None-Match and a 200 rebuilds all blobs", async () => {
+		const captured: Array<Record<string, string>> = [];
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			captured.push({ ...((init?.headers as Record<string, string>) ?? {}) });
+			return new Response(feedBody(5), { status: 200 });
+		});
+		const kv = makeCountingKv();
+		// bloom survives but the exact blob has TTL-expired
+		kv.store.set("intel:test-feed:bloom", serializeBloom(createBloom(10)));
+		const { env } = makeEnv({
+			mailboxSettings: urlFeedSettings(),
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 5,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		expect(captured).toHaveLength(1);
+		expect(captured[0]).not.toHaveProperty("If-None-Match");
+		expect([...kv.putKeys].sort()).toEqual([
+			"intel:test-feed:bloom",
+			"intel:test-feed:exact-blob",
+		]);
+	});
+
+	it("blobs present + stored etag → If-None-Match still sent (normal conditional flow)", async () => {
+		const captured: Array<Record<string, string>> = [];
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			captured.push({ ...((init?.headers as Record<string, string>) ?? {}) });
+			return new Response(feedBody(5), { status: 200 });
+		});
+		const kv = makeCountingKv();
+		seedUrlBlobs(kv);
+		const { env } = makeEnv({
+			mailboxSettings: urlFeedSettings(),
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 1,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		expect(captured).toHaveLength(1);
+		expect(captured[0]["If-None-Match"]).toBe('"abc"');
+		// content changed → full rebuild of both blobs
+		expect([...kv.putKeys].sort()).toEqual([
+			"intel:test-feed:bloom",
+			"intel:test-feed:exact-blob",
+		]);
+	});
+
+	it("304 to an unconditional request (blobs missing) fails the refresh without marking it fresh", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.stubGlobal("fetch", async () => new Response(null, { status: 304 }));
+		const kv = makeCountingKv(); // no blobs seeded
+		const { env, upserts } = makeEnv({
+			mailboxSettings: urlFeedSettings(),
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 5,
+			}),
+		});
+
+		const result = await refreshAllFeeds(env);
+
+		// counted as failed, not refreshed; last_fetched_at stays stale → retried next run
+		expect(result.feeds).toBe(0);
+		expect(upserts).toHaveLength(0);
+		expect(kv.putKeys).toHaveLength(0);
+		expect(errorSpy).toHaveBeenCalled();
 	});
 });

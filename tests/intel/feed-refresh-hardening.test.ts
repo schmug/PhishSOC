@@ -3,22 +3,20 @@
 /**
  * Hardening follow-ups to the #481/#482 KV write reduction.
  *
- * Core behavior (blob writes, refreshHours gate, membership-confirmed reads)
- * is pinned by tests/intel/feed-kv-writes.test.ts. This file pins the gaps
- * found in pre-merge review of the parallel implementation (PR #483):
+ * Core behavior (blob writes, refreshHours gate, membership-confirmed
+ * reads, 304 TTL renewal) is pinned by tests/intel/feed-kv-writes.test.ts.
+ * This file pins the gaps found in pre-merge review of the parallel
+ * implementation (PR #483):
  *
- *   1. A 304 must record a fresh `last_fetched_at`, otherwise 304-ing feeds
- *      are conditionally fetched every hour forever and never get the
- *      refreshHours skip.
- *   2. While a feed's exact blob is absent (the window between deploying
+ *   1. While a feed's exact blob is absent (the window between deploying
  *      the blob scheme and that feed's first new-style refresh), the read
  *      path must fall back to the legacy `intel:<feed>:exact:<value>` keys
  *      so detections don't transiently degrade to unconfirmed.
- *   3. The exact blob must be deduplicated before the cap — url-kind values
+ *   2. The exact blob must be deduplicated before the cap — url-kind values
  *      repeat hostnames, which would waste roughly half the cap.
- *   4. An unparseable exact blob must degrade the hit to `confirmed: false`,
+ *   3. An unparseable exact blob must degrade the hit to `confirmed: false`,
  *      not throw out of the whole lookup.
- *   5. The exact blob must be fetched lazily — only after a bloom hit — not
+ *   4. The exact blob must be fetched lazily — only after a bloom hit — not
  *      eagerly for every feed on every lookup.
  */
 
@@ -139,32 +137,6 @@ beforeEach(() => {
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 	vi.restoreAllMocks();
-});
-
-// ── 304 freshness ─────────────────────────────────────────────────────
-
-describe("refreshFeed 304 handling", () => {
-	it("records a fresh last_fetched_at on 304 so refreshHours skips apply to unchanged feeds", async () => {
-		mockFetch("", 304);
-		const stale = new Date(Date.now() - 7 * 3600 * 1000).toISOString();
-		const stub = makeMailboxStub({
-			testfeed: { last_fetched_at: stale, etag: '"abc"', entry_count: 42 },
-		});
-		const env = makeEnv({ mailboxSettings: urlFeedSettings(6), stub });
-
-		const result = await refreshAllFeeds(env);
-
-		expect(result.feeds).toBe(1);
-		expect(result.entries).toBe(42);
-		expect(stub.upserts).toHaveLength(1);
-		const upserted = stub.upserts[0];
-		expect(upserted.feedId).toBe("testfeed");
-		expect(upserted.state.etag).toBe('"abc"');
-		expect(upserted.state.entry_count).toBe(42);
-		const ageMs = Date.now() - Date.parse(upserted.state.last_fetched_at);
-		expect(ageMs).toBeGreaterThanOrEqual(0);
-		expect(ageMs).toBeLessThan(60 * 1000);
-	});
 });
 
 // ── Deploy-window legacy fallback ─────────────────────────────────────
