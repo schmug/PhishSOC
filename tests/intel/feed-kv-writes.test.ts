@@ -25,7 +25,7 @@ const MAILBOX_ID = "user@example.com";
 // ── KV mock with put-call tracking ────────────────────────────────────────────
 
 function makeCountingKv() {
-	const store = new Map<string, string | Uint8Array>();
+	const store = new Map<string, string | Uint8Array | ArrayBuffer>();
 	const putKeys: string[] = [];
 	return {
 		store,
@@ -34,6 +34,7 @@ function makeCountingKv() {
 			const val = store.get(key);
 			if (val === undefined) return null;
 			if (type === "arrayBuffer") {
+				if (val instanceof ArrayBuffer) return val;
 				return val instanceof Uint8Array ? val.buffer : null;
 			}
 			if (type === "text") {
@@ -41,7 +42,7 @@ function makeCountingKv() {
 			}
 			return val;
 		},
-		async put(key: string, value: string | Uint8Array, _opts?: unknown) {
+		async put(key: string, value: string | Uint8Array | ArrayBuffer, _opts?: unknown) {
 			putKeys.push(key);
 			store.set(key, value);
 		},
@@ -410,5 +411,222 @@ describe("exact-match read path (exact blob)", () => {
 
 		expect(result).not.toBeNull();
 		expect(result?.confirmed).toBe(false);
+	});
+});
+
+// ── Tests: 304 TTL renewal — url-kind feed ────────────────────────────────────
+
+describe("304 TTL renewal — url-kind feed", () => {
+	it("304 with blobs present re-puts bloom and exact-blob (TTL renewed)", async () => {
+		vi.stubGlobal("fetch", async () => new Response(null, { status: 304 }));
+
+		const { env, kv } = makeEnv({
+			mailboxSettings: {
+				intel: {
+					feeds: [{ id: "test-feed", url: "https://test.example/feed.txt", kind: "url" }],
+				},
+			},
+			feedState: makeFeedState({
+				last_fetched_at: new Date(Date.now() - 8 * 3600 * 1000).toISOString(),
+				etag: '"abc123"',
+				entry_count: 5,
+			}),
+		});
+
+		// Pre-seed blobs so blobsPresent === true
+		const bloom = createBloom(5);
+		addToBloom(bloom, "https://evil.example/phish");
+		kv.store.set("intel:test-feed:bloom", serializeBloom(bloom));
+		kv.store.set("intel:test-feed:exact-blob", JSON.stringify(["https://evil.example/phish"]));
+
+		await refreshAllFeeds(env);
+
+		// Exactly 2 puts — bloom + exact-blob renewed, no extra writes
+		expect(kv.putKeys).toHaveLength(2);
+		expect(kv.putKeys).toContain("intel:test-feed:bloom");
+		expect(kv.putKeys).toContain("intel:test-feed:exact-blob");
+	});
+
+	it("304 write count is exactly the number of required blobs (≤ 2)", async () => {
+		vi.stubGlobal("fetch", async () => new Response(null, { status: 304 }));
+
+		const { env, kv } = makeEnv({
+			mailboxSettings: {
+				intel: {
+					feeds: [{ id: "test-feed", url: "https://test.example/feed.txt", kind: "url" }],
+				},
+			},
+			feedState: makeFeedState({
+				last_fetched_at: new Date(Date.now() - 8 * 3600 * 1000).toISOString(),
+				etag: '"abc123"',
+				entry_count: 5,
+			}),
+		});
+
+		const bloom = createBloom(5);
+		addToBloom(bloom, "https://evil.example/phish");
+		kv.store.set("intel:test-feed:bloom", serializeBloom(bloom));
+		kv.store.set("intel:test-feed:exact-blob", JSON.stringify(["https://evil.example/phish"]));
+
+		await refreshAllFeeds(env);
+
+		expect(kv.putKeys.length).toBeLessThanOrEqual(2);
+	});
+});
+
+// ── Tests: 304 TTL renewal — ip-cidr feed ────────────────────────────────────
+
+describe("304 TTL renewal — ip-cidr feed", () => {
+	it("304 with cidr blob present re-puts cidr blob", async () => {
+		vi.stubGlobal("fetch", async () => new Response(null, { status: 304 }));
+
+		const { env, kv } = makeEnv({
+			mailboxSettings: {
+				intel: {
+					feeds: [
+						{
+							id: "test-cidr-feed",
+							url: "https://test.example/drop.txt",
+							kind: "ip-cidr",
+							refresh_hours: 12,
+						},
+					],
+				},
+			},
+			feedState: makeFeedState({
+				feed_id: "test-cidr-feed",
+				url: "https://test.example/drop.txt",
+				last_fetched_at: new Date(Date.now() - 14 * 3600 * 1000).toISOString(),
+				etag: '"drop-etag"',
+				entry_count: 3,
+			}),
+		});
+
+		const cidrData = JSON.stringify([{ n: 16843008, m: 4294967040, p: 24 }]);
+		kv.store.set("intel:test-cidr-feed:cidrs", cidrData);
+
+		await refreshAllFeeds(env);
+
+		expect(kv.putKeys).toHaveLength(1);
+		expect(kv.putKeys).toContain("intel:test-cidr-feed:cidrs");
+	});
+});
+
+// ── Tests: missing blob forces unconditional refetch ─────────────────────────
+
+describe("missing blob forces unconditional refetch", () => {
+	it("missing bloom blob omits If-None-Match and 200 rebuilds url-kind blobs", async () => {
+		let capturedInit: RequestInit | undefined;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				capturedInit = init;
+				return new Response(feedBody(5), { status: 200, headers: { ETag: '"new-etag"' } });
+			},
+		);
+
+		const { env, kv } = makeEnv({
+			mailboxSettings: {
+				intel: {
+					feeds: [{ id: "test-feed", url: "https://test.example/feed.txt", kind: "url" }],
+				},
+			},
+			feedState: makeFeedState({
+				last_fetched_at: new Date(Date.now() - 8 * 3600 * 1000).toISOString(),
+				etag: '"stale-etag"',
+				entry_count: 5,
+			}),
+		});
+
+		// No blobs in KV — simulates TTL expiry
+
+		await refreshAllFeeds(env);
+
+		// If-None-Match must be absent
+		const sentHeaders = capturedInit?.headers as Record<string, string> | undefined;
+		expect(sentHeaders?.["If-None-Match"]).toBeUndefined();
+
+		// Full rebuild: bloom + exact-blob written
+		expect(kv.putKeys).toContain("intel:test-feed:bloom");
+		expect(kv.putKeys).toContain("intel:test-feed:exact-blob");
+	});
+
+	it("missing cidr blob omits If-None-Match and 200 rebuilds cidr blob", async () => {
+		let capturedInit: RequestInit | undefined;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				capturedInit = init;
+				return new Response("10.0.0.0/8 ; SBL1\n192.168.0.0/16 ; SBL2\n", {
+					status: 200,
+					headers: { ETag: '"new-cidr-etag"' },
+				});
+			},
+		);
+
+		const { env, kv } = makeEnv({
+			mailboxSettings: {
+				intel: {
+					feeds: [
+						{
+							id: "test-cidr-feed",
+							url: "https://test.example/drop.txt",
+							kind: "ip-cidr",
+							refresh_hours: 12,
+						},
+					],
+				},
+			},
+			feedState: makeFeedState({
+				feed_id: "test-cidr-feed",
+				url: "https://test.example/drop.txt",
+				last_fetched_at: new Date(Date.now() - 14 * 3600 * 1000).toISOString(),
+				etag: '"stale-cidr-etag"',
+				entry_count: 2,
+			}),
+		});
+
+		// No cidr blob in KV — simulates TTL expiry
+
+		await refreshAllFeeds(env);
+
+		const sentHeaders = capturedInit?.headers as Record<string, string> | undefined;
+		expect(sentHeaders?.["If-None-Match"]).toBeUndefined();
+
+		expect(kv.putKeys).toContain("intel:test-cidr-feed:cidrs");
+	});
+
+	it("blobs present + etag → If-None-Match is sent (no regression)", async () => {
+		let capturedInit: RequestInit | undefined;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				capturedInit = init;
+				return new Response(null, { status: 304 });
+			},
+		);
+
+		const { env, kv } = makeEnv({
+			mailboxSettings: {
+				intel: {
+					feeds: [{ id: "test-feed", url: "https://test.example/feed.txt", kind: "url" }],
+				},
+			},
+			feedState: makeFeedState({
+				last_fetched_at: new Date(Date.now() - 8 * 3600 * 1000).toISOString(),
+				etag: '"present-etag"',
+				entry_count: 5,
+			}),
+		});
+
+		const bloom = createBloom(5);
+		addToBloom(bloom, "https://evil.example/phish");
+		kv.store.set("intel:test-feed:bloom", serializeBloom(bloom));
+		kv.store.set("intel:test-feed:exact-blob", JSON.stringify(["https://evil.example/phish"]));
+
+		await refreshAllFeeds(env);
+
+		const sentHeaders = capturedInit?.headers as Record<string, string> | undefined;
+		expect(sentHeaders?.["If-None-Match"]).toBe('"present-etag"');
 	});
 });

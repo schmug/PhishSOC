@@ -256,16 +256,55 @@ async function refreshFeed(
 	state: FeedState,
 ): Promise<{ entries: number }> {
 	const stub = getMailboxStub(env, mailboxId);
+	const ttlSeconds = Math.max(feed.refreshHours * 3600 * 4, 86400);
+
+	// Read required blobs before the conditional GET. A missing blob means the
+	// TTL already elapsed — force a 200 by omitting If-None-Match so the
+	// origin returns fresh content and the blobs are fully rebuilt.
+	let existingCidrs: string | null = null;
+	let existingBloom: ArrayBuffer | null = null;
+	let existingExact: string | null = null;
+	if (feed.kind === "ip-cidr") {
+		existingCidrs = await env.BLOOM_KV.get(cidrKey(feed.id), "text");
+	} else {
+		existingBloom = await env.BLOOM_KV.get(bloomKey(feed.id), "arrayBuffer");
+		existingExact = await env.BLOOM_KV.get(exactBlobKey(feed.id), "text");
+	}
+	const blobsPresent =
+		feed.kind === "ip-cidr"
+			? existingCidrs !== null
+			: existingBloom !== null && existingExact !== null;
 
 	const headers: Record<string, string> = { ...(feed.headers ?? {}) };
-	if (state?.etag) headers["If-None-Match"] = state.etag;
+	// Only attach If-None-Match when blobs are present — a 304 is useless
+	// when there is nothing in KV to keep alive.
+	if (state?.etag && blobsPresent) headers["If-None-Match"] = state.etag;
 
 	const res = await fetch(feed.url, { headers, signal: AbortSignal.timeout(15000) });
-	if (res.status === 304) return { entries: state?.entry_count ?? 0 };
+
+	if (res.status === 304) {
+		// Re-put each blob with a fresh TTL so a stable (never-200) feed
+		// doesn't go dark once the original TTL elapses. KV has no touch
+		// operation; rewriting the same value is the only renewal mechanism.
+		if (feed.kind === "ip-cidr") {
+			await env.BLOOM_KV.put(cidrKey(feed.id), existingCidrs!, { expirationTtl: ttlSeconds });
+		} else {
+			await env.BLOOM_KV.put(bloomKey(feed.id), existingBloom!, { expirationTtl: ttlSeconds });
+			await env.BLOOM_KV.put(exactBlobKey(feed.id), existingExact!, { expirationTtl: ttlSeconds });
+		}
+		await stub.upsertIntelFeedState(feed.id, {
+			url: feed.url,
+			last_fetched_at: new Date().toISOString(),
+			etag: state?.etag ?? null,
+			entry_count: state?.entry_count ?? 0,
+			bloom_kv_key: feed.kind === "ip-cidr" ? cidrKey(feed.id) : bloomKey(feed.id),
+		});
+		return { entries: state?.entry_count ?? 0 };
+	}
+
 	if (!res.ok) throw new Error(`${feed.url} returned ${res.status}`);
 
 	const body = await res.text();
-	const ttlSeconds = Math.max(feed.refreshHours * 3600 * 4, 86400);
 
 	if (feed.kind === "ip-cidr") {
 		// CIDR feeds use a separate storage path: a JSON blob of
