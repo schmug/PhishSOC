@@ -108,3 +108,69 @@ export function callerInAcl(
 	if (acl.groups?.some((g) => callerGroups.includes(g))) return true;
 	return false;
 }
+
+/**
+ * Decodes the `email` claim from a CF Access JWT without re-verifying the
+ * signature (the global CF Access middleware already verified it). Returns null
+ * when the token is absent, malformed, or carries no string `email` claim
+ * (e.g. a CF Access *service token*, which has no `email`).
+ *
+ * Identity for an authorization decision must be sourced from the verified
+ * token — never from the `cf-access-authenticated-user-email` header, which is
+ * decoupled from the JWT and forgeable on a direct-to-origin request.
+ */
+export function callerEmailFromJwt(jwtToken: string | null | undefined): string | null {
+	if (!jwtToken) return null;
+	try {
+		const email = decodeJwt(jwtToken)["email"];
+		return typeof email === "string" && email.length > 0 ? email : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Extracts the EmailAgent instance name (the mailboxId) from an `/agents/*`
+ * request path, or null when the path does not target the per-mailbox
+ * EmailAgent. The Agents SDK routes EmailAgent under the kebab-cased class
+ * name, i.e. `/agents/email-agent/<mailboxId>[/...]` (see
+ * `camelCaseToKebabCase("EmailAgent")`). OrgAgent (`/agents/org-agent/...`) is
+ * intentionally excluded — it exposes only aggregate data.
+ */
+export function emailAgentMailboxIdFromPath(pathname: string): string | null {
+	const segments = pathname.split("/").filter(Boolean);
+	if (segments[0] === "agents" && segments[1] === "email-agent" && segments[2]) {
+		try {
+			return decodeURIComponent(segments[2]);
+		} catch {
+			return segments[2];
+		}
+	}
+	return null;
+}
+
+/**
+ * Authorizes a caller for a mailbox from their CF Access JWT — the same ACL
+ * boundary that `requireMailbox` (HTTP) and `verifyMailbox` (MCP) enforce, but
+ * usable from a non-Hono entry point (the EmailAgent WebSocket/agent route).
+ * Fails CLOSED in production when identity cannot be established.
+ *
+ * - No ACL blob → allow (backwards-compat: pre-#27 mailboxes / single-user).
+ * - `isDev` → allow (local dev, no CF Access in front — matches `callerInAcl`).
+ * - Production: require a verified-JWT email; a missing email (no token, or a
+ *   service token with no `email` claim) is DENIED. Otherwise defer to
+ *   `callerInAcl` for members + group grants.
+ */
+export async function callerAllowedForMailbox(
+	env: { BUCKET: R2Bucket },
+	mailboxId: string,
+	jwtToken: string | null | undefined,
+	isDev: boolean,
+): Promise<boolean> {
+	const acl = await readMailboxAcl(env, mailboxId);
+	if (acl === null) return true;
+	if (isDev) return true;
+	const email = callerEmailFromJwt(jwtToken);
+	if (!email) return false;
+	return callerInAcl(acl, email, callerGroupsFromJwt(jwtToken));
+}
