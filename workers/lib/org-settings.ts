@@ -17,6 +17,7 @@
  */
 
 import { OrgSettings, parseOrgSettings } from "../../shared/org-settings";
+import { parseSettingsLenient } from "../../shared/mailbox-settings";
 
 interface OrgSettingsCacheEntry {
 	etag: string | null;
@@ -78,7 +79,9 @@ export async function getOrgSettings(env: { BUCKET: R2Bucket }): Promise<OrgSett
 
 	try {
 		const raw = await obj.json<Record<string, unknown>>();
-		const parsed = parseOrgSettings(raw) ?? {};
+		// Read-side lenient parse: legacy intel.hub/feed secret names must not
+		// wipe the whole org tier (same invariant as getMailboxSettings, #415).
+		const parsed = parseSettingsLenient(OrgSettings, raw);
 		cache.set(key, { etag: obj.etag ?? null, settings: parsed });
 		return parsed;
 	} catch {

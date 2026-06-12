@@ -1186,5 +1186,67 @@ describe("parseSettingsLenient — read-path leniency for legacy non-prefixed se
 		expect(parsed.intel?.hub?.api_key_secret_name).toBe("HUB_SECRET_OK");
 		expect(parsed.intel?.feeds).toHaveLength(1);
 	});
+
+	it("getOrgSettings does not wipe the tier when a stored blob carries a legacy hub key", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				agentModel: "@cf/org/value",
+				security: { enabled: true },
+				intel: {
+					hub: {
+						url: "https://hub.example.com",
+						org_uuid: "org-1",
+						api_key_secret_name: "MASTER_DB_PASSWORD",
+					},
+				},
+			},
+		});
+		const settings = await getOrgSettings(makeEnv(bucket));
+		expect(settings.agentModel).toBe("@cf/org/value");
+		expect(settings.security?.enabled).toBe(true);
+		expect(settings.intel?.hub).toBeUndefined();
+	});
+
+	it("getDomainSettings does not wipe the tier when a stored blob carries a legacy hub key", async () => {
+		const bucket = makeFakeBucket({
+			[DOMAIN_KEY]: {
+				agentModel: "@cf/domain/value",
+				catchall_intel: { enabled: true },
+				intel: {
+					hub: {
+						url: "https://hub.example.com",
+						org_uuid: "org-1",
+						api_key_secret_name: "MASTER_DB_PASSWORD",
+					},
+				},
+			},
+		});
+		const settings = await getDomainSettings(makeEnv(bucket), "example.com");
+		expect(settings.agentModel).toBe("@cf/domain/value");
+		expect(settings.catchall_intel?.enabled).toBe(true);
+		expect(settings.intel?.hub).toBeUndefined();
+	});
+
+	it("resolveMailboxSettings preserves org security when org intel.hub has a legacy secret name", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: {
+					enabled: true,
+					thresholds: { quarantine: 70, block: 90 },
+				},
+				intel: {
+					hub: {
+						url: "https://hub.example.com",
+						org_uuid: "org-1",
+						api_key_secret_name: "MASTER_DB_PASSWORD",
+					},
+				},
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.enabled).toBe(true);
+		expect(resolved.security.thresholds.quarantine).toBe(70);
+		expect(resolved.intel.hub).toBeUndefined();
+	});
 });
 
