@@ -2187,15 +2187,20 @@ export class MailboxDO extends DurableObject<Env> {
 	 * (this call wins the race), false if it was already consumed.
 	 *
 	 * INSERT OR IGNORE on a PRIMARY KEY is an atomic test-and-set in DO SQLite:
-	 * the DO serializes all JS execution, so rowsWritten === 1 means exactly
-	 * one caller consumed the token.
+	 * the DO serializes all JS execution, so only one caller's INSERT writes.
+	 *
+	 * rowsWritten counts index rows too: `jti TEXT PRIMARY KEY` carries an
+	 * implicit unique index, so a successful insert reports rowsWritten === 2
+	 * (measured against workerd). An ignored duplicate reports 0 — so the
+	 * consume test is "wrote anything", NOT `=== 1`, which rejected every
+	 * legitimate consume and 401'd all Tier ≥ 1 sends.
 	 */
 	async consumeJti(jti: string): Promise<boolean> {
 		const cursor = this.ctx.storage.sql.exec(
 			`INSERT OR IGNORE INTO consumed_jti (jti) VALUES (?1)`,
 			jti,
 		);
-		return cursor.rowsWritten === 1;
+		return cursor.rowsWritten > 0;
 	}
 
 	/** List RUF records, optionally filtered by domain. Newest first, max 200. */

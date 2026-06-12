@@ -530,7 +530,8 @@ export const mailboxMigrations: Migration[] = [
 		// KV has no compare-and-swap, so the previous get-then-delete was a
 		// non-atomic race. The DO serializes all JS execution, so an
 		// INSERT OR IGNORE with a PRIMARY KEY constraint is the atomic gate:
-		// only the request whose INSERT creates a row (rowsWritten === 1) may proceed.
+		// only the request whose INSERT creates a row (rowsWritten > 0; the TEXT
+		// PRIMARY KEY's implicit index makes a successful insert report 2) may proceed.
 		// The KV get-check is still used to verify the token was legitimately issued.
 		name: "25_consumed_jti",
 		sql: `
