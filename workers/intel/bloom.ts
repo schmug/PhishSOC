@@ -8,7 +8,7 @@
  * Purpose: cheap "is this URL/domain on a known-bad list" test without
  * shipping a multi-MB list to every hot-path request. A positive match
  * still triggers a secondary exact-match check (membership in the
- * `intel:{feedId}:exactset` blob) before we act on it — bloom
+ * `intel:{feedId}:exact-blob` blob) before we act on it — bloom
  * false-positives must not cause blocking.
  *
  * Sizing: m = ceil(-n * ln(p) / (ln(2))^2), k = ceil((m/n) * ln(2))

@@ -10,9 +10,11 @@
  *   2. For each mailbox with `intel.feeds`, fetch each feed (If-None-Match).
  *   3. Parse entries (domain or URL, ignore `#` comments).
  *   4. Build a bloom filter and store under KV key `intel:{feedId}:bloom`.
- *   5. Also write an `intel:{feedId}:exact:<value>` marker for a subset of
- *      high-confidence entries so we can confirm a bloom hit without false
- *      positives. (Bounded to prevent runaway KV writes.)
+ *   5. Also write a bounded, deduplicated subset of entries as ONE JSON
+ *      blob under `intel:{feedId}:exact-blob` so we can confirm a bloom hit
+ *      without false positives. (One key per feed, not per entry — per-entry
+ *      keys cost O(entries) KV writes per cron run and caused overage
+ *      billing, see #481.)
  *   6. Update `intel_feed_state` row on the mailbox DO.
  *
  * Lookup flow:
@@ -40,6 +42,14 @@ const EXACT_KEY_CAP = 2000; // per-feed cap — exact blob stores at most this m
 function bloomKey(feedId: string) { return `intel:${feedId}:bloom`; }
 /** Single blob key holding a JSON array of up to EXACT_KEY_CAP exact-match values. */
 function exactBlobKey(feedId: string) { return `intel:${feedId}:exact-blob`; }
+/**
+ * Pre-#481 per-entry confirmation key. Only read as a fallback while an
+ * exact blob is absent (the window between deploying the blob scheme and
+ * each feed's first new-style refresh); the keys carry a TTL and age out on
+ * their own. Remove once a post-#482 refresh cycle has completed in
+ * production — tracked in #485.
+ */
+function legacyExactKey(feedId: string, value: string) { return `intel:${feedId}:exact:${value}`; }
 /**
  * Storage key for `ip-cidr` feeds. Bloom filters don't fit CIDR membership
  * (an IP is checked against a *range*, not an exact string) so we materialise
@@ -261,7 +271,18 @@ async function refreshFeed(
 	if (state?.etag) headers["If-None-Match"] = state.etag;
 
 	const res = await fetch(feed.url, { headers, signal: AbortSignal.timeout(15000) });
-	if (res.status === 304) return { entries: state?.entry_count ?? 0 };
+	if (res.status === 304) {
+		// Content unchanged — still record the successful check so the
+		// refreshHours skip in refreshAllFeeds applies to 304-ing feeds too.
+		await stub.upsertIntelFeedState(feed.id, {
+			url: feed.url,
+			last_fetched_at: new Date().toISOString(),
+			etag: state?.etag ?? null,
+			entry_count: state?.entry_count ?? 0,
+			bloom_kv_key: feed.kind === "ip-cidr" ? cidrKey(feed.id) : bloomKey(feed.id),
+		});
+		return { entries: state?.entry_count ?? 0 };
+	}
 	if (!res.ok) throw new Error(`${feed.url} returned ${res.status}`);
 
 	const body = await res.text();
@@ -303,7 +324,9 @@ async function refreshFeed(
 
 	// Write a bounded subset of exact-match values as a single JSON blob.
 	// This reduces KV writes from O(entries) to O(1) per feed per refresh.
-	const exactSlice = values.slice(0, EXACT_KEY_CAP);
+	// Deduped first: url-kind values repeat hostnames, and duplicates would
+	// waste the cap.
+	const exactSlice = [...new Set(values)].slice(0, EXACT_KEY_CAP);
 	await env.BLOOM_KV.put(exactBlobKey(feed.id), JSON.stringify(exactSlice), {
 		expirationTtl: ttlSeconds,
 	});
@@ -353,18 +376,43 @@ export async function checkUrlAgainstFeeds(
 		const filter = deserializeBloom(serialized);
 		if (!filter) continue;
 		const candidates = feed.kind === "domain" ? [host] : [fullUrl, host];
-		// Fetch the exact-match blob once per feed, not once per candidate.
-		const exactBlobRaw = await env.BLOOM_KV.get(exactBlobKey(feed.id), "text");
-		const exactSet = new Set<string>(
-			exactBlobRaw ? (JSON.parse(exactBlobRaw) as string[]) : [],
-		);
+		// The exact blob is ~200 KB and this runs per URL on the security
+		// pipeline's hot path — fetch it lazily on the first bloom hit, at
+		// most once per feed.
+		let exactSet: Set<string> | null | undefined;
 		for (const v of candidates) {
 			if (!checkBloom(filter, v)) continue;
-			if (exactSet.has(v)) return { matched: true, feedId: feed.id, value: v, confirmed: true };
+			if (exactSet === undefined) exactSet = await loadExactSet(env, feed.id);
+			if (exactSet) {
+				if (exactSet.has(v)) return { matched: true, feedId: feed.id, value: v, confirmed: true };
+			} else {
+				// No exact blob yet (pre-#482 KV state) — confirm via the
+				// legacy per-entry key so detections don't degrade between
+				// deploy and this feed's first new-style refresh.
+				const legacy = await env.BLOOM_KV.get(legacyExactKey(feed.id, v), "text");
+				if (legacy === "1") return { matched: true, feedId: feed.id, value: v, confirmed: true };
+			}
 			if (!bloomOnly) bloomOnly = { matched: true, feedId: feed.id, value: v, confirmed: false };
 		}
 	}
 	return bloomOnly;
+}
+
+/**
+ * Load a feed's exact-match blob. Returns null when the key is missing or
+ * unparseable — a bloom hit then degrades to the legacy-key fallback (and
+ * ultimately `confirmed: false`) instead of failing the whole lookup.
+ */
+async function loadExactSet(env: Env, feedId: string): Promise<Set<string> | null> {
+	const raw = await env.BLOOM_KV.get(exactBlobKey(feedId), "text");
+	if (!raw) return null;
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return null;
+		return new Set(parsed.filter((v): v is string => typeof v === "string"));
+	} catch {
+		return null;
+	}
 }
 
 export interface IpFeedMatch {
