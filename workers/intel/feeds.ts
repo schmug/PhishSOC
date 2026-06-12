@@ -257,15 +257,59 @@ async function refreshFeed(
 ): Promise<{ entries: number }> {
 	const stub = getMailboxStub(env, mailboxId);
 
+	// Read the blobs this feed's lookups depend on BEFORE fetching. A 304
+	// carries no body, so the only way to renew their TTL (KV has no touch
+	// operation) is to rewrite the values just read — and if any blob has
+	// already TTL-expired, only an unconditional 200 can rebuild it.
+	const requiredBlobs: Array<{ key: string; type: "arrayBuffer" | "text" }> =
+		feed.kind === "ip-cidr"
+			? [{ key: cidrKey(feed.id), type: "text" }]
+			: [
+					{ key: bloomKey(feed.id), type: "arrayBuffer" },
+					{ key: exactBlobKey(feed.id), type: "text" },
+				];
+	const existingBlobs: Array<{ key: string; value: ArrayBuffer | string }> = [];
+	for (const blob of requiredBlobs) {
+		const value =
+			blob.type === "arrayBuffer"
+				? await env.BLOOM_KV.get(blob.key, "arrayBuffer")
+				: await env.BLOOM_KV.get(blob.key, "text");
+		if (value !== null) existingBlobs.push({ key: blob.key, value });
+	}
+	const blobsIntact = existingBlobs.length === requiredBlobs.length;
+
 	const headers: Record<string, string> = { ...(feed.headers ?? {}) };
-	if (state?.etag) headers["If-None-Match"] = state.etag;
+	// Conditional GET only while every required blob is still alive in KV — a
+	// 304 is only safe to trust if the data it vouches for hasn't expired.
+	if (state?.etag && blobsIntact) headers["If-None-Match"] = state.etag;
 
 	const res = await fetch(feed.url, { headers, signal: AbortSignal.timeout(15000) });
-	if (res.status === 304) return { entries: state?.entry_count ?? 0 };
+	const ttlSeconds = Math.max(feed.refreshHours * 3600 * 4, 86400);
+	if (res.status === 304) {
+		if (!blobsIntact) {
+			// We didn't send If-None-Match, so this 304 violates the protocol —
+			// and with blobs missing there is no body to rebuild from. Fail the
+			// refresh; last_fetched_at stays stale so the next cron run retries.
+			throw new Error(`${feed.url} returned 304 to an unconditional request`);
+		}
+		// Renew the TTLs by rewriting the just-read values, and record the
+		// refresh so the refreshHours gate keeps renewal at O(feeds) writes per
+		// interval rather than per cron run.
+		for (const { key, value } of existingBlobs) {
+			await env.BLOOM_KV.put(key, value, { expirationTtl: ttlSeconds });
+		}
+		await stub.upsertIntelFeedState(feed.id, {
+			url: feed.url,
+			last_fetched_at: new Date().toISOString(),
+			etag: state?.etag ?? null,
+			entry_count: state?.entry_count ?? 0,
+			bloom_kv_key: feed.kind === "ip-cidr" ? cidrKey(feed.id) : bloomKey(feed.id),
+		});
+		return { entries: state?.entry_count ?? 0 };
+	}
 	if (!res.ok) throw new Error(`${feed.url} returned ${res.status}`);
 
 	const body = await res.text();
-	const ttlSeconds = Math.max(feed.refreshHours * 3600 * 4, 86400);
 
 	if (feed.kind === "ip-cidr") {
 		// CIDR feeds use a separate storage path: a JSON blob of
