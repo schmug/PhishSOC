@@ -79,11 +79,15 @@ interface FakeFeedState {
 }
 
 function makeMailboxStub(states: Record<string, FakeFeedState> = {}) {
+	const upserts: Array<{ feedId: string; state: FakeFeedState }> = [];
 	return {
+		upserts,
 		async getIntelFeedState(feedId: string) {
 			return states[feedId] ?? null;
 		},
-		async upsertIntelFeedState(_feedId: string, _state: unknown) {},
+		async upsertIntelFeedState(feedId: string, state: FakeFeedState) {
+			upserts.push({ feedId, state });
+		},
 	};
 }
 
@@ -279,5 +283,102 @@ describe("exact-match confirmation via blob membership (#481)", () => {
 		const collided = await checkUrlAgainstFeeds(env, MAILBOX_ID, collision);
 		expect(collided).not.toBeNull();
 		expect(collided!.confirmed).toBe(false);
+	});
+
+	it("falls back to legacy per-entry exact keys while the exactset blob is absent", async () => {
+		// Deploy-window scenario: the old cron left a bloom blob and per-entry
+		// `intel:<feed>:exact:<value>` keys in KV, but no exactset blob exists
+		// yet. A bloom hit must still confirm via the legacy key so detections
+		// don't degrade between deploy and the first new-style refresh.
+		const member = "https://evil.example/login";
+		const bloom = createBloom(10);
+		for (const v of [member, "evil.example"]) addToBloom(bloom, v);
+		const kv = makeKv();
+		kv.store.set("intel:testfeed:bloom", serializeBloom(bloom));
+		kv.store.set(`intel:testfeed:exact:${member}`, "1");
+		const env = makeEnv({ mailboxSettings: urlFeedSettings(), kv });
+
+		const match = await checkUrlAgainstFeeds(env, MAILBOX_ID, member);
+
+		expect(match).not.toBeNull();
+		expect(match!.confirmed).toBe(true);
+	});
+
+	it("degrades to unconfirmed when no exact data exists at all", async () => {
+		const member = "https://evil.example/login";
+		const bloom = createBloom(10);
+		for (const v of [member, "evil.example"]) addToBloom(bloom, v);
+		const kv = makeKv();
+		kv.store.set("intel:testfeed:bloom", serializeBloom(bloom));
+		const env = makeEnv({ mailboxSettings: urlFeedSettings(), kv });
+
+		const match = await checkUrlAgainstFeeds(env, MAILBOX_ID, member);
+
+		expect(match).not.toBeNull();
+		expect(match!.confirmed).toBe(false);
+	});
+
+	it("degrades to unconfirmed when the exactset blob is unparseable", async () => {
+		const member = "https://evil.example/login";
+		const bloom = createBloom(10);
+		for (const v of [member, "evil.example"]) addToBloom(bloom, v);
+		const kv = makeKv();
+		kv.store.set("intel:testfeed:bloom", serializeBloom(bloom));
+		kv.store.set("intel:testfeed:exactset", "not json {{{");
+		const env = makeEnv({ mailboxSettings: urlFeedSettings(), kv });
+
+		const match = await checkUrlAgainstFeeds(env, MAILBOX_ID, member);
+
+		expect(match).not.toBeNull();
+		expect(match!.confirmed).toBe(false);
+	});
+});
+
+// ── 304 handling ──────────────────────────────────────────────────────
+
+describe("refreshFeed 304 handling (#481)", () => {
+	it("records a fresh last_fetched_at on 304 so refreshHours skips apply to unchanged feeds", async () => {
+		globalThis.fetch = vi.fn(
+			async () => new Response(null, { status: 304 }),
+		) as unknown as typeof fetch;
+		const stale = new Date(Date.now() - 7 * 3600 * 1000).toISOString();
+		const stub = makeMailboxStub({
+			testfeed: { last_fetched_at: stale, etag: '"abc"', entry_count: 42 },
+		});
+		const env = makeEnv({ mailboxSettings: urlFeedSettings(6), stub });
+
+		const result = await refreshAllFeeds(env);
+
+		expect(result.feeds).toBe(1);
+		expect(result.entries).toBe(42);
+		expect(stub.upserts).toHaveLength(1);
+		const upserted = stub.upserts[0];
+		expect(upserted.feedId).toBe("testfeed");
+		expect(upserted.state.etag).toBe('"abc"');
+		expect(upserted.state.entry_count).toBe(42);
+		const ageMs = Date.now() - Date.parse(upserted.state.last_fetched_at);
+		expect(ageMs).toBeGreaterThanOrEqual(0);
+		expect(ageMs).toBeLessThan(60 * 1000);
+	});
+});
+
+// ── Exact-set dedupe ──────────────────────────────────────────────────
+
+describe("exact-set blob dedupe (#481)", () => {
+	it("deduplicates values so the cap covers more unique entries", async () => {
+		// Two URLs on the same host parse to [urlA, host, urlB, host] — the
+		// blob should store each value once so the 2000-entry cap isn't
+		// wasted on repeated hostnames.
+		mockFetch("https://x.example/a\nhttps://x.example/b\n");
+		const kv = makeKv();
+		const env = makeEnv({ mailboxSettings: urlFeedSettings(), kv });
+
+		await refreshAllFeeds(env);
+
+		const blob = await kv.get("intel:testfeed:exactset");
+		const parsed = JSON.parse(blob as string) as string[];
+		expect(parsed.sort()).toEqual(
+			["https://x.example/a", "https://x.example/b", "x.example"].sort(),
+		);
 	});
 });
