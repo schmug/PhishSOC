@@ -10,11 +10,9 @@
  *   2. For each mailbox with `intel.feeds`, fetch each feed (If-None-Match).
  *   3. Parse entries (domain or URL, ignore `#` comments).
  *   4. Build a bloom filter and store under KV key `intel:{feedId}:bloom`.
- *   5. Also write a bounded, deduplicated subset of entries as ONE JSON
- *      blob under `intel:{feedId}:exact-blob` so we can confirm a bloom hit
- *      without false positives. (One key per feed, not per entry — per-entry
- *      keys cost O(entries) KV writes per cron run and caused overage
- *      billing, see #481.)
+ *   5. Write a single `intel:{feedId}:exact-blob` JSON array (deduplicated,
+ *      capped at EXACT_KEY_CAP entries) so we can confirm a bloom hit
+ *      without false positives (one blob per feed, not one key per entry).
  *   6. Update `intel_feed_state` row on the mailbox DO.
  *
  * Lookup flow:
