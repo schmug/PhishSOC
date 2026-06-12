@@ -35,10 +35,11 @@ import { getMailboxStub, listMailboxes } from "../lib/email-helpers";
 import { hostAllowed } from "../lib/host-allowlist";
 import { resolveMailboxSettings } from "../lib/mailbox-settings";
 
-const EXACT_KEY_CAP = 2000; // per-feed cap — we only fast-path confirm up to this many
+const EXACT_KEY_CAP = 2000; // per-feed cap — exact blob stores at most this many entries
 
 function bloomKey(feedId: string) { return `intel:${feedId}:bloom`; }
-function exactKey(feedId: string, value: string) { return `intel:${feedId}:exact:${value}`; }
+/** Single blob key holding a JSON array of up to EXACT_KEY_CAP exact-match values. */
+function exactBlobKey(feedId: string) { return `intel:${feedId}:exact-blob`; }
 /**
  * Storage key for `ip-cidr` feeds. Bloom filters don't fit CIDR membership
  * (an IP is checked against a *range*, not an exact string) so we materialise
@@ -226,7 +227,16 @@ export async function refreshAllFeeds(env: Env): Promise<{ feeds: number; entrie
 			// materialised out-of-band.
 			if (!feed.url) continue;
 			try {
-				const refreshed = await refreshFeed(env, mailboxId, feed);
+				const stub = getMailboxStub(env, mailboxId);
+				const state = await stub.getIntelFeedState(feed.id);
+				// Honor refreshHours: skip if the feed was fetched more recently than
+				// its configured interval. A null/absent last_fetched_at is treated as
+				// a first run and always triggers a fetch.
+				if (state?.last_fetched_at) {
+					const elapsedMs = Date.now() - new Date(state.last_fetched_at).getTime();
+					if (elapsedMs < feed.refreshHours * 3600 * 1000) continue;
+				}
+				const refreshed = await refreshFeed(env, mailboxId, feed, state);
 				feeds++;
 				entries += refreshed.entries;
 			} catch (e) {
@@ -237,13 +247,15 @@ export async function refreshAllFeeds(env: Env): Promise<{ feeds: number; entrie
 	return { feeds, entries };
 }
 
+type FeedState = Awaited<ReturnType<ReturnType<typeof getMailboxStub>["getIntelFeedState"]>>;
+
 async function refreshFeed(
 	env: Env,
 	mailboxId: string,
 	feed: FeedDefinition,
+	state: FeedState,
 ): Promise<{ entries: number }> {
 	const stub = getMailboxStub(env, mailboxId);
-	const state = await stub.getIntelFeedState(feed.id);
 
 	const headers: Record<string, string> = { ...(feed.headers ?? {}) };
 	if (state?.etag) headers["If-None-Match"] = state.etag;
@@ -289,19 +301,12 @@ async function refreshFeed(
 		expirationTtl: ttlSeconds,
 	});
 
-	// Write a bounded subset of exact-match markers for secondary confirmation.
+	// Write a bounded subset of exact-match values as a single JSON blob.
+	// This reduces KV writes from O(entries) to O(1) per feed per refresh.
 	const exactSlice = values.slice(0, EXACT_KEY_CAP);
-	const writes: Promise<void>[] = [];
-	for (const v of exactSlice) {
-		writes.push(
-			env.BLOOM_KV
-				.put(exactKey(feed.id, v), "1", {
-					expirationTtl: feed.refreshHours * 3600 * 4,
-				})
-				.catch(() => {}), // isolated; individual failures shouldn't abort refresh
-		);
-	}
-	await Promise.all(writes);
+	await env.BLOOM_KV.put(exactBlobKey(feed.id), JSON.stringify(exactSlice), {
+		expirationTtl: ttlSeconds,
+	});
 
 	await stub.upsertIntelFeedState(feed.id, {
 		url: feed.url,
@@ -348,10 +353,14 @@ export async function checkUrlAgainstFeeds(
 		const filter = deserializeBloom(serialized);
 		if (!filter) continue;
 		const candidates = feed.kind === "domain" ? [host] : [fullUrl, host];
+		// Fetch the exact-match blob once per feed, not once per candidate.
+		const exactBlobRaw = await env.BLOOM_KV.get(exactBlobKey(feed.id), "text");
+		const exactSet = new Set<string>(
+			exactBlobRaw ? (JSON.parse(exactBlobRaw) as string[]) : [],
+		);
 		for (const v of candidates) {
 			if (!checkBloom(filter, v)) continue;
-			const exact = await env.BLOOM_KV.get(exactKey(feed.id, v), "text");
-			if (exact === "1") return { matched: true, feedId: feed.id, value: v, confirmed: true };
+			if (exactSet.has(v)) return { matched: true, feedId: feed.id, value: v, confirmed: true };
 			if (!bloomOnly) bloomOnly = { matched: true, feedId: feed.id, value: v, confirmed: false };
 		}
 	}
