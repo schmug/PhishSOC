@@ -1,7 +1,7 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	callerInAcl,
 	callerGroupsFromJwt,
@@ -41,11 +41,20 @@ describe("callerInAcl", () => {
 		expect(callerInAcl(null, null)).toBe(true);
 	});
 
-	it("returns true when callerEmail is falsy (dev mode, no Access in front)", () => {
+	it("FAILS CLOSED on a falsy callerEmail in production (f17)", () => {
 		const acl: MailboxAcl = { owner: "alice@example.com", members: ["alice@example.com"] };
-		expect(callerInAcl(acl, null)).toBe(true);
-		expect(callerInAcl(acl, "")).toBe(true);
-		expect(callerInAcl(acl, undefined)).toBe(true);
+		// Default isDev = false → production semantics: deny.
+		expect(callerInAcl(acl, null)).toBe(false);
+		expect(callerInAcl(acl, "")).toBe(false);
+		expect(callerInAcl(acl, undefined)).toBe(false);
+		expect(callerInAcl(acl, null, [], false)).toBe(false);
+	});
+
+	it("allows a falsy callerEmail only in dev mode (isDev = true, no Access in front)", () => {
+		const acl: MailboxAcl = { owner: "alice@example.com", members: ["alice@example.com"] };
+		expect(callerInAcl(acl, null, [], true)).toBe(true);
+		expect(callerInAcl(acl, "", [], true)).toBe(true);
+		expect(callerInAcl(acl, undefined, [], true)).toBe(true);
 	});
 
 	it("returns true when caller is in members list", () => {
@@ -179,9 +188,12 @@ function makeFakeMailboxApp(
 	app.get("/mailboxes/:mailboxId/test", (c) => c.json({ ok: true }));
 
 	return {
-		fetch: (path: string) => {
-			const headers: Record<string, string> = {};
-			if (callerEmail) headers["cf-access-authenticated-user-email"] = callerEmail;
+		// Identity travels in the fake CF Access JWT (f17) — requireMailbox no
+		// longer reads the cf-access-authenticated-user-email header. Extra
+		// headers (e.g. a forged email header) can be layered on top.
+		fetch: (path: string, extraHeaders: Record<string, string> = {}) => {
+			const headers: Record<string, string> = { ...extraHeaders };
+			if (callerEmail) headers["cf-access-jwt-assertion"] = makeFakeJwt({ email: callerEmail });
 			return app.request(path, { headers }, { BUCKET: bucket as unknown as R2Bucket, MAILBOX: MAILBOX as unknown as DurableObjectNamespace });
 		},
 	};
@@ -229,13 +241,18 @@ describe("requireMailbox — ACL enforcement", () => {
 	});
 
 	it("allows access in dev mode (no callerEmail) regardless of ACL", async () => {
-		const store = {
-			[mailboxKey]: "{}",
-			[aclKey]: JSON.stringify(aliceAcl),
-		};
-		const app = makeFakeMailboxApp(store, null);
-		const res = await app.fetch("/mailboxes/alice@example.com/test");
-		expect(res.status).toBe(200);
+		vi.stubEnv("DEV", true);
+		try {
+			const store = {
+				[mailboxKey]: "{}",
+				[aclKey]: JSON.stringify(aliceAcl),
+			};
+			const app = makeFakeMailboxApp(store, null);
+			const res = await app.fetch("/mailboxes/alice@example.com/test");
+			expect(res.status).toBe(200);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("ACL comparison is case-insensitive", async () => {
@@ -244,6 +261,85 @@ describe("requireMailbox — ACL enforcement", () => {
 			[aclKey]: JSON.stringify(aliceAcl),
 		};
 		const app = makeFakeMailboxApp(store, "ALICE@EXAMPLE.COM");
+		const res = await app.fetch("/mailboxes/alice@example.com/test");
+		expect(res.status).toBe(200);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// requireMailbox — identity from the verified JWT, fail closed in prod (f17)
+// ---------------------------------------------------------------------------
+
+describe("requireMailbox — verified-JWT identity, fail-closed (f17)", () => {
+	const mailboxKey = "mailboxes/alice@example.com.json";
+	const aclKey = "mailboxes-acl/alice@example.com.json";
+	const aliceAcl: MailboxAcl = {
+		owner: "alice@example.com",
+		members: ["alice@example.com"],
+	};
+	const scopedStore = () => ({
+		[mailboxKey]: "{}",
+		[aclKey]: JSON.stringify(aliceAcl),
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("DENIES in production when the JWT carries no email and an ACL exists (was fail-open)", async () => {
+		vi.stubEnv("DEV", false);
+		// Valid (middleware-verified) JWT, but no email claim — e.g. a service
+		// token, or a caller that stripped the identity.
+		const app = makeFakeMailboxApp(scopedStore(), null);
+		const res = await app.fetch("/mailboxes/alice@example.com/test", {
+			"cf-access-jwt-assertion": makeFakeJwt({ common_name: "svc-token" }),
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it("DENIES in production when no JWT is present at all and an ACL exists", async () => {
+		vi.stubEnv("DEV", false);
+		const app = makeFakeMailboxApp(scopedStore(), null);
+		const res = await app.fetch("/mailboxes/alice@example.com/test");
+		expect(res.status).toBe(403);
+	});
+
+	it("ignores a forged cf-access-authenticated-user-email header when the JWT email differs", async () => {
+		// Eve's JWT says eve@; the forged header claims the victim's identity.
+		const app = makeFakeMailboxApp(scopedStore(), "eve@example.com");
+		const res = await app.fetch("/mailboxes/alice@example.com/test", {
+			"cf-access-authenticated-user-email": "alice@example.com",
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it("ignores a forged cf-access-authenticated-user-email header when the JWT has no email (prod)", async () => {
+		vi.stubEnv("DEV", false);
+		const app = makeFakeMailboxApp(scopedStore(), null);
+		const res = await app.fetch("/mailboxes/alice@example.com/test", {
+			"cf-access-authenticated-user-email": "alice@example.com",
+			"cf-access-jwt-assertion": makeFakeJwt({ common_name: "svc-token" }),
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it("still allows anyone in production when no ACL exists (backwards-compat)", async () => {
+		vi.stubEnv("DEV", false);
+		const app = makeFakeMailboxApp({ [mailboxKey]: "{}" }, null);
+		const res = await app.fetch("/mailboxes/alice@example.com/test");
+		expect(res.status).toBe(200);
+	});
+
+	it("still allows in dev mode when no email can be derived (no CF Access in front)", async () => {
+		vi.stubEnv("DEV", true);
+		const app = makeFakeMailboxApp(scopedStore(), null);
+		const res = await app.fetch("/mailboxes/alice@example.com/test");
+		expect(res.status).toBe(200);
+	});
+
+	it("allows an ACL member identified by the verified-JWT email claim", async () => {
+		vi.stubEnv("DEV", false);
+		const app = makeFakeMailboxApp(scopedStore(), "alice@example.com");
 		const res = await app.fetch("/mailboxes/alice@example.com/test");
 		expect(res.status).toBe(200);
 	});
@@ -333,7 +429,6 @@ describe("callerGroupsFromJwt (#295)", () => {
 
 function makeFakeMailboxAppWithJwt(
 	bucketStore: Record<string, string>,
-	callerEmail: string | null,
 	jwtToken: string | null = null,
 ) {
 	const bucket = makeFullR2Stub(bucketStore);
@@ -350,7 +445,6 @@ function makeFakeMailboxAppWithJwt(
 	return {
 		fetch: (path: string) => {
 			const headers: Record<string, string> = {};
-			if (callerEmail) headers["cf-access-authenticated-user-email"] = callerEmail;
 			if (jwtToken) headers["cf-access-jwt-assertion"] = jwtToken;
 			return app.request(
 				path,
@@ -370,13 +464,17 @@ describe("requireMailbox — group-grant ACL (#295)", () => {
 		groups: ["soc-analysts"],
 	};
 
-	it("allows a caller in a granted group (group membership from JWT)", async () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("allows a caller in a granted group (email + group membership from JWT)", async () => {
 		const store = {
 			[mailboxKey]: "{}",
 			[aclKey]: JSON.stringify(groupAcl),
 		};
-		const jwt = makeFakeGroupJwt(["soc-analysts"]);
-		const app = makeFakeMailboxAppWithJwt(store, "bob@example.com", jwt);
+		const jwt = makeFakeJwt({ email: "bob@example.com", groups: ["soc-analysts"] });
+		const app = makeFakeMailboxAppWithJwt(store, jwt);
 		const res = await app.fetch("/mailboxes/alice@example.com/test");
 		expect(res.status).toBe(200);
 	});
@@ -386,18 +484,19 @@ describe("requireMailbox — group-grant ACL (#295)", () => {
 			[mailboxKey]: "{}",
 			[aclKey]: JSON.stringify(groupAcl),
 		};
-		const jwt = makeFakeGroupJwt(["other-team"]);
-		const app = makeFakeMailboxAppWithJwt(store, "eve@example.com", jwt);
+		const jwt = makeFakeJwt({ email: "eve@example.com", groups: ["other-team"] });
+		const app = makeFakeMailboxAppWithJwt(store, jwt);
 		const res = await app.fetch("/mailboxes/alice@example.com/test");
 		expect(res.status).toBe(403);
 	});
 
-	it("denies a caller with no JWT and not in members", async () => {
+	it("denies a caller with no JWT in production", async () => {
+		vi.stubEnv("DEV", false);
 		const store = {
 			[mailboxKey]: "{}",
 			[aclKey]: JSON.stringify(groupAcl),
 		};
-		const app = makeFakeMailboxAppWithJwt(store, "eve@example.com", null);
+		const app = makeFakeMailboxAppWithJwt(store, null);
 		const res = await app.fetch("/mailboxes/alice@example.com/test");
 		expect(res.status).toBe(403);
 	});

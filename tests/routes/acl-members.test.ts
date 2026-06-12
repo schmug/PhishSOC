@@ -15,6 +15,15 @@ import { requireMailbox, type MailboxContext } from "../../workers/lib/mailbox";
 import { aclMemberRoutes } from "../../workers/routes/acl-members";
 import type { MailboxAcl } from "../../workers/lib/mailbox-acl";
 
+// Helper: build a fake (unsigned) JWT carrying arbitrary claims. The routes
+// decode identity from the cf-access-jwt-assertion token (f17), not from the
+// cf-access-authenticated-user-email header; decodeJwt from jose just
+// base64url-decodes the payload — no sig check needed in unit tests.
+function makeFakeJwt(claims: Record<string, unknown>): string {
+	const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+	return `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify(claims))}.`;
+}
+
 // ---------------------------------------------------------------------------
 // Shared in-memory R2 stub (mirrors makeFullR2Stub from mailbox-acl.test.ts)
 // ---------------------------------------------------------------------------
@@ -59,7 +68,8 @@ function makeApp(bucketStore: Record<string, string>, callerEmail: string | null
 	return {
 		fetch(path: string, options?: RequestInit) {
 			const hdrs: Record<string, string> = {};
-			if (callerEmail) hdrs["cf-access-authenticated-user-email"] = callerEmail;
+			// Caller identity travels in the fake verified JWT (f17).
+			if (callerEmail) hdrs["cf-access-jwt-assertion"] = makeFakeJwt({ email: callerEmail });
 			if (options?.headers) Object.assign(hdrs, options.headers as Record<string, string>);
 			return app.request(
 				path,
@@ -492,5 +502,45 @@ describe("DELETE /acl/groups/:groupName — remove group", () => {
 		expect(res.status).toBe(200);
 		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
 		expect(stored.groups).not.toContain("soc analysts");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// f17 — owner identity comes from the verified JWT, never the email header
+// ---------------------------------------------------------------------------
+
+describe("ACL member routes — forged email header is ignored (f17)", () => {
+	it("a forged cf-access-authenticated-user-email header does not grant owner rights", async () => {
+		// Bob is a member (passes requireMailbox) but not the owner. He forges
+		// the legacy email header to claim Alice's identity — the routes must
+		// keep using his JWT email and return 403 on an owner-only write.
+		const { fetch, bucket } = makeApp(storeWithAcl(aliceAndBobAcl), "bob@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/members`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"cf-access-authenticated-user-email": "alice@example.com",
+			},
+			body: JSON.stringify({ email: "mallory@example.com" }),
+		});
+		expect(res.status).toBe(403);
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.members).not.toContain("mallory@example.com");
+	});
+
+	it("a forged header alone (JWT without email claim) cannot lock down a mailbox", async () => {
+		// No email claim in the JWT → no identity → the lock-down endpoint
+		// must refuse to bootstrap an ACL even when the header names a victim.
+		const bucketStore = { [mailboxKey]: "{}" };
+		const { fetch, bucket } = makeApp(bucketStore, null);
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl`, {
+			method: "POST",
+			headers: {
+				"cf-access-authenticated-user-email": "alice@example.com",
+				"cf-access-jwt-assertion": makeFakeJwt({ common_name: "svc-token" }),
+			},
+		});
+		expect(res.status).toBe(400);
+		expect(bucket._store[aclKey]).toBeUndefined();
 	});
 });

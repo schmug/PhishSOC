@@ -70,7 +70,14 @@ import {
 	mailboxesForOrgSearch,
 	type PerMailboxSearchResult,
 } from "./lib/org-search";
-import { readMailboxAcl, writeMailboxAcl, deleteMailboxAcl, callerInAcl, callerGroupsFromJwt } from "./lib/mailbox-acl";
+import {
+	readMailboxAcl,
+	writeMailboxAcl,
+	deleteMailboxAcl,
+	callerInAcl,
+	callerGroupsFromJwt,
+	callerEmailFromJwt,
+} from "./lib/mailbox-acl";
 import { aclMemberRoutes } from "./routes/acl-members";
 import { fireYaraScan } from "./security/yaramail-signal";
 import { yaramailCallbackRoute } from "./routes/yaramail-callback";
@@ -215,28 +222,30 @@ app.delete("/api/v1/org/domains/:domain", async (c) => {
 });
 
 // Authenticated-user identity (#204). The Cloudflare Access middleware in
-// `workers/app.ts` has already verified the JWT and admitted the request;
-// the `Cf-Access-Authenticated-User-Email` header is set by Access on the
-// admitted request, so reading it here is safe — no second `jwtVerify`
-// pass and no hand-rolled crypto. The Shell sidebar account menu consumes
-// `{ email }` to render the signed-in identity and the sign-out link.
+// `workers/app.ts` has already verified the JWT signature and admitted the
+// request; identity is decoded from that VERIFIED token's `email` claim —
+// never from the `cf-access-authenticated-user-email` header, which is
+// decoupled from the JWT and forgeable on a direct-to-origin request (f17).
+// No second `jwtVerify` pass and no hand-rolled crypto. The Shell sidebar
+// account menu consumes `{ email }` to render the signed-in identity and
+// the sign-out link.
 //
 // Dev mode: the auth middleware short-circuits when `import.meta.env.DEV`
-// is true (Vite dev server has no Access in front of it), so the header
+// is true (Vite dev server has no Access in front of it), so the token
 // is absent. Mirror that branch with a stable stub identity rather than
 // returning 401 — otherwise `npm run dev` shows a broken account menu.
 app.get("/api/v1/me", (c) => {
-	const headerEmail = c.req.header("cf-access-authenticated-user-email");
-	if (headerEmail) {
-		return c.json({ email: headerEmail });
+	const jwtEmail = callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"));
+	if (jwtEmail) {
+		return c.json({ email: jwtEmail });
 	}
 	if (import.meta.env.DEV) {
 		return c.json({ email: "dev@local" });
 	}
 	// In production the Access middleware would have already 403'd a
 	// request without a verified JWT; reaching this branch implies the
-	// request was admitted but Access didn't populate the header — treat
-	// as unauthenticated rather than guess.
+	// verified token carries no `email` claim (e.g. a service token) —
+	// treat as unauthenticated rather than guess.
 	return c.json({ error: "not authenticated" }, 401);
 });
 
@@ -261,16 +270,20 @@ app.get("/api/v1/ai/text-models", async (c) => {
 // -- Mailboxes ------------------------------------------------------
 
 app.get("/api/v1/mailboxes", async (c) => {
-	const callerEmail = c.req.header("cf-access-authenticated-user-email") ?? null;
-	// Groups from the verified CF Access JWT — used for group-grant ACL checks (#295).
-	const callerGroups = callerGroupsFromJwt(c.req.header("cf-access-jwt-assertion"));
+	// Identity and groups from the VERIFIED CF Access JWT — never from the
+	// forgeable cf-access-authenticated-user-email header (f17, #295).
+	const jwtToken = c.req.header("cf-access-jwt-assertion");
+	const callerEmail = callerEmailFromJwt(jwtToken);
+	const callerGroups = callerGroupsFromJwt(jwtToken);
 	const allMailboxes = await listMailboxes(c.env.BUCKET);
 
 	// Read ACLs for all mailboxes — needed for acl_status (#241) in both branches.
 	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
 
-	// In dev mode or on pre-#27 single-user deploys (no callerEmail) show all.
-	if (!callerEmail) {
+	// Local dev only (no CF Access in front → no JWT email): show all. In
+	// production a missing JWT email (service token / stripped identity) must
+	// NOT reveal scoped mailboxes — fall through to the fail-closed filter.
+	if (!callerEmail && import.meta.env.DEV) {
 		return c.json(allMailboxes.map((m, i) => ({
 			...m,
 			name: m.id,
@@ -278,10 +291,11 @@ app.get("/api/v1/mailboxes", async (c) => {
 		})));
 	}
 
-	// Filter to mailboxes the caller is allowed to see (#27, #295).
+	// Filter to mailboxes the caller is allowed to see (#27, #295). Unscoped
+	// mailboxes (acl === null) stay visible to everyone (backwards-compat).
 	const visible = allMailboxes
 		.map((m, i) => ({ mailbox: m, acl: acls[i] }))
-		.filter(({ acl }) => callerInAcl(acl, callerEmail, callerGroups));
+		.filter(({ acl }) => callerInAcl(acl, callerEmail, callerGroups, import.meta.env.DEV));
 	return c.json(visible.map(({ mailbox, acl }) => ({
 		...mailbox,
 		name: mailbox.id,
@@ -291,8 +305,9 @@ app.get("/api/v1/mailboxes", async (c) => {
 
 // Bulk lock-down: lock every unscoped mailbox the caller can see (#294).
 app.post("/api/v1/mailboxes/bulk-lockdown", async (c) => {
+	// Owner identity from the VERIFIED CF Access JWT, not a forgeable header (f17).
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 
 	if (!callerEmail) {
 		return c.json({ error: "CF Access email required" }, 400);
@@ -414,8 +429,10 @@ app.get("/api/v1/org/acl-overview", async (c) => {
 const ORG_SEARCH_PER_MAILBOX_CAP = 200;
 
 app.get("/api/v1/org/search", async (c) => {
+	// Identity and groups from the VERIFIED CF Access JWT — never from the
+	// forgeable cf-access-authenticated-user-email header (f17).
 	const callerEmail =
-		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+		callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"))?.toLowerCase() ?? null;
 	const callerGroups = callerGroupsFromJwt(c.req.header("cf-access-jwt-assertion"));
 
 	const searchOpts = {
@@ -435,7 +452,13 @@ app.get("/api/v1/org/search", async (c) => {
 
 	const allMailboxes = await listMailboxes(c.env.BUCKET);
 	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
-	const mailboxes = mailboxesForOrgSearch(allMailboxes, acls, callerEmail, callerGroups);
+	const mailboxes = mailboxesForOrgSearch(
+		allMailboxes,
+		acls,
+		callerEmail,
+		callerGroups,
+		import.meta.env.DEV,
+	);
 
 	const settled = await Promise.allSettled(
 		mailboxes.map(async (m) => {
@@ -922,10 +945,12 @@ app.post("/api/v1/mailboxes", async (c) => {
 	const finalSettings = { ...defaultSettings, ...cleanedSettings };
 	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
 
-	// Bootstrap owner ACL (#27). Skipped when callerEmail is absent (dev
-	// mode / no Access) — those deploys get the backwards-compat "anyone
-	// past Access can see all mailboxes" behaviour.
-	const creatorEmail = c.req.header("cf-access-authenticated-user-email");
+	// Bootstrap owner ACL (#27). Owner identity comes from the VERIFIED CF
+	// Access JWT — never from the forgeable
+	// cf-access-authenticated-user-email header (f17). Skipped when the JWT
+	// email is absent (dev mode / no Access) — those deploys get the
+	// backwards-compat "anyone past Access can see all mailboxes" behaviour.
+	const creatorEmail = callerEmailFromJwt(c.req.header("cf-access-jwt-assertion"));
 	if (creatorEmail) {
 		const owner = creatorEmail.toLowerCase();
 		await writeMailboxAcl(c.env, email, { owner, members: [owner] });

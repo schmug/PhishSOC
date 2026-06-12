@@ -22,7 +22,12 @@ import {
 } from "../lib/tools";
 import { Folders, FOLDER_TOOL_DESCRIPTION, MOVE_FOLDER_TOOL_DESCRIPTION } from "../../shared/folders";
 import type { Env } from "../types";
-import { readMailboxAcl, callerInAcl, callerGroupsFromJwt } from "../lib/mailbox-acl";
+import {
+	readMailboxAcl,
+	callerInAcl,
+	callerGroupsFromJwt,
+	callerEmailFromJwt,
+} from "../lib/mailbox-acl";
 
 /** Wrap a plain result object into MCP content format. */
 function mcpText(result: unknown) {
@@ -68,17 +73,19 @@ export class EmailMCP extends McpAgent<Env> {
 		version: "1.0.0",
 	});
 
-	// Caller email from the CF Access header on the initial connection
-	// request. Each McpAgent DO instance handles exactly one session so
-	// this instance field is safe to use across tool calls (#27).
+	// Caller identity decoded from the VERIFIED CF Access JWT on the initial
+	// connection request (the global middleware in workers/app.ts already
+	// checked the signature) — never from the forgeable
+	// cf-access-authenticated-user-email header (f17). Each McpAgent DO
+	// instance handles exactly one session so these instance fields are safe
+	// to use across tool calls (#27).
 	#callerEmail: string | null = null;
 	#callerGroups: string[] = [];
 
 	async fetch(request: Request): Promise<Response> {
-		this.#callerEmail = request.headers.get("cf-access-authenticated-user-email");
-		this.#callerGroups = callerGroupsFromJwt(
-			request.headers.get("cf-access-jwt-assertion"),
-		);
+		const jwtToken = request.headers.get("cf-access-jwt-assertion");
+		this.#callerEmail = callerEmailFromJwt(jwtToken);
+		this.#callerGroups = callerGroupsFromJwt(jwtToken);
 		return super.fetch(request);
 	}
 
@@ -97,7 +104,8 @@ export class EmailMCP extends McpAgent<Env> {
 			if (!obj) {
 				return mcpError(`Mailbox "${mailboxId}" not found. Use list_mailboxes to see available mailboxes.`);
 			}
-			if (!callerInAcl(acl, this.#callerEmail, this.#callerGroups)) {
+			// Fail closed in production when the JWT carries no email (f17).
+			if (!callerInAcl(acl, this.#callerEmail, this.#callerGroups, import.meta.env.DEV)) {
 				return mcpError(`Access denied for mailbox "${mailboxId}".`);
 			}
 			return null;
@@ -111,12 +119,15 @@ export class EmailMCP extends McpAgent<Env> {
 			async () => {
 				const all = await toolListMailboxes(env);
 				const callerEmail = this.#callerEmail;
-				if (!callerEmail) return mcpText(all);
+				// Local dev only (no CF Access → no JWT email): show all. In
+				// production a missing JWT email (service token / stripped
+				// identity) must NOT reveal scoped mailboxes (f17).
+				if (!callerEmail && import.meta.env.DEV) return mcpText(all);
 				const acls = await Promise.all(
 					(all as Array<{ id: string }>).map((m) => readMailboxAcl(env, m.id)),
 				);
 				const filtered = (all as Array<{ id: string }>).filter((_, i) =>
-					callerInAcl(acls[i], callerEmail, this.#callerGroups),
+					callerInAcl(acls[i], callerEmail, this.#callerGroups, import.meta.env.DEV),
 				);
 				return mcpText(filtered);
 			},

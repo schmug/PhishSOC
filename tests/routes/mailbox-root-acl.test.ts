@@ -12,6 +12,14 @@ import { describe, expect, it } from "vitest";
 import { requireMailbox, type MailboxContext } from "../../workers/lib/mailbox";
 import type { MailboxAcl } from "../../workers/lib/mailbox-acl";
 
+// Helper: build a fake (unsigned) JWT carrying arbitrary claims. Identity is
+// decoded from the cf-access-jwt-assertion token (f17), never from the
+// cf-access-authenticated-user-email header.
+function makeFakeJwt(claims: Record<string, unknown>): string {
+	const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+	return `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify(claims))}.`;
+}
+
 function makeR2Stub(initial: Record<string, string> = {}) {
 	const store = { ...initial };
 	return {
@@ -60,7 +68,8 @@ function makeRootMailboxApp(bucketStore: Record<string, string>, callerEmail: st
 	return {
 		fetch(path: string, options?: RequestInit) {
 			const hdrs = new Headers(options?.headers);
-			if (callerEmail) hdrs.set("cf-access-authenticated-user-email", callerEmail);
+			// Caller identity travels in the fake verified JWT (f17).
+			if (callerEmail) hdrs.set("cf-access-jwt-assertion", makeFakeJwt({ email: callerEmail }));
 			return app.request(path, { ...options, headers: hdrs }, {
 				BUCKET: bucket as unknown as R2Bucket,
 				MAILBOX: MAILBOX as unknown as DurableObjectNamespace,

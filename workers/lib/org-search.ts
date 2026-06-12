@@ -12,14 +12,20 @@
 
 import { callerInAcl, type MailboxAcl } from "./mailbox-acl";
 
-/** Restrict org-search fan-out to mailboxes the caller is permitted to access. */
+/**
+ * Restrict org-search fan-out to mailboxes the caller is permitted to access.
+ * `callerEmail` must come from the verified CF Access JWT
+ * (`callerEmailFromJwt`); a missing email fails closed for scoped mailboxes
+ * in production (`isDev === false`) — see `callerInAcl` (f17).
+ */
 export function mailboxesForOrgSearch<T extends { id: string }>(
 	mailboxes: T[],
 	acls: Array<MailboxAcl | null>,
 	callerEmail: string | null | undefined,
 	callerGroups: string[],
+	isDev: boolean = false,
 ): T[] {
-	return mailboxes.filter((_, i) => callerInAcl(acls[i], callerEmail, callerGroups));
+	return mailboxes.filter((_, i) => callerInAcl(acls[i], callerEmail, callerGroups, isDev));
 }
 
 export type OrgSearchEmailRow = {
