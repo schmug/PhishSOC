@@ -81,6 +81,7 @@ import {
 import { aclMemberRoutes } from "./routes/acl-members";
 import { fireYaraScan } from "./security/yaramail-signal";
 import { yaramailCallbackRoute } from "./routes/yaramail-callback";
+import type { CatchallSummary } from "./durableObject/catchall-intel";
 
 type AppContext = Context<MailboxContext>;
 
@@ -867,35 +868,6 @@ app.get("/api/v1/domains/:domain/ruf-records", async (c) => {
 // ---------------------------------------------------------------------------
 // Catch-all probe intel (#427)
 // ---------------------------------------------------------------------------
-
-interface CatchallSourceRollup {
-	source_ip: string;
-	sender_domain: string;
-	count: number;
-	distinct_localparts: number;
-	max_score: number;
-	first_seen: string;
-	last_seen: string;
-}
-
-interface CatchallRecentSample {
-	id: number;
-	ts: string;
-	source_ip: string;
-	sender_domain: string;
-	sender: string;
-	localpart: string;
-	subject_snippet: string;
-	score: number;
-	band: string;
-	signals_json: string;
-}
-
-interface CatchallSummary {
-	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
-	topSources: CatchallSourceRollup[];
-	recent: CatchallRecentSample[];
-}
 
 function emptyCatchallSummary(): CatchallSummary {
 	return { totals: { probe_count: 0, distinct_sources: 0, distinct_localparts: 0 }, topSources: [], recent: [] };
