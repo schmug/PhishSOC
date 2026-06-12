@@ -243,13 +243,14 @@ describe("_getSummaryImpl", () => {
 		_recordProbeImpl(sql, makeEvent({ sourceIp: "2.2.2.2", localpart: "info" }));
 
 		const summary = _getSummaryImpl(sql, { limit: 10 });
-		expect(summary.totals.distinctSources).toBe(2);
-		expect(summary.totals.count).toBe(3);
-		expect(summary.topSources[0].sourceIp).toBe("1.1.1.1");
+		expect(summary.totals.distinct_sources).toBe(2);
+		expect(summary.totals.probe_count).toBe(3);
+		expect(summary.totals.distinct_localparts).toBe(3);
+		expect(summary.topSources[0].source_ip).toBe("1.1.1.1");
 		expect(summary.topSources[0].count).toBe(2);
-		expect(summary.topSources[0].distinctLocalparts).toBe(2);
+		expect(summary.topSources[0].distinct_localparts).toBe(2);
 		expect(summary.recent).toHaveLength(3);
-		// recent is ordered newest first
-		expect(Array.isArray(summary.recent[0].signals)).toBe(true);
+		// recent is ordered newest first; signals_json is the stored JSON blob
+		expect(typeof summary.recent[0].signals_json).toBe("string");
 	});
 });

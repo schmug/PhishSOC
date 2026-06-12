@@ -417,7 +417,7 @@ export interface CatchallSourceRollup {
  * `localpart`, `sender`, `subject_snippet` are attacker-controlled — render
  * as text only, never dangerouslySetInnerHTML. */
 export interface CatchallRecentSample {
-	id: number;
+	id: string;
 	ts: string;
 	source_ip: string;
 	sender_domain: string;
