@@ -105,7 +105,11 @@ export async function probeDkimSelectors(
 	return {
 		selectors: result.selectors
 			.filter((s) => s.published === true)
-			.map((s) => ({ selector: s.selector, published: true, source: "probed" as const })),
+			.map((s) => ({
+				selector: s.selector,
+				published: true,
+				source: "probed" as const,
+			})),
 	};
 }
 
@@ -131,15 +135,27 @@ export function mergeDkimPosture(
 	const out = new Map<string, DkimSelectorPosture>();
 
 	for (const s of observed.selectors) {
-		out.set(s.selector, { selector: s.selector, published: s.published, source: "observed" });
+		out.set(s.selector, {
+			selector: s.selector,
+			published: s.published,
+			source: "observed",
+		});
 	}
 
 	for (const s of probed.selectors) {
 		const existing = out.get(s.selector);
 		if (existing) {
-			out.set(s.selector, { selector: s.selector, published: existing.published, source: "both" });
+			out.set(s.selector, {
+				selector: s.selector,
+				published: existing.published,
+				source: "both",
+			});
 		} else {
-			out.set(s.selector, { selector: s.selector, published: s.published, source: "probed" });
+			out.set(s.selector, {
+				selector: s.selector,
+				published: s.published,
+				source: "probed",
+			});
 		}
 	}
 
@@ -169,7 +185,8 @@ export function dkimObservationCutoffIso(
 	nowIso: string,
 	windowDays: number = DKIM_OBSERVATION_WINDOW_DAYS,
 ): string {
-	const nowMs = new Date(nowIso).getTime();
+	// ⚡ Bolt: Optimize parsing string to timestamp without object allocation
+	const nowMs = Date.parse(nowIso);
 	if (!Number.isFinite(nowMs)) {
 		// Defensive: a caller passing a malformed `nowIso` would otherwise
 		// produce a NaN cutoff and the SQL filter would silently match
@@ -345,11 +362,9 @@ export async function fetchDkimPosture(
 		// "unavailable" after a single blip. Mirrors `tlsrpt/posture.ts`.
 		if (kv && published !== null) {
 			void kv
-				.put(
-					cacheKey,
-					JSON.stringify({ published }),
-					{ expirationTtl: KV_TTL_S },
-				)
+				.put(cacheKey, JSON.stringify({ published }), {
+					expirationTtl: KV_TTL_S,
+				})
 				.catch(() => {});
 		}
 	}

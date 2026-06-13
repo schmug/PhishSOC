@@ -44,7 +44,11 @@ export interface CatchallProbeEvent {
 
 /** Public API shape for `GET /api/v1/domains/:domain/catchall-intel` (#427). */
 export interface CatchallSummary {
-	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
+	totals: {
+		probe_count: number;
+		distinct_sources: number;
+		distinct_localparts: number;
+	};
 	topSources: Array<{
 		source_ip: string;
 		sender_domain: string;
@@ -70,16 +74,34 @@ export interface CatchallSummary {
 
 /** Minimal sql interface — matches the subset of DO `SqlStorage` we use. */
 export interface SqlLike {
-	exec<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Iterable<T>;
+	exec<T = Record<string, unknown>>(
+		sql: string,
+		...params: unknown[]
+	): Iterable<T>;
 }
 
-export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): void {
+export function _recordProbeImpl(
+	sql: SqlLike,
+	event: CatchallProbeEvent,
+): void {
 	const {
-		ts, sourceIp, senderDomain, sender, localpart,
-		subjectSnippet, score, band, signals, retentionDays, sampleLimit,
+		ts,
+		sourceIp,
+		senderDomain,
+		sender,
+		localpart,
+		subjectSnippet,
+		score,
+		band,
+		signals,
+		retentionDays,
+		sampleLimit,
 	} = event;
 
-	const cutoff = new Date(new Date(ts).getTime() - retentionDays * 86_400_000).toISOString();
+	// ⚡ Bolt: Optimize parsing string to timestamp without object allocation
+	const cutoff = new Date(
+		Date.parse(ts) - retentionDays * 86_400_000,
+	).toISOString();
 
 	// Lazy GC
 	sql.exec(`DELETE FROM probe_rollup WHERE last_seen < ?`, cutoff);
@@ -95,28 +117,40 @@ export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): void 
            count = count + 1,
            max_score = MAX(max_score, excluded.max_score),
            last_seen = excluded.last_seen`,
-		sourceIp, senderDomain, score, ts, ts,
+		sourceIp,
+		senderDomain,
+		score,
+		ts,
+		ts,
 	);
 
 	// Upsert localpart; update distinct_localparts on new entry
-	const lpRows = [...sql.exec<{ cnt: number }>(
-		`SELECT COUNT(*) as cnt FROM probe_localparts WHERE source_ip=? AND sender_domain=? AND localpart=?`,
-		sourceIp, senderDomain, localpart,
-	)];
+	const lpRows = [
+		...sql.exec<{ cnt: number }>(
+			`SELECT COUNT(*) as cnt FROM probe_localparts WHERE source_ip=? AND sender_domain=? AND localpart=?`,
+			sourceIp,
+			senderDomain,
+			localpart,
+		),
+	];
 	const isNewLocalpart = (lpRows[0]?.cnt ?? 0) === 0;
 
 	sql.exec(
 		`INSERT INTO probe_localparts (source_ip, sender_domain, localpart, last_seen)
          VALUES (?, ?, ?, ?)
          ON CONFLICT(source_ip, sender_domain, localpart) DO UPDATE SET last_seen=excluded.last_seen`,
-		sourceIp, senderDomain, localpart, ts,
+		sourceIp,
+		senderDomain,
+		localpart,
+		ts,
 	);
 
 	if (isNewLocalpart) {
 		sql.exec(
 			`UPDATE probe_rollup SET distinct_localparts = distinct_localparts + 1
              WHERE source_ip=? AND sender_domain=?`,
-			sourceIp, senderDomain,
+			sourceIp,
+			senderDomain,
 		);
 	}
 
@@ -125,12 +159,22 @@ export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): void 
 	sql.exec(
 		`INSERT INTO probe_recent (id, ts, source_ip, sender_domain, sender, localpart, subject_snippet, score, band, signals_json)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, ts, sourceIp, senderDomain, sender, localpart,
-		subjectSnippet.slice(0, 200), score, band, JSON.stringify(signals),
+		id,
+		ts,
+		sourceIp,
+		senderDomain,
+		sender,
+		localpart,
+		subjectSnippet.slice(0, 200),
+		score,
+		band,
+		JSON.stringify(signals),
 	);
 
 	// Evict oldest rows that exceed sampleLimit
-	const countRows = [...sql.exec<{ cnt: number }>(`SELECT COUNT(*) as cnt FROM probe_recent`)];
+	const countRows = [
+		...sql.exec<{ cnt: number }>(`SELECT COUNT(*) as cnt FROM probe_recent`),
+	];
 	const total = countRows[0]?.cnt ?? 0;
 	if (total > sampleLimit) {
 		sql.exec(
@@ -142,7 +186,10 @@ export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): void 
 	}
 }
 
-export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): CatchallSummary {
+export function _getSummaryImpl(
+	sql: SqlLike,
+	opts: { limit: number },
+): CatchallSummary {
 	const limit = Math.max(1, Math.min(opts.limit, 100));
 
 	const totalRows = [
@@ -163,8 +210,13 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 
 	const topSources = [
 		...sql.exec<{
-			source_ip: string; sender_domain: string; count: number;
-			distinct_localparts: number; max_score: number; first_seen: string; last_seen: string;
+			source_ip: string;
+			sender_domain: string;
+			count: number;
+			distinct_localparts: number;
+			max_score: number;
+			first_seen: string;
+			last_seen: string;
 		}>(
 			`SELECT source_ip, sender_domain, count, distinct_localparts, max_score, first_seen, last_seen
              FROM probe_rollup ORDER BY count DESC LIMIT ?`,
@@ -182,9 +234,16 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 
 	const recent = [
 		...sql.exec<{
-			id: string; ts: string; source_ip: string; sender_domain: string;
-			sender: string; localpart: string; subject_snippet: string;
-			score: number; band: string; signals_json: string;
+			id: string;
+			ts: string;
+			source_ip: string;
+			sender_domain: string;
+			sender: string;
+			localpart: string;
+			subject_snippet: string;
+			score: number;
+			band: string;
+			signals_json: string;
 		}>(
 			`SELECT id, ts, source_ip, sender_domain, sender, localpart, subject_snippet, score, band, signals_json
              FROM probe_recent ORDER BY ts DESC LIMIT ?`,
@@ -209,7 +268,11 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 export class CatchallIntelDO extends DurableObject<Env> {
 	constructor(state: DurableObjectState, env: Env) {
 		super(state, env);
-		applyMigrations(this.ctx.storage.sql, catchallIntelMigrations, this.ctx.storage);
+		applyMigrations(
+			this.ctx.storage.sql,
+			catchallIntelMigrations,
+			this.ctx.storage,
+		);
 	}
 
 	async recordCatchallProbe(event: CatchallProbeEvent): Promise<void> {
