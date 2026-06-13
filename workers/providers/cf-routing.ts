@@ -88,12 +88,12 @@ export async function normalizeInbound(
 		// No address matched EMAIL_ADDRESSES — try catch-all for all recipients.
 		return resolveCatchall(allRecipients, rawEmail, parsedEmail, env);
 	} else {
-		// No EMAIL_ADDRESSES configured — single-recipient mode for registered
-		// mailboxes, then catch-all for unregistered addresses on owned domains.
-		const mailboxId = allRecipients[0];
-		if (!mailboxId) throw new Error("received email with no valid recipient address");
-		if (await env.BUCKET.head(`mailboxes/${mailboxId}.json`)) {
-			return { kind: "mailbox", rawEmail: rawEmail.buffer as ArrayBuffer, parsedEmail, mailboxId };
+		// No EMAIL_ADDRESSES configured — deliver to any registered mailbox
+		// among all recipients, then catch-all for unregistered addresses.
+		for (const addr of allRecipients) {
+			if (await env.BUCKET.head(`mailboxes/${addr}.json`)) {
+				return { kind: "mailbox", rawEmail: rawEmail.buffer as ArrayBuffer, parsedEmail, mailboxId: addr };
+			}
 		}
 		return resolveCatchall(allRecipients, rawEmail, parsedEmail, env);
 	}

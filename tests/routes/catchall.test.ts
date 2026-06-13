@@ -243,6 +243,24 @@ describe("normalizeInbound — catch-all path", () => {
 		}
 	});
 
+	it("with empty EMAIL_ADDRESSES: delivers to a later registered mailbox before catch-all", async () => {
+		const result = await runNormalize(
+			["probe@acme.example", "bob@acme.example"],
+			{
+				emailAddresses: [],
+				mailboxes: ["bob@acme.example"],
+				domains: "acme.example",
+				domainSettings: {
+					"acme.example": { catchall_intel: { enabled: true, retention_days: 30, sample_limit: 50 } },
+				},
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("bob@acme.example");
+		}
+	});
+
 	it("with empty EMAIL_ADDRESSES: routes probe on owned+enabled domain to catch-all", async () => {
 		const result = await runNormalize(
 			["probe@acme.example"],
