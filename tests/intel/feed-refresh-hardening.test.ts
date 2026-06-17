@@ -10,15 +10,11 @@
  *   1. A 304 must record a fresh `last_fetched_at`, otherwise 304-ing feeds
  *      are conditionally fetched every hour forever and never get the
  *      refreshHours skip.
- *   2. While a feed's exact blob is absent (the window between deploying
- *      the blob scheme and that feed's first new-style refresh), the read
- *      path must fall back to the legacy `intel:<feed>:exact:<value>` keys
- *      so detections don't transiently degrade to unconfirmed.
- *   3. The exact blob must be deduplicated before the cap — url-kind values
+ *   2. The exact blob must be deduplicated before the cap — url-kind values
  *      repeat hostnames, which would waste roughly half the cap.
- *   4. An unparseable exact blob must degrade the hit to `confirmed: false`,
- *      not throw out of the whole lookup.
- *   5. The exact blob must be fetched lazily — only after a bloom hit — not
+ *   3. A missing or unparseable exact blob must degrade the hit to
+ *      `confirmed: false` (bloom-only), not throw out of the whole lookup.
+ *   4. The exact blob must be fetched lazily — only after a bloom hit — not
  *      eagerly for every feed on every lookup.
  */
 
@@ -174,25 +170,10 @@ describe("refreshFeed 304 handling", () => {
 	});
 });
 
-// ── Deploy-window legacy fallback ─────────────────────────────────────
+// ── Blob-absent degradation ───────────────────────────────────────────
 
-describe("legacy per-entry exact-key fallback", () => {
-	it("confirms via a legacy exact key while the exact blob is absent", async () => {
-		const member = "https://evil.example/login";
-		const bloom = createBloom(10);
-		for (const v of [member, "evil.example"]) addToBloom(bloom, v);
-		const kv = makeKv();
-		kv.store.set("intel:testfeed:bloom", serializeBloom(bloom));
-		kv.store.set(`intel:testfeed:exact:${member}`, "1");
-		const env = makeEnv({ mailboxSettings: urlFeedSettings(), kv });
-
-		const match = await checkUrlAgainstFeeds(env, MAILBOX_ID, member);
-
-		expect(match).not.toBeNull();
-		expect(match!.confirmed).toBe(true);
-	});
-
-	it("degrades to unconfirmed when neither blob nor legacy key exists", async () => {
+describe("exact-blob absence", () => {
+	it("degrades to unconfirmed when no exact data exists at all", async () => {
 		const member = "https://evil.example/login";
 		const bloom = createBloom(10);
 		for (const v of [member, "evil.example"]) addToBloom(bloom, v);
