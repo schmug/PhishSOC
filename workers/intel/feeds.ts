@@ -41,14 +41,6 @@ function bloomKey(feedId: string) { return `intel:${feedId}:bloom`; }
 /** Single blob key holding a JSON array of up to EXACT_KEY_CAP exact-match values. */
 function exactBlobKey(feedId: string) { return `intel:${feedId}:exact-blob`; }
 /**
- * Pre-#481 per-entry confirmation key. Only read as a fallback while an
- * exact blob is absent (the window between deploying the blob scheme and
- * each feed's first new-style refresh); the keys carry a TTL and age out on
- * their own. Remove once a post-#482 refresh cycle has completed in
- * production — tracked in #485.
- */
-function legacyExactKey(feedId: string, value: string) { return `intel:${feedId}:exact:${value}`; }
-/**
  * Storage key for `ip-cidr` feeds. Bloom filters don't fit CIDR membership
  * (an IP is checked against a *range*, not an exact string) so we materialise
  * the whole list as a JSON blob and linear-scan on lookup. DROP-class feeds
@@ -414,15 +406,9 @@ export async function checkUrlAgainstFeeds(
 		for (const v of candidates) {
 			if (!checkBloom(filter, v)) continue;
 			if (exactSet === undefined) exactSet = await loadExactSet(env, feed.id);
-			if (exactSet) {
-				if (exactSet.has(v)) return { matched: true, feedId: feed.id, value: v, confirmed: true };
-			} else {
-				// No exact blob yet (pre-#482 KV state) — confirm via the
-				// legacy per-entry key so detections don't degrade between
-				// deploy and this feed's first new-style refresh.
-				const legacy = await env.BLOOM_KV.get(legacyExactKey(feed.id, v), "text");
-				if (legacy === "1") return { matched: true, feedId: feed.id, value: v, confirmed: true };
-			}
+			// No exact blob (missing or unparseable) → degrade to a bloom-only
+			// hit (`confirmed: false`) rather than throwing out of the lookup.
+			if (exactSet?.has(v)) return { matched: true, feedId: feed.id, value: v, confirmed: true };
 			if (!bloomOnly) bloomOnly = { matched: true, feedId: feed.id, value: v, confirmed: false };
 		}
 	}
@@ -431,8 +417,8 @@ export async function checkUrlAgainstFeeds(
 
 /**
  * Load a feed's exact-match blob. Returns null when the key is missing or
- * unparseable — a bloom hit then degrades to the legacy-key fallback (and
- * ultimately `confirmed: false`) instead of failing the whole lookup.
+ * unparseable — a bloom hit then degrades to `confirmed: false` (bloom-only)
+ * instead of failing the whole lookup.
  */
 async function loadExactSet(env: Env, feedId: string): Promise<Set<string> | null> {
 	const raw = await env.BLOOM_KV.get(exactBlobKey(feedId), "text");
