@@ -54,23 +54,42 @@ async function streamToArrayBuffer(
  * - `null`            — silently drop (unowned domain, disabled catch-all, or
  *                       an EMAIL_ADDRESSES member whose mailbox JSON is missing).
  *
+ * The SMTP envelope recipient (`event.to`, the RCPT TO Cloudflare Email
+ * Routing matched its rule on) is authoritative and is consulted FIRST when
+ * resolving the target mailbox. The parsed `To:` header is a fallback only:
+ * it is attacker-controlled and, for multi-recipient threads / bcc / list
+ * mail, its first address is frequently NOT the address the message was
+ * actually delivered to. Keying mailbox resolution off the header alone
+ * silently dropped legitimately-routed mail whenever the real recipient was
+ * not `To[0]`.
+ *
  * Any parse/stream failure throws so CF Email Routing can retry or bounce.
  */
 export async function normalizeInbound(
-	event: { raw: ReadableStream; rawSize: number },
+	event: { raw: ReadableStream; rawSize: number; to?: string },
 	env: Env,
 ): Promise<MailboxInbound | CatchallInbound | null> {
 	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
 	const parsedEmail = await new PostalMime().parse(rawEmail);
 
-	if (!parsedEmail.to?.length || !parsedEmail.to[0].address) {
-		throw new Error("received email with empty to");
+	// Envelope recipient (RCPT TO) — the address Cloudflare delivered to.
+	const envelopeRecipient = event.to?.trim().toLowerCase() || undefined;
+	const headerRecipients = (parsedEmail.to ?? [])
+		.map((t) => (t as { address?: string }).address?.toLowerCase())
+		.filter((a): a is string => Boolean(a));
+
+	// Candidate recipients: envelope recipient first, then header addresses,
+	// de-duplicated. The envelope recipient wins so a multi-recipient `To:`
+	// header can never shadow the address the message was routed to.
+	const allRecipients: string[] = [];
+	for (const addr of [envelopeRecipient, ...headerRecipients]) {
+		if (addr && !allRecipients.includes(addr)) allRecipients.push(addr);
+	}
+	if (allRecipients.length === 0) {
+		throw new Error("received email with no envelope or header recipient");
 	}
 
 	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[]).map((a) => a.toLowerCase());
-	const allRecipients = parsedEmail.to
-		.map((t) => (t as { address?: string }).address?.toLowerCase())
-		.filter((a): a is string => Boolean(a));
 
 	if (allowedAddresses.length > 0) {
 		// Step 1: find a registered mailbox among allowed addresses.
@@ -88,9 +107,12 @@ export async function normalizeInbound(
 		// No address matched EMAIL_ADDRESSES — try catch-all for all recipients.
 		return resolveCatchall(allRecipients, rawEmail, parsedEmail, env);
 	} else {
-		// No EMAIL_ADDRESSES configured — single-recipient mode for registered
-		// mailboxes, then catch-all for unregistered addresses on owned domains.
-		const mailboxId = allRecipients[0];
+		// No EMAIL_ADDRESSES configured: any recipient with a provisioned
+		// mailbox is deliverable. Resolve from the envelope recipient (or, as a
+		// fallback, the first header address) before trying catch-all. Only the
+		// authoritative envelope address is used as the mailbox key so a forged
+		// `To:`/`Cc:` cannot misfile mail into another mailbox.
+		const mailboxId = envelopeRecipient ?? headerRecipients[0];
 		if (!mailboxId) throw new Error("received email with no valid recipient address");
 		if (await env.BUCKET.head(`mailboxes/${mailboxId}.json`)) {
 			return { kind: "mailbox", rawEmail: rawEmail.buffer as ArrayBuffer, parsedEmail, mailboxId };

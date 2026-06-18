@@ -121,6 +121,8 @@ async function runNormalize(
 		ownedDomains?: string[];
 		mailboxes?: string[];
 		domainSettings?: Record<string, unknown>;
+		/** SMTP envelope recipient (RCPT TO) Cloudflare matched the routing rule on. */
+		envelopeTo?: string;
 	} = {},
 ) {
 	const { normalizeInbound } = await import("../../workers/providers/cf-routing");
@@ -145,7 +147,11 @@ async function runNormalize(
 	clearOrgSettingsCache();
 
 	const bytes = rawEmailBytes(toAddresses);
-	const event = { raw: makeStream(bytes), rawSize: bytes.byteLength };
+	const event = {
+		raw: makeStream(bytes),
+		rawSize: bytes.byteLength,
+		...(opts.envelopeTo ? { to: opts.envelopeTo } : {}),
+	};
 	const env = {
 		EMAIL_ADDRESSES: opts.emailAddresses ?? [],
 		DOMAINS: opts.domains ?? "",
@@ -173,6 +179,95 @@ describe("normalizeInbound — mailbox path", () => {
 			{ emailAddresses: ["alice@acme.example"], mailboxes: [] },
 		);
 		expect(result).toBeNull();
+	});
+});
+
+describe("normalizeInbound — envelope recipient resolution", () => {
+	// Regression: a message delivered to consulting@cortech.online (envelope
+	// RCPT TO) whose visible `To:` header lists a different address first must
+	// still be routed to the consulting mailbox. Previously the mailbox was
+	// resolved from `To[0]` only, so any multi-recipient / bcc / list message
+	// where the real recipient was not the first `To:` was silently dropped.
+	it("delivers to the envelope recipient's mailbox even when it is not the first To: address", async () => {
+		const result = await runNormalize(
+			["someone-else@external.example", "consulting@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["consulting@cortech.online"],
+				envelopeTo: "consulting@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("consulting@cortech.online");
+		}
+	});
+
+	it("delivers to the envelope recipient even when it is absent from the To: header (bcc)", async () => {
+		const result = await runNormalize(
+			["public-list@external.example"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["consulting@cortech.online"],
+				envelopeTo: "consulting@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("consulting@cortech.online");
+		}
+	});
+
+	it("normalises envelope recipient casing/whitespace before the mailbox lookup", async () => {
+		const result = await runNormalize(
+			["someone-else@external.example"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["consulting@cortech.online"],
+				envelopeTo: "  Consulting@Cortech.Online ",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("consulting@cortech.online");
+		}
+	});
+
+	it("falls through to catch-all when the envelope recipient has no mailbox", async () => {
+		const result = await runNormalize(
+			["whoever@external.example"],
+			{
+				emailAddresses: [],
+				domains: "acme.example",
+				mailboxes: [],
+				envelopeTo: "probe@acme.example",
+				domainSettings: {
+					"acme.example": { catchall_intel: { enabled: true, retention_days: 30, sample_limit: 50 } },
+				},
+			},
+		);
+		expect(result?.kind).toBe("catchall");
+		if (result?.kind === "catchall") {
+			expect(result.domain).toBe("acme.example");
+		}
+	});
+
+	it("with EMAIL_ADDRESSES set: matches the envelope recipient against the allow-list", async () => {
+		const result = await runNormalize(
+			["someone-else@external.example"],
+			{
+				emailAddresses: ["consulting@cortech.online"],
+				mailboxes: ["consulting@cortech.online"],
+				envelopeTo: "consulting@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("consulting@cortech.online");
+		}
 	});
 });
 
