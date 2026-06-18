@@ -149,7 +149,10 @@ app.all("*", (c) => {
 export default {
 	fetch: app.fetch,
 	async email(
-		event: { raw: ReadableStream; rawSize: number },
+		// `to` is the SMTP envelope recipient (RCPT TO) Cloudflare Email
+		// Routing matched its rule on; normalizeInbound resolves the target
+		// mailbox from it rather than trusting the parsed `To:` header.
+		event: { raw: ReadableStream; rawSize: number; to?: string },
 		env: Env,
 		ctx: ExecutionContext,
 	) {
