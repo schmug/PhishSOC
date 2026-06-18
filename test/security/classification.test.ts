@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	__setClassifier,
 	classifyEmail,
+	parseClassifierOutput,
 	sanitizeForClassifier,
 	scoreClassification,
 	type ClassificationResult,
@@ -357,5 +358,90 @@ describe("scoreClassification — unavailable contributes 0", () => {
 	it("safe verdict still contributes 0 with no reasons", () => {
 		const result: ClassificationResult = { label: "safe", confidence: 1, reasoning: "" };
 		expect(scoreClassification(result)).toMatchObject({ score: 0, reasons: [], confidence: 1 });
+	});
+});
+
+describe("parseClassifierOutput — non-string coercion (issue #500)", () => {
+	it("accepts a string and parses the JSON verdict normally", () => {
+		const result = parseClassifierOutput('{"label":"phishing","confidence":0.9,"reasoning":"credential harvest"}');
+		expect(result.label).toBe("phishing");
+		expect(result.confidence).toBe(0.9);
+	});
+
+	it("accepts an object (Workers AI auto-parsed JSON) and extracts the label", () => {
+		// @cf/meta/llama-3.1-8b-instruct-fast returns response.response as a parsed
+		// JSON object rather than a raw string, causing raw.trim() to throw. This test
+		// pins the fix: stringify the object and parse the embedded JSON block.
+		const parsedByWorkersAI = { label: "phishing", confidence: 0.92, reasoning: "credential-harvest pattern" };
+		const result = parseClassifierOutput(parsedByWorkersAI);
+		expect(result.label).toBe("phishing");
+		expect(result.confidence).toBe(0.92);
+		expect(result.reasoning).toContain("credential-harvest");
+	});
+
+	it("accepts null → returns suspicious (graceful degradation)", () => {
+		const result = parseClassifierOutput(null);
+		expect(result.label).toBe("suspicious");
+	});
+
+	it("accepts undefined → returns suspicious (graceful degradation)", () => {
+		const result = parseClassifierOutput(undefined);
+		expect(result.label).toBe("suspicious");
+	});
+
+	it("accepts a non-JSON object → returns suspicious, does not throw", () => {
+		expect(() => parseClassifierOutput({ unexpected: true })).not.toThrow();
+		expect(parseClassifierOutput({ unexpected: true }).label).toBe("suspicious");
+	});
+});
+
+describe("classifyEmail — ai.run object response regression (issue #500)", () => {
+	// Regression: ai.run returns response.response as a parsed JSON object
+	// (truthy, non-string) rather than a raw string. Prior code called raw.trim()
+	// and threw TypeError on every email. Fix: parseClassifierOutput coerces.
+	function makeMockAiWithObjectResponse(responseObj: unknown): Ai {
+		return {
+			run(_model: string, _params: unknown) {
+				return Promise.resolve({ response: responseObj });
+			},
+		} as unknown as Ai;
+	}
+
+	afterEach(() => {
+		__setClassifier(null);
+	});
+
+	it("returns a real label when ai.run yields response.response as a parsed object", async () => {
+		const ai = makeMockAiWithObjectResponse({
+			label: "phishing",
+			confidence: 0.9,
+			reasoning: "credential-harvest link detected",
+		});
+		const result = await classifyEmail(ai, baseInput);
+		expect(result.label).toBe("phishing");
+		expect(result.label).not.toBe("error");
+		expect(result.confidence).toBe(0.9);
+	});
+
+	it("returns safe when ai.run yields a safe verdict object", async () => {
+		const ai = makeMockAiWithObjectResponse({
+			label: "safe",
+			confidence: 0.98,
+			reasoning: "routine correspondence",
+		});
+		const result = await classifyEmail(ai, baseInput);
+		expect(result.label).toBe("safe");
+	});
+
+	it("does not emit llm_error when ai.run returns a parseable object response", async () => {
+		const ai = makeMockAiWithObjectResponse({
+			label: "spam",
+			confidence: 0.75,
+			reasoning: "bulk marketing",
+		});
+		const result = await classifyEmail(ai, baseInput);
+		expect(result.label).not.toBe("error");
+		const { reasons } = scoreClassification(result);
+		expect(reasons).not.toContain("llm_error");
 	});
 });
