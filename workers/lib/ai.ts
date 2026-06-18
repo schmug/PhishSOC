@@ -21,6 +21,67 @@ import {
 } from "../../shared/mailbox-settings";
 import { stripHtmlToText, textToHtml } from "./email-helpers";
 
+// ── ai.run response shape normalization ────────────────────────────
+
+/**
+ * Pull a usable text string out of an object the model nested its output
+ * inside (e.g. `{ response: "text" }`, `{ text: "..." }`, `{ content: "..." }`).
+ * Returns "" if no string-valued text field is present.
+ */
+function textFromObject(value: Record<string, unknown>): string {
+	for (const key of ["response", "text", "content", "output", "result"]) {
+		const v = value[key];
+		if (typeof v === "string") return v;
+	}
+	return "";
+}
+
+/**
+ * Normalize a Workers AI `ai.run` return value to the model's text output.
+ *
+ * The documented/typed shape is `{ response: string }`, but at runtime
+ * `@cf/meta/llama-3.1-8b-instruct-fast` returns `response` as a non-string —
+ * a parsed object — which the old `as { response?: string }` cast + `.trim()`
+ * threw on, silently collapsing every successful call into its fail-closed
+ * branch (issue #500; fixed for the classifier in #501 via
+ * `extractClassifierText`).
+ *
+ * Unlike the classifier — which re-serializes the object and recovers a JSON
+ * verdict downstream — these callers consume the text directly (a YES/NO
+ * answer, a draft body, a case summary), so we dig the nested string out
+ * rather than handing back a JSON blob that would corrupt the draft/summary.
+ * Returns "" for any unrecognized successful shape so each caller falls back
+ * exactly as it does for an empty model response (NOT its genuine-throw
+ * fail-closed path).
+ */
+export function extractModelText(response: unknown): string {
+	if (typeof response === "string") return response;
+	if (response && typeof response === "object") {
+		const obj = response as Record<string, unknown>;
+		if ("response" in obj) {
+			const inner = obj.response;
+			if (typeof inner === "string") return inner;
+			// `.response` arrived as a non-string (issue #500 root cause). Dig
+			// one level for a nested text field before giving up.
+			if (inner && typeof inner === "object") {
+				const nested = textFromObject(inner as Record<string, unknown>);
+				if (nested) return nested;
+			}
+		}
+		// OpenAI-compatible chat-completion shape, in case a future model maps
+		// onto it: `{ choices: [{ message: { content: string } }] }`.
+		const choices = obj.choices;
+		if (Array.isArray(choices) && choices.length > 0) {
+			const content = (choices[0] as { message?: { content?: unknown } })?.message?.content;
+			if (typeof content === "string") return content;
+		}
+		// Some text models surface the string directly under a known key.
+		const direct = textFromObject(obj);
+		if (direct) return direct;
+	}
+	return "";
+}
+
 // ── Prompt Injection Scanner ───────────────────────────────────────
 
 const INJECTION_PROMPT = `You are a security scanner looking for Prompt Injection.
@@ -44,7 +105,7 @@ export async function isPromptInjection(
 	const model = options.model?.trim() || DEFAULT_INJECTION_SCANNER_MODEL;
 
 	try {
-		const response = (await ai.run(
+		const response: unknown = await ai.run(
 			model as Parameters<typeof ai.run>[0],
 			{
 				messages: [
@@ -54,9 +115,9 @@ export async function isPromptInjection(
 				max_tokens: 10,
 				temperature: 0,
 			},
-		)) as { response?: string };
+		);
 
-		const result = (response?.response || "NO").trim().toUpperCase();
+		const result = (extractModelText(response) || "NO").trim().toUpperCase();
 		
 		if (result.includes("YES")) {
 			console.warn("Prompt injection detected in incoming email, blocking auto-draft");
@@ -156,7 +217,7 @@ export async function verifyDraft(
 	const model = options.model?.trim() || DEFAULT_DRAFT_VERIFIER_MODEL;
 
 	try {
-		const response = (await ai.run(
+		const response: unknown = await ai.run(
 			model as Parameters<typeof ai.run>[0],
 			{
 				messages: [
@@ -166,9 +227,9 @@ export async function verifyDraft(
 				max_tokens: 4096,
 				temperature: 0,
 			},
-		)) as { response?: string };
+		);
 
-		const cleaned = response?.response ?? null;
+		const cleaned = extractModelText(response);
 
 		if (!cleaned || !cleaned.trim()) {
 			// AI returned empty — fall back to original
@@ -264,7 +325,7 @@ export async function summarizeCase(
 	const model = options.model?.trim() || DEFAULT_CLASSIFIER_MODEL;
 
 	try {
-		const response = (await ai.run(
+		const response: unknown = await ai.run(
 			model as Parameters<typeof ai.run>[0],
 			{
 				messages: [
@@ -274,9 +335,9 @@ export async function summarizeCase(
 				max_tokens: 320,
 				temperature: 0.2,
 			},
-		)) as { response?: string };
+		);
 
-		const summary = response?.response?.trim() ?? "";
+		const summary = extractModelText(response).trim();
 		if (!summary) return null;
 		return summary;
 	} catch (e) {
