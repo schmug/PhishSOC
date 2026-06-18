@@ -192,9 +192,9 @@ ${sanitizedBody}
 			new Promise((_, reject) =>
 				setTimeout(() => reject(new Error("classify-timeout")), 5000),
 			),
-		])) as { response?: string };
+		])) as { response?: unknown };
 
-		return parseClassifierOutput(response?.response ?? "");
+		return parseClassifierOutput((response as { response?: unknown })?.response);
 	} catch (e) {
 		// Capture the real error text regardless of whether e is an Error
 		// instance — Workers AI can throw plain strings or Response objects.
@@ -222,8 +222,19 @@ ${sanitizedBody}
 	}
 }
 
-function parseClassifierOutput(raw: string): ClassificationResult {
-	const trimmed = raw.trim();
+export function parseClassifierOutput(raw: unknown): ClassificationResult {
+	// Workers AI may return a parsed-JSON object in `response.response` rather
+	// than a raw string (observed with @cf/meta/llama-3.1-8b-instruct-fast).
+	// Coerce to string before trimming so we never hit "raw.trim is not a function".
+	let rawStr: string;
+	if (typeof raw === "string") {
+		rawStr = raw;
+	} else if (raw != null) {
+		rawStr = typeof raw === "object" ? JSON.stringify(raw) : String(raw);
+	} else {
+		rawStr = "";
+	}
+	const trimmed = rawStr.trim();
 	// Try to locate the first { ... } block if the model wrapped it.
 	const match = trimmed.match(/\{[\s\S]*\}/);
 	if (!match) {
