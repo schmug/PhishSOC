@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	__setClassifier,
 	classifyEmail,
+	parseClassifierOutput,
 	sanitizeForClassifier,
 	scoreClassification,
 	type ClassificationResult,
@@ -123,6 +124,91 @@ describe("classifyEmail — narrowed Rule 5 (issue #28)", () => {
 		const result = await classifyEmail(FAKE_AI, baseInput);
 		expect(result.label).toBe("suspicious");
 		expect(result.confidence).toBe(0.85);
+	});
+});
+
+describe("classifyEmail — non-string ai.run response shape (issue #500)", () => {
+	afterEach(() => {
+		__setClassifier(null);
+	});
+
+	it("regression: ai.run returns the verdict as a parsed OBJECT under .response → real label, not 'error'", async () => {
+		// Live prod (2026-06-18, after #498) showed every email returning
+		// label='error' with "raw.trim is not a function". The root cause is
+		// that @cf/meta/llama-3.1-8b-instruct-fast returns `response` as an
+		// already-parsed object, not a JSON string. The old code cast it to
+		// `{ response?: string }` and called `.trim()` on the object.
+		const ai = {
+			run() {
+				return Promise.resolve({
+					response: { label: "phishing", confidence: 0.92, reasoning: "credential-harvest link" },
+				});
+			},
+		} as unknown as Ai;
+
+		const result = await classifyEmail(ai, baseInput);
+		expect(result.label).toBe("phishing");
+		expect(result.label).not.toBe("error");
+		expect(result.confidence).toBe(0.92);
+	});
+
+	it("classic string `.response` shape still classifies (no regression)", async () => {
+		const ai = {
+			run() {
+				return Promise.resolve({
+					response: '{"label":"safe","confidence":0.95,"reasoning":"routine"}',
+				});
+			},
+		} as unknown as Ai;
+
+		const result = await classifyEmail(ai, baseInput);
+		expect(result.label).toBe("safe");
+		expect(result.confidence).toBe(0.95);
+	});
+
+	it("a successful (non-throwing) response never produces label='error'", async () => {
+		// Fail-closed 'error' is reserved for genuine ai.run throws. A
+		// successful call with an odd shape must degrade to a real parsed label
+		// (or 'suspicious' fallback), never 'error'.
+		const ai = {
+			run() {
+				return Promise.resolve({
+					response: { label: "bec", confidence: 0.8, reasoning: "wire-transfer request" },
+				});
+			},
+		} as unknown as Ai;
+
+		const result = await classifyEmail(ai, baseInput);
+		expect(result.label).not.toBe("error");
+		expect(result.label).toBe("bec");
+	});
+});
+
+describe("parseClassifierOutput — non-string hardening (issue #500)", () => {
+	it("does not throw on an object verdict; extracts the label", () => {
+		const result = parseClassifierOutput({
+			label: "phishing",
+			confidence: 0.9,
+			reasoning: "fake login page",
+		});
+		expect(result.label).toBe("phishing");
+		expect(result.confidence).toBe(0.9);
+	});
+
+	it("does not throw on a bare non-string (number) — degrades to suspicious", () => {
+		const result = parseClassifierOutput(12345 as unknown as string);
+		expect(result.label).toBe("suspicious");
+	});
+
+	it("does not throw on null/undefined — degrades to suspicious", () => {
+		expect(parseClassifierOutput(null as unknown as string).label).toBe("suspicious");
+		expect(parseClassifierOutput(undefined as unknown as string).label).toBe("suspicious");
+	});
+
+	it("still parses a plain JSON string (existing behavior preserved)", () => {
+		const result = parseClassifierOutput('{"label":"spam","confidence":0.6,"reasoning":"bulk"}');
+		expect(result.label).toBe("spam");
+		expect(result.confidence).toBe(0.6);
 	});
 });
 

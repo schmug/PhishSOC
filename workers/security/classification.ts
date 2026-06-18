@@ -177,7 +177,14 @@ ${sanitizedBody}
 			return await overrideClassifier(ai, input);
 		}
 
-		const response = (await Promise.race([
+		// NOTE: the result is intentionally typed `unknown`. The old
+		// `as { response?: string }` cast was a lie — at runtime
+		// @cf/meta/llama-3.1-8b-instruct-fast returns the model's verdict as an
+		// already-parsed object under `.response`, not a JSON string, so every
+		// email tripped `raw.trim is not a function` and fell into the
+		// fail-closed `error` path (issue #500). `extractClassifierText`
+		// normalizes the shape before parsing.
+		const response: unknown = await Promise.race([
 			ai.run(
 				model as Parameters<typeof ai.run>[0],
 				{
@@ -192,9 +199,9 @@ ${sanitizedBody}
 			new Promise((_, reject) =>
 				setTimeout(() => reject(new Error("classify-timeout")), 5000),
 			),
-		])) as { response?: string };
+		]);
 
-		return parseClassifierOutput(response?.response ?? "");
+		return parseClassifierOutput(extractClassifierText(response));
 	} catch (e) {
 		// Capture the real error text regardless of whether e is an Error
 		// instance — Workers AI can throw plain strings or Response objects.
@@ -222,8 +229,70 @@ ${sanitizedBody}
 	}
 }
 
-function parseClassifierOutput(raw: string): ClassificationResult {
-	const trimmed = raw.trim();
+/**
+ * Coerce any value to a string without throwing. Workers AI responses are
+ * always JSON-serializable, but guard `JSON.stringify` anyway (BigInt /
+ * circular refs throw) so a successful-but-exotic shape degrades gracefully
+ * instead of crashing into the fail-closed `error` path.
+ */
+function safeStringify(value: unknown): string {
+	try {
+		return JSON.stringify(value) ?? "";
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * Normalize the Workers AI `ai.run` return value to the model's text output.
+ *
+ * The documented/typed shape is `{ response: string }`, but at runtime
+ * @cf/meta/llama-3.1-8b-instruct-fast returns `response` as an already-parsed
+ * object (the verdict JSON the prompt asked for), which the old code passed
+ * straight into `raw.trim()` and threw on (issue #500). This handles every
+ * plausible successful shape and returns "" for anything unrecognized so the
+ * downstream parser can degrade to `suspicious` rather than fail closed.
+ *
+ * Exported as a test seam (same pattern as `sanitizeForClassifier`).
+ */
+export function extractClassifierText(response: unknown): string {
+	if (typeof response === "string") return response;
+	if (response && typeof response === "object") {
+		const obj = response as Record<string, unknown>;
+		// Standard Workers AI text-generation shape: `{ response: ... }`.
+		if ("response" in obj) {
+			const inner = obj.response;
+			if (typeof inner === "string") return inner;
+			// `response` arrived as a parsed object (the #500 root cause) — or
+			// any other non-string. Re-serialize so the JSON-block matcher in
+			// parseClassifierOutput can recover the verdict.
+			if (inner != null) return safeStringify(inner);
+		}
+		// OpenAI-compatible chat-completion shape, in case a future model maps
+		// onto it: `{ choices: [{ message: { content: string } }] }`.
+		const choices = obj.choices;
+		if (Array.isArray(choices) && choices.length > 0) {
+			const content = (choices[0] as { message?: { content?: unknown } })?.message?.content;
+			if (typeof content === "string") return content;
+		}
+	}
+	return "";
+}
+
+/**
+ * Parse the classifier's text output into a structured verdict.
+ *
+ * Accepts `unknown`: a successful `ai.run` call can hand back a non-string
+ * (issue #500), and a hard `raw.trim()` on it would throw and be misreported
+ * as a classifier `error`. Coerce non-strings via JSON serialization so an
+ * embedded verdict object is still recovered, and so a future shape change
+ * degrades to `suspicious` instead of crashing.
+ *
+ * Exported as a test seam (same pattern as `sanitizeForClassifier`).
+ */
+export function parseClassifierOutput(raw: unknown): ClassificationResult {
+	const text = typeof raw === "string" ? raw : raw == null ? "" : safeStringify(raw);
+	const trimmed = text.trim();
 	// Try to locate the first { ... } block if the model wrapped it.
 	const match = trimmed.match(/\{[\s\S]*\}/);
 	if (!match) {
