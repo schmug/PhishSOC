@@ -21,6 +21,7 @@ import {
 	toolMoveEmail,
 } from "../lib/tools";
 import { Folders, FOLDER_TOOL_DESCRIPTION, MOVE_FOLDER_TOOL_DESCRIPTION } from "../../shared/folders";
+import { RecipientFieldSchema } from "../lib/schemas";
 import type { Env } from "../types";
 import {
 	readMailboxAcl,
@@ -258,10 +259,15 @@ export class EmailMCP extends McpAgent<Env> {
 			"Create a new draft email. Can be a new email or a reply draft.",
 			{
 				mailboxId: z.string().describe("The mailbox email address"),
-				to: z
-					.string()
+				to: RecipientFieldSchema
 					.optional()
-					.describe("Recipient email address (optional for early drafts)"),
+					.describe("Recipient email address (single or array, optional for early drafts)"),
+				cc: RecipientFieldSchema
+					.optional()
+					.describe("CC recipients (single email or array)"),
+				bcc: RecipientFieldSchema
+					.optional()
+					.describe("BCC recipients (single email or array)"),
 				subject: z.string().describe("Subject line"),
 				bodyHtml: z.string().describe("The HTML body of the draft"),
 				in_reply_to: z
@@ -273,11 +279,14 @@ export class EmailMCP extends McpAgent<Env> {
 					.optional()
 					.describe("Thread ID to attach this draft to (optional)"),
 			},
-			async ({ mailboxId, to, subject, bodyHtml, in_reply_to, thread_id }) => {
+			async ({ mailboxId, to, cc, bcc, subject, bodyHtml, in_reply_to, thread_id }) => {
 				const denied = await verifyMailbox(mailboxId);
 				if (denied) return denied;
+				const toStr = Array.isArray(to) ? to.join(", ") : (to || "");
 				const result = await toolDraftEmail(env, mailboxId, {
-					to: to || "",
+					to: toStr,
+					cc,
+					bcc,
 					subject,
 					body: bodyHtml,
 					isPlainText: false,
@@ -305,19 +314,27 @@ export class EmailMCP extends McpAgent<Env> {
 			{
 				mailboxId: z.string().describe("The mailbox email address"),
 				draftId: z.string().describe("The ID of the draft to update"),
-				to: z
-					.string()
+				to: RecipientFieldSchema
 					.optional()
-					.describe("Updated recipient email address"),
+					.describe("Updated recipient email address (single or array)"),
+				cc: RecipientFieldSchema
+					.optional()
+					.describe("Updated CC recipients (single email or array)"),
+				bcc: RecipientFieldSchema
+					.optional()
+					.describe("Updated BCC recipients (single email or array)"),
 				subject: z.string().optional().describe("Updated subject line"),
 				bodyHtml: z.string().optional().describe("Updated HTML body"),
 			},
-			async ({ mailboxId, draftId, to, subject, bodyHtml }) => {
+			async ({ mailboxId, draftId, to, cc, bcc, subject, bodyHtml }) => {
 				const denied = await verifyMailbox(mailboxId);
 				if (denied) return denied;
+				const toStr = Array.isArray(to) ? to.join(", ") : to;
 				const result = await toolUpdateDraft(env, mailboxId, {
 					draftId,
-					to,
+					to: toStr,
+					cc,
+					bcc,
 					subject,
 					bodyHtml,
 				});
@@ -359,7 +376,13 @@ export class EmailMCP extends McpAgent<Env> {
 				originalEmailId: z
 					.string()
 					.describe("The ID of the email being replied to"),
-				to: z.string().email().describe("Recipient email address"),
+				to: RecipientFieldSchema.describe("Recipient email address (single or array)"),
+				cc: RecipientFieldSchema
+					.optional()
+					.describe("CC recipients (single email or array)"),
+				bcc: RecipientFieldSchema
+					.optional()
+					.describe("BCC recipients (single email or array)"),
 				subject: z.string().describe("Subject line"),
 				bodyHtml: z.string().describe("The HTML body of the reply"),
 				confirmationToken: z
@@ -367,12 +390,14 @@ export class EmailMCP extends McpAgent<Env> {
 					.optional()
 					.describe("Step-up confirmation token required for tier ≥ 1 sends (external recipients, BEC keywords, etc.)"),
 			},
-			async ({ mailboxId, originalEmailId, to, subject, bodyHtml, confirmationToken }) => {
+			async ({ mailboxId, originalEmailId, to, cc, bcc, subject, bodyHtml, confirmationToken }) => {
 				const denied = await verifyMailbox(mailboxId);
 				if (denied) return denied;
 				const result = await toolSendReply(env, mailboxId, {
 					originalEmailId,
 					to,
+					cc,
+					bcc,
 					subject,
 					bodyHtml,
 					confirmationToken,
@@ -403,7 +428,13 @@ export class EmailMCP extends McpAgent<Env> {
 			"Send a new email (not a reply). Only call after getting confirmation.",
 			{
 				mailboxId: z.string().describe("The mailbox email address to send from"),
-				to: z.string().email().describe("Recipient email address"),
+				to: RecipientFieldSchema.describe("Recipient email address (single or array)"),
+				cc: RecipientFieldSchema
+					.optional()
+					.describe("CC recipients (single email or array)"),
+				bcc: RecipientFieldSchema
+					.optional()
+					.describe("BCC recipients (single email or array)"),
 				subject: z.string().describe("Subject line"),
 				bodyHtml: z.string().describe("The HTML body of the email"),
 				attachments: z
@@ -425,11 +456,13 @@ export class EmailMCP extends McpAgent<Env> {
 					.optional()
 					.describe("Step-up confirmation token required for tier ≥ 1 sends (external recipients, BEC keywords, etc.)"),
 			},
-			async ({ mailboxId, to, subject, bodyHtml, attachments, confirmationToken }) => {
+			async ({ mailboxId, to, cc, bcc, subject, bodyHtml, attachments, confirmationToken }) => {
 				const denied = await verifyMailbox(mailboxId);
 				if (denied) return denied;
 				const result = await toolSendEmail(env, mailboxId, {
 					to,
+					cc,
+					bcc,
 					subject,
 					bodyHtml,
 					...(attachments && attachments.length > 0 ? { attachments } : {}),

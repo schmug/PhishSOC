@@ -141,14 +141,16 @@ function makeEnv(
 // ── Helper: mint a valid confirmation token ───────────────────────────────────
 
 async function mintValidToken(
-	to: string,
+	to: string | string[],
 	subject: string,
 	body: string,
 	mailboxId: string,
 	kv: KVNamespace,
+	cc?: string | string[],
+	bcc?: string | string[],
 ): Promise<string> {
 	const jti = crypto.randomUUID();
-	const payloadHash = await computePayloadHash(to, subject, body, []);
+	const payloadHash = await computePayloadHash(to, subject, body, [], cc, bcc);
 	const token = await signConfirmationToken(
 		{ tier: 1, mailboxId, payloadHash, jti },
 		SECRET,
@@ -327,5 +329,164 @@ describe("toolSendEmail — send-risk gate", () => {
 		});
 		expect((result as { risk?: { tier: number } }).risk?.tier).toBe(2);
 		expect(sendEmail).not.toHaveBeenCalled();
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// cc / bcc / multi-recipient tests (issue #495)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("toolSendEmail — cc / bcc / multi-recipient", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("array to: sends to multiple recipients and writes correct SENT recipient", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		const result = await toolSendEmail(env, MAILBOX_ID, {
+			to: ["colleague@internal.example", "colleague2@internal.example"],
+			subject: "Team update",
+			bodyHtml: "<p>Hi team</p>",
+		});
+		expect(result).toMatchObject({ status: "sent" });
+		expect(sendEmail).toHaveBeenCalledOnce();
+		const sentCall = (sendEmail as ReturnType<typeof vi.fn>).mock.calls[0][1];
+		expect(sentCall.to).toEqual(["colleague@internal.example", "colleague2@internal.example"]);
+		expect(stub._sentEmails).toHaveLength(1);
+		const row = stub._sentEmails[0] as { recipient: string };
+		expect(row.recipient).toBe("colleague@internal.example, colleague2@internal.example");
+	});
+
+	it("external cc recipient triggers tier ≥ 1 gate (cc reaches send-risk classifier)", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		// to is internal, but cc is external — should still require confirmation
+		const result = await toolSendEmail(env, MAILBOX_ID, {
+			to: "colleague@internal.example",
+			cc: "external@other.com",
+			subject: "FYI",
+			bodyHtml: "<p>Looping in external</p>",
+		});
+		expect(result).toMatchObject({
+			error: "confirmation_required",
+			confirmation_required: true,
+		});
+		expect((result as { risk?: { tier: number } }).risk?.tier).toBeGreaterThanOrEqual(1);
+		expect(sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("tier 0 with cc (all internal): sends and stores cc on SENT row", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		const result = await toolSendEmail(env, MAILBOX_ID, {
+			to: "colleague@internal.example",
+			cc: "another@internal.example",
+			subject: "Hello",
+			bodyHtml: "<p>Hi</p>",
+		});
+		expect(result).toMatchObject({ status: "sent" });
+		expect(sendEmail).toHaveBeenCalledOnce();
+		const sentCall = (sendEmail as ReturnType<typeof vi.fn>).mock.calls[0][1];
+		expect(sentCall.cc).toBe("another@internal.example");
+		const row = stub._sentEmails[0] as { cc: string | null; bcc: string | null };
+		expect(row.cc).toBe("another@internal.example");
+		expect(row.bcc).toBeNull();
+	});
+
+	it("bcc array: passes to sendEmail and stores normalized string on SENT row", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		const result = await toolSendEmail(env, MAILBOX_ID, {
+			to: "colleague@internal.example",
+			bcc: ["bcc1@internal.example", "bcc2@internal.example"],
+			subject: "Private",
+			bodyHtml: "<p>BCC test</p>",
+		});
+		expect(result).toMatchObject({ status: "sent" });
+		const sentCall = (sendEmail as ReturnType<typeof vi.fn>).mock.calls[0][1];
+		expect(sentCall.bcc).toEqual(["bcc1@internal.example", "bcc2@internal.example"]);
+		const row = stub._sentEmails[0] as { bcc: string | null };
+		expect(row.bcc).toBe("bcc1@internal.example, bcc2@internal.example");
+	});
+
+	it("tier ≥ 1 with valid token including cc/bcc: send proceeds", async () => {
+		const kv = makeKv();
+		const stub = makeStub();
+		const env = makeEnv(stub, kv);
+
+		const to = "vendor@external.com";
+		const cc = "cc@external.com";
+		const subject = "Proposal";
+		const body = "<p>See attached</p>";
+		const token = await mintValidToken(to, subject, body, MAILBOX_ID, kv, cc);
+
+		const result = await toolSendEmail(env, MAILBOX_ID, {
+			to,
+			cc,
+			subject,
+			bodyHtml: body,
+			confirmationToken: token,
+		});
+		expect(result).toMatchObject({ status: "sent" });
+		expect(sendEmail).toHaveBeenCalledOnce();
+		const row = stub._sentEmails[0] as { cc: string | null };
+		expect(row.cc).toBe("cc@external.com");
+	});
+});
+
+describe("toolSendReply — cc / bcc / multi-recipient", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("reply with cc (all internal): sends and stores cc on SENT row", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		const result = await toolSendReply(env, MAILBOX_ID, {
+			originalEmailId: ORIGINAL_ID,
+			to: "colleague@internal.example",
+			cc: "manager@internal.example",
+			subject: "Re: Question",
+			bodyHtml: "<p>Sure!</p>",
+		});
+		expect(result).toMatchObject({ status: "sent" });
+		expect(sendEmail).toHaveBeenCalledOnce();
+		const sentCall = (sendEmail as ReturnType<typeof vi.fn>).mock.calls[0][1];
+		expect(sentCall.cc).toBe("manager@internal.example");
+		const row = stub._sentEmails[0] as { cc: string | null; bcc: string | null };
+		expect(row.cc).toBe("manager@internal.example");
+		expect(row.bcc).toBeNull();
+	});
+
+	it("reply with external cc triggers confirmation gate", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		const result = await toolSendReply(env, MAILBOX_ID, {
+			originalEmailId: ORIGINAL_ID,
+			to: "colleague@internal.example",
+			cc: "auditor@external.org",
+			subject: "Re: Question",
+			bodyHtml: "<p>FYI</p>",
+		});
+		expect(result).toMatchObject({
+			error: "confirmation_required",
+			confirmation_required: true,
+		});
+		expect(sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("reply with array to: writes joined recipient on SENT row", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		const result = await toolSendReply(env, MAILBOX_ID, {
+			originalEmailId: ORIGINAL_ID,
+			to: ["colleague@internal.example", "colleague2@internal.example"],
+			subject: "Re: Question",
+			bodyHtml: "<p>Sure!</p>",
+		});
+		expect(result).toMatchObject({ status: "sent" });
+		const row = stub._sentEmails[0] as { recipient: string };
+		expect(row.recipient).toBe("colleague@internal.example, colleague2@internal.example");
 	});
 });
