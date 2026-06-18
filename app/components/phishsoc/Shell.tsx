@@ -226,6 +226,8 @@ function FolderNav({ mailboxId, folders, base }: FolderNavProps) {
 	const favorites = sorted.filter((f) => prefs.favorites.includes(f.id));
 	const rest = sorted.filter((f) => !prefs.favorites.includes(f.id));
 
+	const contentId = "folder-list-content";
+
 	return (
 		<>
 			{/* Collapsible section header */}
@@ -234,6 +236,7 @@ function FolderNav({ mailboxId, folders, base }: FolderNavProps) {
 				onClick={toggleCollapsed}
 				className="w-full flex items-center gap-1 px-3 pt-4 pb-1.5 text-[10.5px] uppercase tracking-[0.08em] text-ink-3 hover:text-ink-2 transition-colors"
 				aria-expanded={!prefs.collapsed}
+				aria-controls={contentId}
 			>
 				<span className="flex-1 text-left">Folders</span>
 				{prefs.collapsed ? (
@@ -244,7 +247,7 @@ function FolderNav({ mailboxId, folders, base }: FolderNavProps) {
 			</button>
 
 			{!prefs.collapsed && (
-				<>
+				<div id={contentId} className="flex flex-col">
 					{/* Favorites pinned at top */}
 					{favorites.map((folder) => (
 						<FolderNavItem
@@ -265,7 +268,7 @@ function FolderNav({ mailboxId, folders, base }: FolderNavProps) {
 							onToggleFavorite={toggleFavorite}
 						/>
 					))}
-				</>
+				</div>
 			)}
 		</>
 	);
