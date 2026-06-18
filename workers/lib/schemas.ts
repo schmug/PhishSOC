@@ -49,7 +49,7 @@ export interface AttachmentInfo {
 
 // ── Zod Schemas ────────────────────────────────────────────────────
 
-const RecipientFieldSchema = z.union([
+export const RecipientFieldSchema = z.union([
 	z.string().email(),
 	z.array(z.string().email()).min(1),
 ]);

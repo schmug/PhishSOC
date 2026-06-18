@@ -185,7 +185,7 @@ function ClassifierChip({
 	const color =
 		label === "phishing" || label === "bec"
 			? "text-danger"
-			: label === "suspicious"
+			: label === "suspicious" || label === "error"
 				? "text-suspect"
 				: label === "spam"
 					? "text-ink-3"
