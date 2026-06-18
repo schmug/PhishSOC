@@ -298,6 +298,8 @@ export async function toolDraftEmail(
 		message: "Draft saved to Drafts folder. Review it and confirm to send.",
 		draft: {
 			to: params.to,
+			...(params.cc ? { cc: Array.isArray(params.cc) ? params.cc.join(", ") : params.cc } : {}),
+			...(params.bcc ? { bcc: Array.isArray(params.bcc) ? params.bcc.join(", ") : params.bcc } : {}),
 			subject: params.subject,
 			body: params.isPlainText ? params.body.trim() : processedBody,
 		},

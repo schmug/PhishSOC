@@ -38,7 +38,7 @@ vi.mock("../../workers/lib/mailbox-settings", async (orig) => {
 	};
 });
 
-import { toolSendReply, toolSendEmail } from "../../workers/lib/tools";
+import { toolSendReply, toolSendEmail, toolDraftEmail, toolUpdateDraft } from "../../workers/lib/tools";
 import { sendEmail } from "../../workers/email-sender";
 import {
 	signConfirmationToken,
@@ -433,6 +433,23 @@ describe("toolSendEmail — cc / bcc / multi-recipient", () => {
 		const row = stub._sentEmails[0] as { cc: string | null };
 		expect(row.cc).toBe("cc@external.com");
 	});
+
+	it("external bcc recipient triggers tier ≥ 1 gate (bcc reaches send-risk classifier)", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		const result = await toolSendEmail(env, MAILBOX_ID, {
+			to: "colleague@internal.example",
+			bcc: "auditor@external.org",
+			subject: "Private note",
+			bodyHtml: "<p>FYI</p>",
+		});
+		expect(result).toMatchObject({
+			error: "confirmation_required",
+			confirmation_required: true,
+		});
+		expect((result as { risk?: { tier: number } }).risk?.tier).toBeGreaterThanOrEqual(1);
+		expect(sendEmail).not.toHaveBeenCalled();
+	});
 });
 
 describe("toolSendReply — cc / bcc / multi-recipient", () => {
@@ -488,5 +505,106 @@ describe("toolSendReply — cc / bcc / multi-recipient", () => {
 		expect(result).toMatchObject({ status: "sent" });
 		const row = stub._sentEmails[0] as { recipient: string };
 		expect(row.recipient).toBe("colleague@internal.example, colleague2@internal.example");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// toolDraftEmail — draft cc/bcc storage (issue #495)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("toolDraftEmail — cc / bcc storage", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("stores array cc (joined) and bcc on the DRAFT row, and echoes them in the return value", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+		const result = await toolDraftEmail(env, MAILBOX_ID, {
+			to: "recip@internal.example",
+			cc: ["cc1@internal.example", "cc2@internal.example"],
+			bcc: "bcc@internal.example",
+			subject: "Draft with cc/bcc",
+			body: "<p>Hello</p>",
+			runVerifyDraft: false,
+		});
+		expect(result).toMatchObject({ status: "draft_saved" });
+		expect(stub._sentEmails).toHaveLength(1);
+		const row = stub._sentEmails[0] as { cc: string | null; bcc: string | null };
+		expect(row.cc).toBe("cc1@internal.example, cc2@internal.example");
+		expect(row.bcc).toBe("bcc@internal.example");
+		// cc/bcc echoed in the return draft object
+		const draft = (result as { draft?: { cc?: string; bcc?: string } }).draft;
+		expect(draft?.cc).toBe("cc1@internal.example, cc2@internal.example");
+		expect(draft?.bcc).toBe("bcc@internal.example");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// toolUpdateDraft — cc/bcc carry-forward (issue #495)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DRAFT_ID = "draft-email-1";
+
+function makeUpdateDraftStub(initialCc: string | null, initialBcc: string | null) {
+	const savedEmails: unknown[] = [];
+	const existingDraft = {
+		id: DRAFT_ID,
+		subject: "Existing Subject",
+		sender: MAILBOX_ID.toLowerCase(),
+		recipient: "recip@internal.example",
+		cc: initialCc,
+		bcc: initialBcc,
+		date: new Date().toISOString(),
+		body: "<p>Existing body</p>",
+		read: false,
+		starred: false,
+		thread_id: DRAFT_ID,
+		message_id: "msg-draft",
+		in_reply_to: null,
+		email_references: null,
+		raw_headers: null,
+	};
+	return {
+		async checkSendRateLimit() { return null; },
+		async getEmail(id: string) { return id === DRAFT_ID ? existingDraft : null; },
+		async createEmail(_folder: unknown, email: unknown) { savedEmails.push(email); return {}; },
+		async deleteEmail(_id: string) { return {}; },
+		async consumeJti() { return true; },
+		_savedEmails: savedEmails,
+	};
+}
+
+describe("toolUpdateDraft — cc / bcc carry-forward", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("setting new cc/bcc overwrites existing values on the updated DRAFT row", async () => {
+		const stub = makeUpdateDraftStub("oldcc@internal.example", null);
+		const env = makeEnv(stub as any);
+		const result = await toolUpdateDraft(env, MAILBOX_ID, {
+			draftId: DRAFT_ID,
+			cc: "newcc@internal.example",
+			bcc: "newbcc@internal.example",
+		});
+		expect(result).toMatchObject({ status: "draft_updated" });
+		const row = stub._savedEmails[0] as { cc: string | null; bcc: string | null };
+		expect(row.cc).toBe("newcc@internal.example");
+		expect(row.bcc).toBe("newbcc@internal.example");
+	});
+
+	it("omitting cc/bcc carries old values forward from the existing draft", async () => {
+		const stub = makeUpdateDraftStub("preserved@internal.example", "preservedbcc@internal.example");
+		const env = makeEnv(stub as any);
+		const result = await toolUpdateDraft(env, MAILBOX_ID, {
+			draftId: DRAFT_ID,
+			subject: "Updated Subject",
+			// cc and bcc intentionally omitted — should keep old values
+		});
+		expect(result).toMatchObject({ status: "draft_updated" });
+		const row = stub._savedEmails[0] as { cc: string | null; bcc: string | null };
+		expect(row.cc).toBe("preserved@internal.example");
+		expect(row.bcc).toBe("preservedbcc@internal.example");
 	});
 });
