@@ -224,6 +224,8 @@ export async function toolDraftEmail(
 	mailboxId: string,
 	params: {
 		to: string;
+		cc?: string | string[];
+		bcc?: string | string[];
 		subject: string;
 		body: string;
 		isPlainText?: boolean;
@@ -277,6 +279,8 @@ export async function toolDraftEmail(
 			subject: params.subject,
 			sender: mailboxId.toLowerCase(),
 			recipient: (params.to || "").toLowerCase(),
+			cc: params.cc ? (Array.isArray(params.cc) ? params.cc.join(", ") : params.cc).toLowerCase() : null,
+			bcc: params.bcc ? (Array.isArray(params.bcc) ? params.bcc.join(", ") : params.bcc).toLowerCase() : null,
 			date: new Date().toISOString(),
 			body: processedBody,
 			in_reply_to: params.in_reply_to || null,
@@ -294,6 +298,8 @@ export async function toolDraftEmail(
 		message: "Draft saved to Drafts folder. Review it and confirm to send.",
 		draft: {
 			to: params.to,
+			...(params.cc ? { cc: Array.isArray(params.cc) ? params.cc.join(", ") : params.cc } : {}),
+			...(params.bcc ? { bcc: Array.isArray(params.bcc) ? params.bcc.join(", ") : params.bcc } : {}),
 			subject: params.subject,
 			body: params.isPlainText ? params.body.trim() : processedBody,
 		},
@@ -308,6 +314,8 @@ export async function toolUpdateDraft(
 	params: {
 		draftId: string;
 		to?: string;
+		cc?: string | string[];
+		bcc?: string | string[];
 		subject?: string;
 		bodyHtml?: string;
 	},
@@ -331,6 +339,13 @@ export async function toolUpdateDraft(
 		return { error: "Draft verification failed — keeping existing draft unchanged. Please try again." };
 	}
 
+	const newCc = params.cc !== undefined
+		? (params.cc ? (Array.isArray(params.cc) ? params.cc.join(", ") : params.cc).toLowerCase() : null)
+		: (oldDraft.cc ?? null);
+	const newBcc = params.bcc !== undefined
+		? (params.bcc ? (Array.isArray(params.bcc) ? params.bcc.join(", ") : params.bcc).toLowerCase() : null)
+		: (oldDraft.bcc ?? null);
+
 	await stub.deleteEmail(params.draftId);
 	await stub.createEmail(
 		Folders.DRAFT,
@@ -339,6 +354,8 @@ export async function toolUpdateDraft(
 			subject: params.subject ?? oldDraft.subject,
 			sender: mailboxId.toLowerCase(),
 			recipient: (params.to ?? oldDraft.recipient).toLowerCase(),
+			cc: newCc,
+			bcc: newBcc,
 			date: new Date().toISOString(),
 			body: verifiedBody,
 			in_reply_to: oldDraft.in_reply_to || null,
@@ -426,7 +443,9 @@ export async function toolSendReply(
 	mailboxId: string,
 	params: {
 		originalEmailId: string;
-		to: string;
+		to: string | string[];
+		cc?: string | string[];
+		bcc?: string | string[];
 		subject: string;
 		bodyHtml: string;
 		/** Optional step-up confirmation token required for tier ≥ 1 sends. */
@@ -451,6 +470,8 @@ export async function toolSendReply(
 		{
 			mailboxId,
 			to: params.to,
+			cc: params.cc,
+			bcc: params.bcc,
 			subject: params.subject,
 			body: params.bodyHtml,
 		},
@@ -474,6 +495,8 @@ export async function toolSendReply(
 	if (!fromDomain) throw new Error("Invalid mailbox email address");
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
+	const toStr = Array.isArray(params.to) ? params.to.join(", ") : params.to;
+
 	// Verify and append quoted original message
 	const sanitizedBody = await verifyDraftForMailbox(env, mailboxId, params.bodyHtml);
 	if (!sanitizedBody) {
@@ -481,7 +504,7 @@ export async function toolSendReply(
 	}
 	const quotedBlock = buildQuotedReplyBlock({
 		date: originalEmail.date,
-		sender: originalEmail.sender || params.to,
+		sender: originalEmail.sender || toStr,
 		body: originalEmail.body ?? undefined,
 	});
 	const fullBodyHtml = sanitizedBody + quotedBlock;
@@ -492,6 +515,8 @@ export async function toolSendReply(
 			from: mailboxId,
 			subject: params.subject,
 			html: fullBodyHtml,
+			...(params.cc ? { cc: params.cc } : {}),
+			...(params.bcc ? { bcc: params.bcc } : {}),
 			headers: buildThreadingHeaders(originalMsgId, references),
 		});
 	} catch (e) {
@@ -505,7 +530,9 @@ export async function toolSendReply(
 			id: messageId,
 			subject: params.subject,
 			sender: mailboxId.toLowerCase(),
-			recipient: params.to.toLowerCase(),
+			recipient: toStr.toLowerCase(),
+			cc: params.cc ? (Array.isArray(params.cc) ? params.cc.join(", ") : params.cc).toLowerCase() : null,
+			bcc: params.bcc ? (Array.isArray(params.bcc) ? params.bcc.join(", ") : params.bcc).toLowerCase() : null,
 			date: new Date().toISOString(),
 			body: fullBodyHtml,
 			in_reply_to: originalMsgId,
@@ -517,7 +544,7 @@ export async function toolSendReply(
 		[],
 	);
 
-	return { status: "sent", messageId, message: `Reply sent to ${params.to}` };
+	return { status: "sent", messageId, message: `Reply sent to ${toStr}` };
 }
 
 // ── send_email ─────────────────────────────────────────────────────
@@ -535,7 +562,9 @@ export async function toolSendEmail(
 	env: Env,
 	mailboxId: string,
 	params: {
-		to: string;
+		to: string | string[];
+		cc?: string | string[];
+		bcc?: string | string[];
 		subject: string;
 		bodyHtml: string;
 		attachments?: ToolAttachment[];
@@ -561,6 +590,8 @@ export async function toolSendEmail(
 		{
 			mailboxId,
 			to: params.to,
+			cc: params.cc,
+			bcc: params.bcc,
 			subject: params.subject,
 			body: params.bodyHtml,
 			attachments: params.attachments?.map((a) => ({ filename: a.filename })),
@@ -597,6 +628,8 @@ export async function toolSendEmail(
 			from: mailboxId,
 			subject: params.subject,
 			html: sanitizedBody,
+			...(params.cc ? { cc: params.cc } : {}),
+			...(params.bcc ? { bcc: params.bcc } : {}),
 			...(cfAttachments && cfAttachments.length > 0 ? { attachments: cfAttachments } : {}),
 		});
 	} catch (e) {
@@ -615,13 +648,16 @@ export async function toolSendEmail(
 		disposition: att.disposition ?? "attachment",
 	}));
 
+	const toStrSend = Array.isArray(params.to) ? params.to.join(", ") : params.to;
 	await stub.createEmail(
 		Folders.SENT,
 		{
 			id: messageId,
 			subject: params.subject,
 			sender: mailboxId.toLowerCase(),
-			recipient: params.to.toLowerCase(),
+			recipient: toStrSend.toLowerCase(),
+			cc: params.cc ? (Array.isArray(params.cc) ? params.cc.join(", ") : params.cc).toLowerCase() : null,
+			bcc: params.bcc ? (Array.isArray(params.bcc) ? params.bcc.join(", ") : params.bcc).toLowerCase() : null,
 			date: new Date().toISOString(),
 			body: sanitizedBody,
 			in_reply_to: null,
@@ -632,5 +668,5 @@ export async function toolSendEmail(
 		sentAttachments,
 	);
 
-	return { status: "sent", messageId, message: `Email sent to ${params.to}` };
+	return { status: "sent", messageId, message: `Email sent to ${toStrSend}` };
 }
