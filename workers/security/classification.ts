@@ -32,7 +32,18 @@ export type ClassificationLabel =
 	 *
 	 * Issue: https://github.com/schmug/PhishSOC/issues/28
 	 */
-	| "unavailable";
+	| "unavailable"
+	/**
+	 * `ai.run()` threw a non-timeout error (binding misconfigured, model
+	 * quota, unexpected throw shape). Fail-closed at the same score weight as
+	 * `suspicious` so the security posture is unchanged, but tagged as
+	 * `"error"` so operators can distinguish a broken classifier from a
+	 * genuine suspicious verdict. The actual error message is embedded in
+	 * `reasoning` so it is visible in the verdict JSON without log access.
+	 *
+	 * Issue: https://github.com/schmug/PhishSOC/issues/496
+	 */
+	| "error";
 
 export interface ClassificationResult {
 	label: ClassificationLabel;
@@ -185,7 +196,9 @@ ${sanitizedBody}
 
 		return parseClassifierOutput(response?.response ?? "");
 	} catch (e) {
-		const message = (e as Error).message;
+		// Capture the real error text regardless of whether e is an Error
+		// instance — Workers AI can throw plain strings or Response objects.
+		const message = e instanceof Error ? e.message : String(e);
 		if (isClassifierTimeout(e) && skipOnTimeout) {
 			// Rule 5 narrowed (issue #28): timeout/abort no longer fails closed
 			// to `suspicious`. Instead the classifier signals "unavailable" and
@@ -198,11 +211,14 @@ ${sanitizedBody}
 			console.warn("classifyEmail timeout — skipping classifier contribution:", message);
 			return { label: "unavailable", confidence: 0, reasoning: "classifier timeout" };
 		}
-		// Fail closed: unparsable / non-timeout failures → suspicious.
-		// We do NOT quarantine solely on classifier failure; the verdict
-		// aggregator combines with auth / URL / reputation signals.
+		// Fail closed: non-timeout thrown error (binding misconfigured, quota,
+		// unexpected throw shape). Label is "error" rather than "suspicious" so
+		// operators can distinguish a broken classifier from a genuine verdict.
+		// Score weight is identical to `suspicious` — security posture unchanged.
+		// The real error message is embedded in `reasoning` so it surfaces in
+		// the verdict JSON without requiring log access (issue #496).
 		console.error("classifyEmail failed:", message);
-		return { label: "suspicious", confidence: 0.3, reasoning: "classifier unavailable" };
+		return { label: "error", confidence: 0.3, reasoning: `classifier error: ${message}` };
 	}
 }
 
@@ -266,7 +282,21 @@ export function scoreClassification(result: ClassificationResult): {
 			contributions: [{ scorer: "classification", rule: "classifier_unavailable", weight: 0, reason: "llm_unavailable" }],
 		};
 	}
-	const map: Record<Exclude<ClassificationLabel, "unavailable">, number> = {
+	if (result.label === "error") {
+		// Fail-closed: ai.run() threw a non-timeout error (issue #496).
+		// Same score weight as `suspicious` so the security posture is unchanged,
+		// but tagged `llm_error` so the signal is observable in verdict.signals
+		// and the stage trace without being confused with a real verdict.
+		const base = 30; // matches map["suspicious"] below
+		const scaled = Math.round(base * (0.5 + 0.5 * result.confidence));
+		return {
+			score: scaled,
+			reasons: ["llm_error"],
+			confidence: result.confidence,
+			contributions: [{ scorer: "classification", rule: "classifier_error", weight: scaled, reason: "llm_error" }],
+		};
+	}
+	const map: Record<Exclude<ClassificationLabel, "unavailable" | "error">, number> = {
 		safe: 0, spam: 20, suspicious: 30, bec: 45, phishing: 50,
 	};
 	const base = map[result.label];

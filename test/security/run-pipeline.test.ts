@@ -288,8 +288,12 @@ describe("LLM timeout — narrowed Rule 5 (issue #28)", () => {
 		expect(result.verdict?.signals).toContain("llm_unavailable");
 	});
 
-	it("legacy mode (skip_on_timeout=false) → timeout reverts to fail-closed suspicious", async () => {
+	it("legacy mode (skip_on_timeout=false) → timeout treated as error, fail-closed at suspicious weight", async () => {
 		// Backward-compat for operators who explicitly want the old behavior.
+		// With skip_on_timeout=false the timeout is NOT treated specially and
+		// falls through to the generic non-timeout error path (issue #496).
+		// Label is "error" (observable, distinguishable from a real verdict)
+		// and score weight is identical to suspicious — security posture unchanged.
 		__setClassifier(async () => {
 			throw new Error("classify-timeout");
 		});
@@ -305,11 +309,12 @@ describe("LLM timeout — narrowed Rule 5 (issue #28)", () => {
 		const result = await runSecurityPipeline({
 			env, mailboxId: MAILBOX, messageId: "m-legacy", targetFolder: "inbox", parsedEmail: parsed,
 		});
-		// With the old fail-closed behavior, the classifier contributes at the
-		// `suspicious` weight; combined with a clean email's other signals
-		// (≈0), 30*(0.5+0.5*0.3)≈10 sits below the tag threshold but the
-		// classifier label itself must read `suspicious`, not `unavailable`.
-		expect(result.verdict?.classification.label).toBe("suspicious");
+		// Label is "error" (not "suspicious") so operators can distinguish a
+		// broken classifier from a genuine verdict. The score contribution is
+		// the same so the pipeline action (allow, tag, etc.) is unchanged.
+		expect(result.verdict?.classification.label).toBe("error");
+		// llm_error is emitted instead of "classifier: suspicious (30%)"
+		expect(result.verdict?.signals).toContain("llm_error");
 		expect(result.verdict?.signals).not.toContain("llm_unavailable");
 	});
 

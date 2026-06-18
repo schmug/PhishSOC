@@ -68,14 +68,19 @@ describe("classifyEmail — narrowed Rule 5 (issue #28)", () => {
 		expect(result.label).toBe("unavailable");
 	});
 
-	it("non-timeout error (e.g. binding misconfigured) → still fails closed to suspicious", async () => {
+	it("non-timeout error (e.g. binding misconfigured) → label=error, reasoning embeds the actual error", async () => {
 		__setClassifier(async () => {
 			throw new Error("AI binding not bound");
 		});
 		const result = await classifyEmail(FAKE_AI, baseInput);
-		// Rule 5 only narrows the timeout/abort path. A generic thrown error
-		// stays fail-closed because we genuinely don't know what happened.
-		expect(result.label).toBe("suspicious");
+		// Non-timeout errors use label="error" so operators can distinguish a
+		// broken classifier from a genuine suspicious verdict (issue #496).
+		// Security posture is unchanged: scoreClassification maps "error" to the
+		// same +20 weight as "suspicious".
+		expect(result.label).toBe("error");
+		// The real ai.run error is embedded in reasoning for verdict-level
+		// visibility without requiring wrangler tail access.
+		expect(result.reasoning).toContain("AI binding not bound");
 	});
 
 	it("parse-fail (model returns garbage) → returns suspicious, NOT unavailable", async () => {
@@ -94,12 +99,15 @@ describe("classifyEmail — narrowed Rule 5 (issue #28)", () => {
 		expect(result.label).not.toBe("unavailable");
 	});
 
-	it("legacy mode (skipOnTimeout=false) → timeout reverts to fail-closed suspicious", async () => {
+	it("legacy mode (skipOnTimeout=false) → timeout treated as error, label=error, fail-closed", async () => {
 		__setClassifier(async () => {
 			throw new Error("classify-timeout");
 		});
 		const result = await classifyEmail(FAKE_AI, baseInput, { skipOnTimeout: false });
-		expect(result.label).toBe("suspicious");
+		// When skip_on_timeout is false, the timeout is not treated specially —
+		// it falls through to the generic error path. Label is "error" (same score
+		// weight as suspicious, fail-closed) rather than the old "suspicious".
+		expect(result.label).toBe("error");
 		expect(result.confidence).toBeLessThan(0.5);
 	});
 
@@ -258,6 +266,52 @@ describe("classifyEmail — prompt-injection hardening (issue #459)", () => {
 		const trustedSection = userMsg.slice(0, fenceStart);
 		expect(trustedSection).toContain("SENDER: alice@example.com");
 		expect(trustedSection).toContain("AUTH: spf=pass");
+	});
+});
+
+describe("scoreClassification — error label (issue #496)", () => {
+	it("error → same score weight as suspicious, reason 'llm_error'", () => {
+		const result: ClassificationResult = {
+			label: "error",
+			confidence: 0.3,
+			reasoning: "classifier error: AI binding not bound",
+		};
+		const { score, reasons, contributions } = scoreClassification(result);
+		// Fail-closed at same weight as suspicious: 30 * (0.5 + 0.5 * 0.3) = 19.5 → 20
+		expect(score).toBe(20);
+		expect(reasons).toEqual(["llm_error"]);
+		expect(contributions[0].rule).toBe("classifier_error");
+	});
+
+	it("error score is independent of confidence value in terms of signal tag", () => {
+		const result: ClassificationResult = {
+			label: "error",
+			confidence: 0.9,
+			reasoning: "classifier error: quota exceeded",
+		};
+		const { score, reasons } = scoreClassification(result);
+		// Higher confidence still maps to llm_error, score scales with confidence
+		expect(score).toBeGreaterThan(20);
+		expect(reasons).toEqual(["llm_error"]);
+	});
+
+	it("error label is distinct from suspicious — scoreClassification does not conflate them", () => {
+		const errResult: ClassificationResult = {
+			label: "error",
+			confidence: 0.3,
+			reasoning: "classifier error: binding not found",
+		};
+		const susResult: ClassificationResult = {
+			label: "suspicious",
+			confidence: 0.3,
+			reasoning: "uncertain signals",
+		};
+		const err = scoreClassification(errResult);
+		const sus = scoreClassification(susResult);
+		// Same score (fail-closed), different signal tags — this is the observability fix
+		expect(err.score).toBe(sus.score);
+		expect(err.reasons).toEqual(["llm_error"]);
+		expect(sus.reasons[0]).toMatch(/classifier: suspicious/);
 	});
 });
 
