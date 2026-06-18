@@ -68,19 +68,33 @@ describe("catchall_intel — stripDefaultEqual", () => {
 // 2. normalizeInbound — discriminated union
 // ---------------------------------------------------------------------------
 
-// Minimal PostalMime-shaped email builder
-function rawEmailBytes(to: string[], from = "sender@attacker.example"): Uint8Array {
-	const toHeader = to.map((a) => `To: ${a}`).join("\r\n");
-	const raw = [
-		`From: ${from}`,
-		toHeader,
-		"Subject: test",
-		"MIME-Version: 1.0",
-		"Content-Type: text/plain",
-		"",
-		"body",
-	].join("\r\n");
-	return new TextEncoder().encode(raw);
+// Minimal PostalMime-shaped email builder.
+//
+// `receivedLines` (full `Received:` header values, top-first) and the
+// `receivedFor` convenience let a test reproduce the per-RCPT delivery that
+// Cloudflare Email Routing performs: a `Received: ... for <addr>;` line stamped
+// at the trust boundary. `cc` addresses land in `parsedEmail.cc`, NOT
+// `parsedEmail.to`, mirroring how a cc/bcc copy carries no `To:`-header trace
+// of its real envelope recipient.
+function rawEmailBytes(
+	to: string[],
+	from = "sender@attacker.example",
+	opts: { cc?: string[]; receivedFor?: string; receivedLines?: string[] } = {},
+): Uint8Array {
+	const received = opts.receivedLines
+		? [...opts.receivedLines]
+		: opts.receivedFor
+			? [`from mx.example by route.mx.cloudflare.net with ESMTPS id deadbeef for <${opts.receivedFor}>; Wed, 18 Jun 2026 12:00:00 +0000`]
+			: [];
+	const lines: string[] = [];
+	// Received headers are prepended at each hop; the FIRST line is the
+	// most-recent (top) hop — the one Cloudflare stamps for this delivery.
+	for (const r of received) lines.push(`Received: ${r}`);
+	lines.push(`From: ${from}`);
+	for (const a of to) lines.push(`To: ${a}`);
+	for (const a of opts.cc ?? []) lines.push(`Cc: ${a}`);
+	lines.push("Subject: test", "MIME-Version: 1.0", "Content-Type: text/plain", "", "body");
+	return new TextEncoder().encode(lines.join("\r\n"));
 }
 
 function makeStream(bytes: Uint8Array): ReadableStream {
@@ -123,6 +137,12 @@ async function runNormalize(
 		domainSettings?: Record<string, unknown>;
 		/** SMTP envelope recipient (RCPT TO) Cloudflare matched the routing rule on. */
 		envelopeTo?: string;
+		/** Cc addresses (land in parsedEmail.cc, not .to). */
+		cc?: string[];
+		/** Convenience: a CF-style top `Received: ... for <receivedFor>;` line. */
+		receivedFor?: string;
+		/** Full `Received:` header values, top-first, for multi-hop scenarios. */
+		receivedLines?: string[];
 	} = {},
 ) {
 	const { normalizeInbound } = await import("../../workers/providers/cf-routing");
@@ -146,7 +166,11 @@ async function runNormalize(
 	const { clearOrgSettingsCache } = await import("../../workers/lib/org-settings");
 	clearOrgSettingsCache();
 
-	const bytes = rawEmailBytes(toAddresses);
+	const bytes = rawEmailBytes(toAddresses, undefined, {
+		cc: opts.cc,
+		receivedFor: opts.receivedFor,
+		receivedLines: opts.receivedLines,
+	});
 	const event = {
 		raw: makeStream(bytes),
 		rawSize: bytes.byteLength,
@@ -267,6 +291,184 @@ describe("normalizeInbound — envelope recipient resolution", () => {
 		expect(result?.kind).toBe("mailbox");
 		if (result?.kind === "mailbox") {
 			expect(result.mailboxId).toBe("consulting@cortech.online");
+		}
+	});
+});
+
+describe("normalizeInbound — per-RCPT delivery via top Received header (GHSA-6jgg-fp96-7x3x)", () => {
+	// Cloudflare Email Routing invokes email() once per SMTP envelope recipient
+	// (RCPT TO). On the CF Email Sending → CF Email Routing cc/bcc/multi-recipient
+	// path, event.to is NOT the distinct envelope recipient and collapses to the
+	// To: header's first address, so a copy delivered for B was misfiled into A
+	// (cc/bcc/secondary recipients silently lost mail; the bcc copy landing in A
+	// is a cross-mailbox disclosure). The authoritative per-copy RCPT survives in
+	// the TOP `Received: ... for <addr>` header Cloudflare stamps.
+
+	it("To: A, Cc: B — the copy delivered for B is filed to B, not A", async () => {
+		const result = await runNormalize(
+			["support@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["support@cortech.online", "inbox@cortech.online"],
+				cc: ["inbox@cortech.online"],
+				receivedFor: "inbox@cortech.online",
+				// event.to collapses to the To: header's first address on this path.
+				envelopeTo: "support@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("inbox@cortech.online");
+		}
+	});
+
+	it("To: A, Cc: B — the copy delivered for A is still filed to A", async () => {
+		const result = await runNormalize(
+			["support@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["support@cortech.online", "inbox@cortech.online"],
+				cc: ["inbox@cortech.online"],
+				receivedFor: "support@cortech.online",
+				envelopeTo: "support@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("support@cortech.online");
+		}
+	});
+
+	it("To: A, Bcc: C — the copy delivered for C is filed to C; A never receives it", async () => {
+		// The bcc recipient is absent from To:/Cc: entirely; the only signal that
+		// this copy belongs to C is the top Received header.
+		const result = await runNormalize(
+			["support@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["support@cortech.online", "gh4all@cortech.online"],
+				receivedFor: "gh4all@cortech.online",
+				envelopeTo: "support@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("gh4all@cortech.online");
+		}
+	});
+
+	it("To: [A, B] — the copy delivered for the second To address is filed to it", async () => {
+		const result = await runNormalize(
+			["support@cortech.online", "steptest@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["support@cortech.online", "steptest@cortech.online"],
+				receivedFor: "steptest@cortech.online",
+				envelopeTo: "support@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("steptest@cortech.online");
+		}
+	});
+
+	it("files into the envelope recipient (top Received) even when the To: header names a different provisioned mailbox", async () => {
+		const result = await runNormalize(
+			["x@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["x@cortech.online", "y@cortech.online"],
+				receivedFor: "y@cortech.online",
+				envelopeTo: "x@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("y@cortech.online");
+		}
+	});
+
+	it("fails closed (drops) when the envelope recipient has no mailbox even though the To: header names one", async () => {
+		// Delivered for y@ (no mailbox, catch-all disabled); To: x@ (provisioned).
+		// Must NOT misfile into x@.
+		const result = await runNormalize(
+			["x@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["x@cortech.online"],
+				receivedFor: "y@cortech.online",
+				envelopeTo: "x@cortech.online",
+				domainSettings: { "cortech.online": {} },
+			},
+		);
+		expect(result).toBeNull();
+	});
+
+	it("EMAIL_ADDRESSES allow-list: the copy for B is matched against B, not the To: header A", async () => {
+		const result = await runNormalize(
+			["support@cortech.online"],
+			{
+				emailAddresses: ["support@cortech.online", "inbox@cortech.online"],
+				mailboxes: ["support@cortech.online", "inbox@cortech.online"],
+				cc: ["inbox@cortech.online"],
+				receivedFor: "inbox@cortech.online",
+				envelopeTo: "support@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("inbox@cortech.online");
+		}
+	});
+
+	it("uses only the TOP Received header's for-clause; a forged lower Received cannot redirect delivery", async () => {
+		const result = await runNormalize(
+			["x@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["x@cortech.online", "real@cortech.online", "attacker@cortech.online"],
+				receivedLines: [
+					// TOP — stamped by Cloudflare for the actual RCPT.
+					"from mx by route.mx.cloudflare.net with ESMTPS id aa for <real@cortech.online>; Wed, 18 Jun 2026 12:00:00 +0000",
+					// LOWER — forged upstream to try to grab attacker@'s mailbox.
+					"from evil by relay.example with ESMTP id bb for <attacker@cortech.online>; Wed, 18 Jun 2026 11:59:00 +0000",
+				],
+				envelopeTo: "x@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("real@cortech.online");
+		}
+	});
+
+	it("falls back to event.to when the top Received has no for-clause, ignoring a lower Received for-clause", async () => {
+		const result = await runNormalize(
+			["x@cortech.online"],
+			{
+				emailAddresses: [],
+				domains: "cortech.online",
+				mailboxes: ["x@cortech.online", "attacker@cortech.online"],
+				receivedLines: [
+					// TOP — no `for` clause (some CF paths omit it).
+					"from mx by route.mx.cloudflare.net with ESMTPS id aa; Wed, 18 Jun 2026 12:00:00 +0000",
+					// LOWER — forged for attacker@.
+					"from evil by relay.example with ESMTP id bb for <attacker@cortech.online>; Wed, 18 Jun 2026 11:59:00 +0000",
+				],
+				envelopeTo: "x@cortech.online",
+			},
+		);
+		expect(result?.kind).toBe("mailbox");
+		if (result?.kind === "mailbox") {
+			expect(result.mailboxId).toBe("x@cortech.online");
 		}
 	});
 });
