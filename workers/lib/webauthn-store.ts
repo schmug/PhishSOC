@@ -173,3 +173,19 @@ export async function consumeChallenge(
 		expiresAt: Number(row.expires_at),
 	};
 }
+
+/**
+ * Reap expired challenges. `consumeChallenge` only deletes on a successful
+ * (non-expired) consume — an abandoned step-up (options requested, assertion
+ * never completed) leaves a row whose `expires_at` has passed but which nothing
+ * ever removes, so the table grows unbounded. The hourly cron calls this to
+ * delete every row with `expires_at <= now`; live rows (`expires_at > now`,
+ * still consumable) are untouched. Returns the number of rows removed.
+ */
+export async function deleteExpiredChallenges(db: D1Database, now: number): Promise<number> {
+	const { meta } = await db
+		.prepare("DELETE FROM webauthn_challenges WHERE expires_at <= ?")
+		.bind(now)
+		.run();
+	return meta.changes ?? 0;
+}
