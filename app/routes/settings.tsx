@@ -13,6 +13,7 @@ import { useDomainSettings } from "~/queries/domain-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
 import { AclMembersPanel } from "~/components/AclMembersPanel";
+import { PasskeyPanel } from "~/components/PasskeyPanel";
 import {
 	HubSettingsPanel,
 	normalizeHubConfig,
@@ -480,6 +481,9 @@ export default function SettingsRoute() {
 						<Input label="Email" type="email" value={mailbox.email} disabled />
 					</div>
 				</div>
+
+				{/* Passkeys — per-user step-up for risky sends (#376). */}
+				<PasskeyPanel />
 
 				{/* Agent System Prompt */}
 				<div className="pp-card p-5">

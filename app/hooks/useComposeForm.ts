@@ -18,7 +18,7 @@ import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSend
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
 import api from "~/services/api";
-import { requestStepUpConfirmation } from "~/lib/step-up-confirm";
+import { requestStepUpConfirmation, StepUpNoPasskeyError } from "~/lib/step-up-confirm";
 
 function appendUniqueAddress(
 	addresses: string[],
@@ -333,7 +333,12 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			if (draftId) deleteEmailMutation.mutate({ mailboxId, id: draftId });
 			feedback.success("Email sent!");
 			onClose();
-		} catch (err: unknown) { const message = (err instanceof Error ? err.message : null) || "Failed to send email."; setError(message); feedback.error(message); }
+		} catch (err: unknown) {
+			const message = err instanceof StepUpNoPasskeyError
+				? "No passkey enrolled. Add one in Settings → Passkeys, then send again."
+				: (err instanceof Error ? err.message : null) || "Failed to send email.";
+			setError(message); feedback.error(message);
+		}
 		finally { setIsSending(false); }
 	};
 

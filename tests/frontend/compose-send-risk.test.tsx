@@ -89,6 +89,7 @@ import ComposePanel from "~/components/ComposePanel";
 import ComposeEmail from "~/components/ComposeEmail";
 import api from "~/services/api";
 import { useUIStore } from "~/hooks/useUIStore";
+import { StepUpNoPasskeyError } from "~/lib/step-up-confirm";
 
 const preflightMock = api.preflightEmail as unknown as ReturnType<typeof vi.fn>;
 
@@ -355,6 +356,24 @@ describe("Composer send-risk UI (#263)", () => {
 			await waitFor(() =>
 				expect(screen.getByTestId("send-button-tier1")).not.toBeDisabled(),
 			);
+		});
+
+		it("guides the user to enroll a passkey when none is enrolled", async () => {
+			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
+			stepUpMock.mockRejectedValue(new StepUpNoPasskeyError());
+
+			const user = userEvent.setup();
+			renderPanel();
+			await typeToAndWaitForPreflight(user, "vendor@external.com", "send-button-tier1");
+			await user.type(screen.getByPlaceholderText(/email subject/i), "Hello");
+			await user.click(screen.getByTestId("send-button-tier1"));
+
+			await waitFor(() =>
+				expect(feedbackError).toHaveBeenCalledWith(
+					expect.stringMatching(/no passkey enrolled.*settings/i),
+				),
+			);
+			expect(sendEmailMutate).not.toHaveBeenCalled();
 		});
 	});
 

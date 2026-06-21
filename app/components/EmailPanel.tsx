@@ -12,7 +12,7 @@ import EmailPanelToolbar from "~/components/email-panel/EmailPanelToolbar";
 import SingleMessageView from "~/components/email-panel/SingleMessageView";
 import ThreadMessage from "~/components/email-panel/ThreadMessage";
 import { useFeedback } from "~/lib/feedback";
-import { requestStepUpConfirmation } from "~/lib/step-up-confirm";
+import { requestStepUpConfirmation, StepUpNoPasskeyError } from "~/lib/step-up-confirm";
 import { htmlToPlainText, splitEmailList, toEmailListValue } from "~/lib/utils";
 import api from "~/services/api";
 import {
@@ -332,7 +332,9 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 			if (isDraftFolder) closePanel();
 		} catch (err) {
 			const message =
-				(err instanceof Error ? err.message : null) || "Failed to send email.";
+				err instanceof StepUpNoPasskeyError
+					? "No passkey enrolled. Add one in Settings → Passkeys, then send again."
+					: (err instanceof Error ? err.message : null) || "Failed to send email.";
 			feedback.error(message);
 		} finally {
 			setIsSending(false);

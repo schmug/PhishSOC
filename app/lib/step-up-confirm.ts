@@ -24,6 +24,7 @@
 
 import { startAuthentication } from "@simplewebauthn/browser";
 import api from "~/services/api";
+import { humanizeWebAuthnError } from "~/lib/webauthn-errors";
 
 export interface StepUpPayload {
 	tier: 0 | 1 | 2;
@@ -47,19 +48,6 @@ export class StepUpNoPasskeyError extends Error {
 		super(message);
 		this.name = "StepUpNoPasskeyError";
 	}
-}
-
-/** Map a WebAuthn ceremony failure to a user-presentable message. */
-function humanizeAssertionError(err: unknown): string {
-	const name = err instanceof Error ? err.name : "";
-	if (name === "NotAllowedError") {
-		return "Step-up was cancelled or timed out. Please try again.";
-	}
-	if (name === "SecurityError") {
-		return "Step-up could not run on this origin. Contact your administrator.";
-	}
-	const message = err instanceof Error ? err.message : "";
-	return message || "Step-up confirmation failed.";
 }
 
 /**
@@ -92,7 +80,7 @@ export async function requestStepUpConfirmation(
 	try {
 		assertion = await startAuthentication({ optionsJSON: options });
 	} catch (err) {
-		throw new Error(humanizeAssertionError(err));
+		throw new Error(humanizeWebAuthnError(err));
 	}
 
 	const { token } = await api.webauthnAuthenticateVerify({ ...request, assertion });
