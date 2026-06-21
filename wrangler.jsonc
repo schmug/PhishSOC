@@ -44,15 +44,14 @@
 		}
 	],
 	// WebAuthn credential + challenge store (issue #376). First D1 in the
-	// project. The placeholder database_id below MUST be replaced by the
-	// operator with the real id from `wrangler d1 create phishsoc-webauthn`
-	// before deploying; schema lives in migrations/webauthn (apply with
+	// project; schema lives in migrations/webauthn (already applied to this
+	// database — re-apply elsewhere with
 	// `wrangler d1 migrations apply phishsoc-webauthn --remote`).
 	"d1_databases": [
 		{
 			"binding": "WEBAUTHN_DB",
 			"database_name": "phishsoc-webauthn",
-			"database_id": "00000000-0000-0000-0000-000000000000",
+			"database_id": "6b995b64-642f-4da6-a0c1-aae2a24e5825",
 			"migrations_dir": "migrations/webauthn"
 		}
 	],
