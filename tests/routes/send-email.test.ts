@@ -231,3 +231,88 @@ describe("POST /emails/preflight", () => {
 		expect(json.tier).toBe(2);
 	});
 });
+
+// ── Validation errors return 400, never 500 (issue: CC/BCC-only 500) ────────────
+
+describe("invalid recipient input → 400 (never 500)", () => {
+	it("POST /emails with a malformed bcc returns 400 with a clear message", async () => {
+		const createEmailCalls: unknown[] = [];
+		currentStub = makeStub({
+			createEmail: async (...args: unknown[]) => { createEmailCalls.push(args); return {}; },
+		});
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody({ bcc: "not-an-email" })),
+			},
+		);
+		expect(res.status).toBe(400);
+		const json = await res.json() as { error: string };
+		expect(json.error).toMatch(/bcc/i);
+		// Nothing was stored for an invalid send.
+		expect(createEmailCalls).toHaveLength(0);
+	});
+
+	it("POST /emails with no To: returns 400 asking for a To: recipient", async () => {
+		const { fetch } = makeApp();
+		const body = sendBody();
+		delete (body as Record<string, unknown>).to;
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			},
+		);
+		expect(res.status).toBe(400);
+		const json = await res.json() as { error: string };
+		expect(json.error).toMatch(/to:/i);
+	});
+
+	it("POST /emails/preflight with a malformed bcc returns 400, not 500", async () => {
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails/preflight`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody({ bcc: "not-an-email" })),
+			},
+		);
+		expect(res.status).toBe(400);
+		const json = await res.json() as { error: string };
+		expect(json.error).toMatch(/bcc/i);
+	});
+
+	it("POST /emails with a valid array bcc still succeeds (202)", async () => {
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(
+					sendBody({ bcc: ["one@internal.example", "two@internal.example"] }),
+				),
+			},
+		);
+		expect(res.status).toBe(202);
+	});
+
+	it("POST /emails with malformed JSON returns 400, not 500", async () => {
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: "{ not json",
+			},
+		);
+		expect(res.status).toBe(400);
+	});
+});

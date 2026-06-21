@@ -218,6 +218,35 @@ describe("Composer send-risk UI (#263)", () => {
 		});
 	});
 
+	// ── Regression: preflight normalises multi-address Cc/Bcc to arrays ───────
+	// A comma-joined Bcc string fails per-address email validation server-side
+	// (ZodError → 500); the live preview must send the same array the send does.
+
+	describe("Preflight recipient normalisation", () => {
+		it("sends a multi-address Bcc as an array, not a comma-joined string", async () => {
+			preflightMock.mockResolvedValue({ tier: 0, reasons: [] });
+			const user = userEvent.setup();
+			renderPanel();
+
+			await user.type(
+				screen.getByPlaceholderText(/recipient@example.com/i),
+				"primary@example.com",
+			);
+			await user.click(screen.getByRole("button", { name: /cc \/ bcc/i }));
+			await user.type(
+				screen.getByLabelText(/^BCC$/i),
+				"one@example.com, two@example.com",
+			);
+
+			await waitFor(() => expect(preflightMock).toHaveBeenCalled(), { timeout: 2000 });
+
+			const lastCall = preflightMock.mock.calls.at(-1);
+			const payload = lastCall?.[1] as { to: unknown; bcc: unknown };
+			expect(payload.to).toBe("primary@example.com");
+			expect(payload.bcc).toEqual(["one@example.com", "two@example.com"]);
+		});
+	});
+
 	// ── Acceptance: preflight network failure does not block send ────────────
 
 	describe("Preflight network failure fallback", () => {

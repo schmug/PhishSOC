@@ -229,10 +229,14 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		const timer = setTimeout(async () => {
 			setIsPreflighting(true);
 			try {
+				// Normalise the same way the send path does so the live risk
+				// preview validates the exact payload the send will use — a
+				// multi-address Cc/Bcc must be sent as an array, not a raw
+				// comma-joined string (which fails per-address email validation).
 				const result = await api.preflightEmail(mailboxId, {
-					to,
-					cc: cc || undefined,
-					bcc: bcc || undefined,
+					to: toEmailListValue(splitEmailList(to)),
+					cc: toEmailListValue(splitEmailList(cc)),
+					bcc: toEmailListValue(splitEmailList(bcc)),
 					from: mailboxId,
 					subject: latestSubjectRef.current || ".",
 					text: htmlToPlainText(latestBodyRef.current) || " ",
@@ -276,7 +280,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		e.preventDefault(); if (isSending) return; setError(null);
 		if (!currentMailbox || !mailboxId) { setError("No mailbox selected."); return; }
 		const toRecipients = splitEmailList(to);
-		if (toRecipients.length === 0) { setError("Add at least one recipient."); return; }
+		if (toRecipients.length === 0) { setError("Add a To: recipient."); return; }
 
 		const sendTier = preflight?.tier ?? 0;
 		if (sendTier >= 2) {
