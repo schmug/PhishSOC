@@ -43,6 +43,7 @@ import {
 	type AccessVariables,
 } from "../lib/access-identity";
 import { computePayloadHash, signConfirmationToken } from "../lib/confirm-token";
+import { dispatchSecurityAlert, type AlertExecutionContext } from "../lib/security-alert";
 import {
 	consumeChallenge,
 	createCredential,
@@ -365,17 +366,29 @@ webauthnRoute.post("/register/verify", async (c) => {
 	});
 
 	if (firstKey) {
-		// Audit the TOFU enrollment so a surreptitious first-key registration is
-		// detectable. Operator notification channel is tracked in the #376 runbook.
-		console.log(
-			JSON.stringify({
-				event: "webauthn.first_key_registered",
-				sub: identity.sub,
-				email: identity.email,
-				credentialId: info.credential.id,
-				aaguid: info.aaguid,
-			}),
-		);
+		// The TOFU enrollment is the highest-risk window in the step-up, so it gets
+		// BOTH a forensic audit line AND an active out-of-band notification.
+		const auditEvent = {
+			event: "webauthn.first_key_registered",
+			sub: identity.sub,
+			email: identity.email,
+			credentialId: info.credential.id,
+			aaguid: info.aaguid,
+		};
+		// Forensic audit line (kept as-is) for retrospective log search.
+		console.log(JSON.stringify(auditEvent));
+		// Active operator notification — a console line is not an alert. Dispatched
+		// fire-and-forget via the execution context's waitUntil; a failed/slow/
+		// missing webhook MUST NOT block or fail this enrollment, so the response
+		// below still returns { verified: true } regardless. No-ops when the
+		// SECURITY_ALERT_WEBHOOK_URL operator secret is unset.
+		let alertCtx: AlertExecutionContext | undefined;
+		try {
+			alertCtx = c.executionCtx;
+		} catch {
+			alertCtx = undefined;
+		}
+		dispatchSecurityAlert(c.env, alertCtx, auditEvent);
 	}
 
 	return c.json({ verified: true, credentialId: info.credential.id, firstKey });

@@ -89,6 +89,7 @@ the token is minted.
 |---|---|
 | `CONFIRMATION_TOKEN_SECRET` | HS256 signing key for the one-shot confirm JWT (`openssl rand -hex 32`) |
 | `TEAM_DOMAIN` / `POLICY_AUD` | Main Cloudflare Access app (unchanged) |
+| `SECURITY_ALERT_WEBHOOK_URL` | **Optional.** Out-of-band webhook for first-passkey (TOFU) enrollment alerts (see §6). When set, a first-key registration POSTs the `webauthn.first_key_registered` audit payload here. When unset, only the `console.log` audit line is emitted. |
 
 > The legacy `STEP_UP_AUD` secret is **no longer used** and should be deleted (see
 > the runbook below).
@@ -164,6 +165,55 @@ to enroll and assert.
 
 Replay the same `x-confirmation-token` on a second send → **401** (`jti` consumed).
 Replay the same WebAuthn assertion → **401** (challenge consumed by `DELETE … RETURNING`).
+
+---
+
+## 6. First-key (TOFU) enrollment alert
+
+The **first** passkey a `sub` enrolls is the highest-risk moment in the whole
+step-up: whoever lands that first credential can thereafter mint confirm tokens
+for that identity's risky sends. There is no prior key to step up against, so the
+first enrollment is trust-on-first-use. To make a surreptitious first-key
+registration *actively* detectable — not just retrospectively greppable —
+`register/verify` does two things on the first key only:
+
+1. **Audit line (always).** Emits the structured
+   `webauthn.first_key_registered` log (`sub`, `email`, `credentialId`,
+   `aaguid`) for retrospective search. This is unconditional.
+2. **Operator notification (when configured).** If the optional
+   `SECURITY_ALERT_WEBHOOK_URL` secret is set, POSTs that same audit payload to
+   the webhook as `application/json`, so the event reaches a pager / SOC channel
+   in real time.
+
+```bash
+wrangler secret put SECURITY_ALERT_WEBHOOK_URL
+# e.g. a Slack/PagerDuty/Sentry inbound webhook, or your own collector
+```
+
+Example payload:
+
+```json
+{
+  "event": "webauthn.first_key_registered",
+  "sub": "a1b2c3d4-…",
+  "email": "operator@example.com",
+  "credentialId": "…",
+  "aaguid": "00000000-0000-0000-0000-000000000000"
+}
+```
+
+**Fire-and-forget by contract.** The notification is dispatched via
+`ctx.waitUntil(...)` (see `workers/lib/security-alert.ts`) and every failure — a
+down endpoint, a timeout (10 s cap), a non-2xx response, or a malformed URL — is
+caught and logged, never propagated. Enrollment still returns
+`{ verified: true }` and the credential is still stored even if the webhook
+throws. Only **first-key** registrations notify; adding a 2nd+ key (which already
+requires a fresh existing-key assertion) does not. When the secret is unset the
+dispatch no-ops and only the audit line is emitted.
+
+> This alert is the operator notification channel referenced by the rollout
+> (§3) and decommissioning runbook (§4) "watch for `webauthn.first_key_registered`"
+> steps — wire the webhook before broad enrollment so the first keys are seen live.
 
 ---
 
