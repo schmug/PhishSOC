@@ -10,6 +10,7 @@ import { app as apiApp, receiveEmail, receiveCatchall } from "./index";
 import { normalizeInbound } from "./providers/cf-routing";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
+import { deleteExpiredChallenges } from "./lib/webauthn-store";
 import { webauthnRoute } from "./routes/webauthn";
 import { callerAllowedForMailbox, emailAgentMailboxIdFromPath } from "./lib/mailbox-acl";
 import {
@@ -194,5 +195,22 @@ export default {
 				(e) => console.error("intel feed refresh failed:", (e as Error).message),
 			),
 		);
+
+		// Reap expired WebAuthn step-up challenges (#376). consumeChallenge only
+		// deletes on a successful consume, so abandoned step-ups leave rows that
+		// never expire out of the table; sweep them hourly. Runs as a separate
+		// waitUntil and swallows its own error so a reap failure (or an unbound
+		// WEBAUTHN_DB in deploys without step-up configured) never breaks the
+		// feed refresh above.
+		if (env.WEBAUTHN_DB) {
+			ctx.waitUntil(
+				deleteExpiredChallenges(env.WEBAUTHN_DB, Date.now()).then(
+					(n) => {
+						if (n > 0) console.log(`webauthn: reaped ${n} expired challenges`);
+					},
+					(e) => console.error("webauthn challenge reap failed:", (e as Error).message),
+				),
+			);
+		}
 	},
 };
