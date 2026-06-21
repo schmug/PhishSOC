@@ -14,7 +14,14 @@
 		// TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
 		// The worker now fails closed outside local development if Access is not configured.
 		"DOMAINS": "cortech.online,dmarc.mx,q-r.contact,donthype.me",
-		"EMAIL_ADDRESSES": []
+		"EMAIL_ADDRESSES": [],
+		// WebAuthn step-up Relying Party config (issue #376). RP_ID is the
+		// effective domain the passkey is scoped to; RP_ORIGIN is the exact
+		// https origin the assertion must come from. Both are validated against
+		// the request origin on every verify — they MUST match the deployed
+		// hostname or every assertion is rejected.
+		"RP_ID": "inbox.cortech.online",
+		"RP_ORIGIN": "https://inbox.cortech.online"
 	},
 	"send_email": [
 		{
@@ -34,6 +41,19 @@
 			"binding": "BLOOM_KV",
 			"id": "ebaf7dd6b5514eeba2ea319cdb587f78",
 			"preview_id": "f2e485845c114bc0b09976c3213df016"
+		}
+	],
+	// WebAuthn credential + challenge store (issue #376). First D1 in the
+	// project. The placeholder database_id below MUST be replaced by the
+	// operator with the real id from `wrangler d1 create phishsoc-webauthn`
+	// before deploying; schema lives in migrations/webauthn (apply with
+	// `wrangler d1 migrations apply phishsoc-webauthn --remote`).
+	"d1_databases": [
+		{
+			"binding": "WEBAUTHN_DB",
+			"database_name": "phishsoc-webauthn",
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "migrations/webauthn"
 		}
 	],
 	"triggers": {

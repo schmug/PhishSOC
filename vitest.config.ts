@@ -11,6 +11,9 @@ import { defineConfig } from "vitest/config";
  *     runtime would only slow CI.
  *   - `tests/frontend/**` — React component / hook tests under jsdom, with
  *     React Testing Library. The `~/` alias mirrors `tsconfig.cloudflare.json`.
+ *   - `tests/workers/**` — real-`workerd` tests via @cloudflare/vitest-pool-workers
+ *     (issue #376). Defined in vitest.workers.config.ts so the D1 store and the
+ *     WebAuthn verify path exercise the production runtime, not a Node fake.
  */
 export default defineConfig({
 	// `tsconfig.cloudflare.json` sets `jsx: "react-jsx"` but lives behind a
@@ -37,7 +40,9 @@ export default defineConfig({
 				test: {
 					name: "node",
 					include: ["tests/**/*.test.ts", "test/**/*.test.ts"],
-					exclude: ["tests/frontend/**"],
+					// tests/workers/** run in the workers pool (vitest.workers.config.ts);
+					// they import `cloudflare:test`, unavailable in the node pool.
+					exclude: ["tests/frontend/**", "tests/workers/**"],
 					environment: "node",
 					globals: false,
 					pool: "forks",
@@ -53,6 +58,9 @@ export default defineConfig({
 					setupFiles: ["./tests/frontend/setup.ts"],
 				},
 			},
+			// Real-workerd suite (issue #376) — its own config because the
+			// pool, compat flags, and test D1 differ from the node/jsdom pools.
+			"./vitest.workers.config.ts",
 		],
 	},
 });
