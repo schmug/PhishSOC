@@ -276,6 +276,17 @@ fulfill on its own.
   only from authenticated UI / API routes, not from the agent's tool set.
 - The user-facing copy at `app/routes/settings.tsx:218` ("Drafts are
   never sent without explicit confirmation.") matches the implementation.
+- For risky (Tier ≥ 1) sends the human confirmation surface is hardened
+  with an app-layer **WebAuthn step-up** (issue #376): the server issues a
+  fresh, payload-bound, one-shot challenge; the user completes a
+  `userVerification: "required"` assertion; the Worker verifies it and binds
+  the asserted credential to the request's Cloudflare Access identity before
+  minting the one-shot confirm token (`workers/routes/webauthn.ts`,
+  `workers/lib/webauthn-store.ts`). This makes the confirmation
+  phishing-resistant and non-replayable, and provably *not solicitable by the
+  agent* — the challenge is server-issued and credential-bound, not a string
+  the model can produce. It does not, on its own, grant the agent a send path;
+  it hardens the human factor and future-proofs Rule 6.
 
 A useful audit: grep the agent tool definitions for any tool whose
 `execute` reaches a code path that calls `send_email`. There should be

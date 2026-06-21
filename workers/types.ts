@@ -20,12 +20,6 @@ export interface Env extends Cloudflare.Env {
 	 */
 	CROWDSEC_CTI_API_KEY?: string;
 	/**
-	 * Audience tag for the step-up CF Access application scoped to
-	 * `/api/v1/confirm`. Set with `wrangler secret put STEP_UP_AUD`.
-	 * When absent, the confirm endpoint returns 503.
-	 */
-	STEP_UP_AUD?: string;
-	/**
 	 * HS256 signing secret for one-shot confirmation tokens.
 	 * Set with `wrangler secret put CONFIRMATION_TOKEN_SECRET`.
 	 * When absent, the confirm endpoint returns 503.

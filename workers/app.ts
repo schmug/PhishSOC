@@ -10,7 +10,6 @@ import { app as apiApp, receiveEmail, receiveCatchall } from "./index";
 import { normalizeInbound } from "./providers/cf-routing";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
-import { confirmRoute } from "./routes/confirm";
 import { webauthnRoute } from "./routes/webauthn";
 import { callerAllowedForMailbox, emailAgentMailboxIdFromPath } from "./lib/mailbox-acl";
 import {
@@ -61,11 +60,6 @@ app.use("*", async (c, next) => {
 	c.header("Referrer-Policy", "strict-origin-when-cross-origin");
 	c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 });
-
-// Step-up confirm endpoint — mounted BEFORE the CF Access middleware so that
-// the step-up JWT (audience = STEP_UP_AUD) is not rejected by the main-app
-// POLICY_AUD check. The route validates the step-up JWT itself.
-app.route("/api/v1/confirm", confirmRoute);
 
 // Cloudflare Access JWT validation middleware (production only)
 app.use("*", async (c, next) => {

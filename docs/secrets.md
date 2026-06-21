@@ -44,27 +44,30 @@ never stored in `wrangler.jsonc` or any checked-in file.
 | **Rotation cadence** | Every 90 days, or immediately on suspected compromise. Rotate in the CrowdSec Console and push the new value with `wrangler secret put CROWDSEC_CTI_API_KEY`. |
 | **If missing** | The CTI enrichment stage is silently skipped; the Worker deploys and operates normally without it. |
 
-### `STEP_UP_AUD` — optional
+### `STEP_UP_AUD` — REMOVED (issue #376)
+
+The legacy two-Access-app step-up has been replaced by an app-layer WebAuthn
+step-up (see [`docs/step-up-auth.md`](step-up-auth.md)). `STEP_UP_AUD` is no
+longer read by any code. Operators should **delete it** during decommissioning:
+`wrangler secret delete STEP_UP_AUD`, then remove the second Access application
+scoped to `/api/v1/confirm` from the Cloudflare dashboard.
+
+### `CONFIRMATION_TOKEN_SECRET` — required for step-up sends
 
 | Field | Value |
 | --- | --- |
-| **What it is** | Cloudflare Access audience tag for the step-up Access application scoped to `/api/v1/confirm`. Separate from `POLICY_AUD` so the confirmation endpoint can require a stricter Access policy (e.g. hard-key MFA). |
-| **Where stored** | Cloudflare Workers secret — `wrangler secret put STEP_UP_AUD` |
-| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role |
-| **Rotation cadence** | Whenever the step-up Access application is regenerated or relevant personnel change. |
-| **If missing** | The `/api/v1/confirm` endpoint returns `503`. The rest of the Worker is unaffected. |
-
-See [`docs/step-up-auth.md`](step-up-auth.md) for the full two-app topology, shared-hostname caveat, and testing guide.
-
-### `CONFIRMATION_TOKEN_SECRET` — optional
-
-| Field | Value |
-| --- | --- |
-| **What it is** | HS256 HMAC signing secret for one-shot email-confirmation tokens issued by the `/api/v1/confirm` flow |
+| **What it is** | HS256 HMAC signing secret for one-shot send-confirmation tokens. The token is now minted by the WebAuthn `authenticate/verify` endpoint (`/api/v1/webauthn/authenticate/verify`) after a verified passkey assertion. |
 | **Where stored** | Cloudflare Workers secret — `wrangler secret put CONFIRMATION_TOKEN_SECRET` |
 | **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role |
-| **Rotation cadence** | Every 90 days, or immediately after any suspected token-forgery incident. After rotation all outstanding confirmation links are immediately invalidated. Generate a cryptographically random value: `openssl rand -hex 32`. |
-| **If missing** | The `/api/v1/confirm` endpoint returns `503`. |
+| **Rotation cadence** | Every 90 days, or immediately after any suspected token-forgery incident. After rotation all outstanding confirmation tokens are immediately invalidated. Generate a cryptographically random value: `openssl rand -hex 32`. |
+| **If missing** | The WebAuthn step-up endpoints return `503`, so risky (Tier ≥ 1) sends cannot be confirmed. The rest of the Worker is unaffected. |
+
+### `RP_ID` / `RP_ORIGIN` — WebAuthn Relying Party config (wrangler vars, not secrets)
+
+Set in `wrangler.jsonc` `vars`. `RP_ID` is the effective domain
+(`inbox.cortech.online`); `RP_ORIGIN` is the exact https origin
+(`https://inbox.cortech.online`). Both are validated against the request origin
+on every step-up verify, so they MUST match the deployed hostname.
 
 ### `YARAMAIL_CALLBACK_SECRET` — optional
 
