@@ -1,20 +1,29 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 /**
- * Client relay for the Tier ≥1 step-up confirm flow (issue #285).
+ * Client step-up relay for Tier ≥1 sends (issue #285, reworked for #376).
  *
- * Cloudflare Access step-up requires a top-level navigation to a
- * step-up-protected path. The only such path is `/api/v1/confirm`, so we
- * open it in a popup: the GET handler (workers/routes/confirm.ts) serves a
- * tiny relay page that — once Access has set the step-up cookie — POSTs the
- * preflighted payload back to the same path (Access injects the step-up
- * JWT), then `postMessage`s the one-shot confirmation token to this opener.
+ * Replaces the Cloudflare Access popup + postMessage relay — which looped
+ * forever because a second Access app on the same hostname emitted a colliding
+ * CF_Authorization cookie — with an in-page WebAuthn assertion:
+ *
+ *   1. POST authenticate/options {mailboxId, tier, payload} → a fresh,
+ *      payload-bound challenge.
+ *   2. navigator.credentials.get() via startAuthentication() — no popup, no
+ *      cross-site redirect.
+ *   3. POST authenticate/verify {…, assertion} → the one-shot confirm token.
  *
  * The token is bound server-side to a SHA-256 hash of
  * {to, cc, bcc, subject, body, attachmentIds}. Callers MUST pass the exact
  * values the email send will use — do not re-normalize between preflight,
  * confirm, and send or the server payloadHash check rejects the token.
+ *
+ * The signature and Promise<string> return type are UNCHANGED from the popup
+ * version, so useComposeForm / EmailPanel callers need no edits.
  */
+
+import { startAuthentication } from "@simplewebauthn/browser";
+import api from "~/services/api";
 
 export interface StepUpPayload {
 	tier: 0 | 1 | 2;
@@ -28,114 +37,64 @@ export interface StepUpPayload {
 	attachmentIds: string[];
 }
 
-const RELAY_PATH = "/api/v1/confirm";
-const MSG_SOURCE = "phishsoc-confirm";
-const DEFAULT_TIMEOUT_MS = 120_000;
-const POLL_MS = 400;
+/**
+ * Thrown when the account has no enrolled passkey, so the caller can route the
+ * user to enrollment ("enroll a passkey") instead of showing a raw error
+ * (issue #376 enrollment-first rollout).
+ */
+export class StepUpNoPasskeyError extends Error {
+	constructor(message = "No passkey is enrolled for this account.") {
+		super(message);
+		this.name = "StepUpNoPasskeyError";
+	}
+}
 
-interface RelayMessage {
-	source?: unknown;
-	type?: unknown;
-	nonce?: unknown;
-	token?: unknown;
-	error?: unknown;
+/** Map a WebAuthn ceremony failure to a user-presentable message. */
+function humanizeAssertionError(err: unknown): string {
+	const name = err instanceof Error ? err.name : "";
+	if (name === "NotAllowedError") {
+		return "Step-up was cancelled or timed out. Please try again.";
+	}
+	if (name === "SecurityError") {
+		return "Step-up could not run on this origin. Contact your administrator.";
+	}
+	const message = err instanceof Error ? err.message : "";
+	return message || "Step-up confirmation failed.";
 }
 
 /**
- * Opens the step-up popup and resolves with a one-shot confirmation token,
- * or rejects with a user-presentable Error (popup blocked, popup closed,
- * relay error, or timeout). Always cleans up the listener, poll, and popup.
+ * Run the WebAuthn step-up and resolve with a one-shot confirmation token, or
+ * reject with a user-presentable Error (no passkey, cancelled, or relay error).
  */
-export function requestStepUpConfirmation(
+export async function requestStepUpConfirmation(
 	payload: StepUpPayload,
-	opts: { timeoutMs?: number } = {},
+	_opts: { timeoutMs?: number } = {},
 ): Promise<string> {
-	return new Promise<string>((resolve, reject) => {
-		const popup = window.open(
-			RELAY_PATH,
-			"phishsoc-stepup",
-			"popup,width=480,height=680",
-		);
-		if (!popup) {
-			reject(
-				new Error(
-					"Step-up popup was blocked. Allow popups for this site and try sending again.",
-				),
-			);
-			return;
-		}
+	const request = {
+		mailboxId: payload.mailboxId,
+		tier: payload.tier,
+		payload: {
+			to: payload.to,
+			cc: payload.cc,
+			bcc: payload.bcc,
+			subject: payload.subject,
+			body: payload.body,
+			attachmentIds: payload.attachmentIds,
+		},
+	};
 
-		const nonce =
-			typeof crypto !== "undefined" && "randomUUID" in crypto
-				? crypto.randomUUID()
-				: String(Math.random()).slice(2);
-		const origin = window.location.origin;
-		let settled = false;
-		let poll: ReturnType<typeof setInterval>;
-		let timer: ReturnType<typeof setTimeout>;
+	const options = await api.webauthnAuthenticateOptions(request);
+	if (!options.allowCredentials || options.allowCredentials.length === 0) {
+		throw new StepUpNoPasskeyError();
+	}
 
-		const cleanup = () => {
-			window.removeEventListener("message", onMessage);
-			clearInterval(poll);
-			clearTimeout(timer);
-			try {
-				if (!popup.closed) popup.close();
-			} catch {
-				/* cross-origin during Access leg — ignore */
-			}
-		};
-		const finish = (fn: () => void) => {
-			if (settled) return;
-			settled = true;
-			cleanup();
-			fn();
-		};
+	let assertion;
+	try {
+		assertion = await startAuthentication({ optionsJSON: options });
+	} catch (err) {
+		throw new Error(humanizeAssertionError(err));
+	}
 
-		const onMessage = (event: MessageEvent) => {
-			if (event.origin !== origin) return;
-			const data = event.data as RelayMessage | null;
-			if (!data || data.source !== MSG_SOURCE) return;
-
-			if (data.type === "ready") {
-				// Relay page loaded post-auth; hand it the payload to POST.
-				popup.postMessage(
-					{ source: MSG_SOURCE, type: "payload", nonce, payload },
-					origin,
-				);
-				return;
-			}
-
-			// token / error must echo our nonce to be accepted.
-			if (data.nonce !== nonce) return;
-			if (data.type === "token" && typeof data.token === "string") {
-				finish(() => resolve(data.token as string));
-			} else if (data.type === "error") {
-				const message =
-					typeof data.error === "string" && data.error
-						? data.error
-						: "Step-up confirmation failed.";
-				finish(() => reject(new Error(message)));
-			}
-		};
-
-		window.addEventListener("message", onMessage);
-
-		poll = setInterval(() => {
-			if (popup.closed) {
-				finish(() =>
-					reject(
-						new Error(
-							"Step-up window was closed before confirmation completed.",
-						),
-					),
-				);
-			}
-		}, POLL_MS);
-
-		timer = setTimeout(() => {
-			finish(() =>
-				reject(new Error("Step-up confirmation timed out. Please try again.")),
-			);
-		}, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-	});
+	const { token } = await api.webauthnAuthenticateVerify({ ...request, assertion });
+	return token;
 }

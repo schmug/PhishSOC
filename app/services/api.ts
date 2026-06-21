@@ -3,6 +3,12 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import type {
+	AuthenticationResponseJSON,
+	PublicKeyCredentialCreationOptionsJSON,
+	PublicKeyCredentialRequestOptionsJSON,
+	RegistrationResponseJSON,
+} from "@simplewebauthn/browser";
+import type {
 	CatchallSummary,
 	DashboardSummary,
 	DomainListEntry,
@@ -19,6 +25,27 @@ import type {
 	Mailbox,
 	OrgOverview,
 } from "~/types";
+
+/** The send fields a WebAuthn step-up binds its challenge to (#376). */
+export interface WebauthnStepUpRequest {
+	mailboxId: string;
+	tier: 0 | 1 | 2;
+	payload: {
+		to: string | string[];
+		cc?: string | string[];
+		bcc?: string | string[];
+		subject: string;
+		body: string;
+		attachmentIds: string[];
+	};
+}
+
+/** register/options response: registration options, or a 2nd-key step-up gate. */
+export interface WebauthnRegisterOptionsResponse {
+	requiresStepUp?: boolean;
+	authentication?: PublicKeyCredentialRequestOptionsJSON;
+	registration?: PublicKeyCredentialCreationOptionsJSON;
+}
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -303,6 +330,20 @@ const api = {
 	// endpoint always resolves to a usable list.
 	getTextModels: (opts?: { signal?: AbortSignal }) =>
 		get<{ models: string[] }>("/api/v1/ai/text-models", { signal: opts?.signal }),
+
+	// WebAuthn step-up (#376). authenticate/* mints the per-send confirm token;
+	// register/* enrolls a passkey (interactive Access session only).
+	webauthnAuthenticateOptions: (body: WebauthnStepUpRequest) =>
+		post<PublicKeyCredentialRequestOptionsJSON>("/api/v1/webauthn/authenticate/options", body),
+	webauthnAuthenticateVerify: (body: WebauthnStepUpRequest & { assertion: AuthenticationResponseJSON }) =>
+		post<{ token: string }>("/api/v1/webauthn/authenticate/verify", body),
+	webauthnRegisterOptions: (body?: { stepUpAssertion?: AuthenticationResponseJSON }) =>
+		post<WebauthnRegisterOptionsResponse>("/api/v1/webauthn/register/options", body ?? {}),
+	webauthnRegisterVerify: (attestation: RegistrationResponseJSON) =>
+		post<{ verified: boolean; credentialId: string; firstKey: boolean }>(
+			"/api/v1/webauthn/register/verify",
+			{ attestation },
+		),
 };
 
 export default api;
