@@ -1,14 +1,17 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 /**
- * Acceptance tests for issue #263 (composer send-risk UI) and issue #285
- * (composer step-up confirm flow).
+ * Acceptance tests for issue #263 (composer send-risk UI) and the composer
+ * step-up confirm flow (#285, reworked for #376).
  *
  * #263: Tier 0/1/2 button labels, data-testid attributes, preflight
  *       network-failure fallback, and Tier-2 phrase confirmation.
- * #285: Tier 1 / Tier 2 popup + postMessage step-up relay, replay/expiry
- *       errors, popup-blocked / popup-closed graceful failure, and the
- *       x-confirmation-token resend on both composer surfaces.
+ * step-up: the composer calls requestStepUpConfirmation (now an in-page
+ *       WebAuthn assertion — its internals are unit-tested in
+ *       step-up-confirm.test.ts) and threads the returned one-shot token into
+ *       the send as x-confirmation-token. These tests mock the relay to assert
+ *       the composer's contract: correct payload in, token threaded out,
+ *       graceful failure, phrase gate first.
  */
 
 import { screen, waitFor } from "@testing-library/react";
@@ -40,6 +43,15 @@ vi.mock("~/services/api", async () => {
 		default: { ...actual.default, preflightEmail: vi.fn() },
 	};
 });
+
+// The step-up relay (WebAuthn assertion) is mocked here; its real internals are
+// covered by step-up-confirm.test.ts. The composer only owns calling it with
+// the exact send payload and threading the token (or failing gracefully).
+const stepUpMock = vi.fn();
+vi.mock("~/lib/step-up-confirm", () => ({
+	requestStepUpConfirmation: (...args: unknown[]) => stepUpMock(...args),
+	StepUpNoPasskeyError: class StepUpNoPasskeyError extends Error {},
+}));
 
 // Stable spies so we can assert the x-confirmation-token is threaded through.
 const sendEmailMutate = vi.fn().mockResolvedValue(undefined);
@@ -77,59 +89,9 @@ import ComposePanel from "~/components/ComposePanel";
 import ComposeEmail from "~/components/ComposeEmail";
 import api from "~/services/api";
 import { useUIStore } from "~/hooks/useUIStore";
+import { StepUpNoPasskeyError } from "~/lib/step-up-confirm";
 
 const preflightMock = api.preflightEmail as unknown as ReturnType<typeof vi.fn>;
-
-// ── popup harness ─────────────────────────────────────────────────────────────
-
-type FakePopup = {
-	closed: boolean;
-	close: ReturnType<typeof vi.fn>;
-	postMessage: ReturnType<typeof vi.fn<(message: unknown, targetOrigin: string) => void>>;
-	focus: ReturnType<typeof vi.fn>;
-};
-
-function makeFakePopup(): FakePopup {
-	const popup: FakePopup = {
-		closed: false,
-		close: vi.fn(() => {
-			popup.closed = true;
-		}),
-		postMessage: vi.fn<(message: unknown, targetOrigin: string) => void>(),
-		focus: vi.fn(),
-	};
-	return popup;
-}
-
-const ORIGIN = window.location.origin;
-
-/** Dispatch a message as if it came from the relay popup. */
-function postFromRelay(data: unknown) {
-	window.dispatchEvent(
-		new MessageEvent("message", { data, origin: ORIGIN }),
-	);
-}
-
-/**
- * Drive the relay popup to a successful token handshake. Returns the nonce
- * the opener generated (read off the payload it posted into the popup).
- */
-async function completeRelayHandshake(popup: FakePopup, token: string) {
-	// Opener registers its listener and waits for "ready".
-	postFromRelay({ source: "phishsoc-confirm", type: "ready" });
-	await waitFor(() => expect(popup.postMessage).toHaveBeenCalled());
-	const payloadMsg = popup.postMessage.mock.calls[0][0] as {
-		nonce: string;
-		payload: unknown;
-	};
-	postFromRelay({
-		source: "phishsoc-confirm",
-		type: "token",
-		nonce: payloadMsg.nonce,
-		token,
-	});
-	return payloadMsg;
-}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -173,6 +135,7 @@ describe("Composer send-risk UI (#263)", () => {
 		feedbackInfo.mockReset();
 		feedbackError.mockReset();
 		feedbackSuccess.mockReset();
+		stepUpMock.mockReset();
 		sendEmailMutate.mockReset().mockResolvedValue(undefined);
 		replyMutate.mockReset().mockResolvedValue(undefined);
 		forwardMutate.mockReset().mockResolvedValue(undefined);
@@ -297,19 +260,18 @@ describe("Composer send-risk UI (#263)", () => {
 			expect(
 				screen.getByText(/type.*vendor@external\.com.*to confirm.*before sending/i),
 			).toBeInTheDocument();
-			// Phrase gate must block before the popup ever opens.
+			// Phrase gate must block before the step-up ever runs.
+			expect(stepUpMock).not.toHaveBeenCalled();
 			expect(sendEmailMutate).not.toHaveBeenCalled();
 		});
 	});
 
-	// ── #285: Tier-1 step-up relay ────────────────────────────────────────────
+	// ── Tier-1 step-up: WebAuthn relay threads the token ──────────────────────
 
-	describe("Tier-1 step-up confirm relay (#285)", () => {
-		it("opens the confirm popup, relays the token, and sends with x-confirmation-token", async () => {
+	describe("Tier-1 step-up (WebAuthn)", () => {
+		it("runs the step-up with the exact send payload and sends with x-confirmation-token", async () => {
 			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
-			const popup = makeFakePopup();
-			const openSpy = vi.fn(() => popup as unknown as Window);
-			vi.stubGlobal("open", openSpy);
+			stepUpMock.mockResolvedValue("tok-tier1");
 
 			const user = userEvent.setup();
 			renderPanel();
@@ -317,49 +279,42 @@ describe("Composer send-risk UI (#263)", () => {
 			await user.type(screen.getByPlaceholderText(/email subject/i), "Hello");
 			await user.click(screen.getByTestId("send-button-tier1"));
 
-			await waitFor(() => expect(openSpy).toHaveBeenCalled());
-			expect(openSpy).toHaveBeenCalledWith(
-				"/api/v1/confirm",
-				expect.any(String),
-				expect.any(String),
-			);
-
-			const payloadMsg = await completeRelayHandshake(popup, "tok-tier1");
-
 			await waitFor(() => expect(sendEmailMutate).toHaveBeenCalled());
 			expect(sendEmailMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ mailboxId: "m1", confirmationToken: "tok-tier1" }),
+			);
+
+			// The step-up payload must carry the exact send fields so the server
+			// payloadHash binding holds.
+			expect(stepUpMock).toHaveBeenCalledWith(
 				expect.objectContaining({
+					tier: 1,
 					mailboxId: "m1",
-					confirmationToken: "tok-tier1",
+					to: "vendor@external.com",
+					subject: "Hello",
 				}),
 			);
-			// Payload posted into the popup must carry the exact send fields
-			// so the server payloadHash binding holds.
 			const sent = sendEmailMutate.mock.calls[0][0] as {
 				email: { to: unknown; subject: string; html: string };
 			};
-			const relayed = (payloadMsg.payload as {
+			const stepUpArg = stepUpMock.mock.calls[0][0] as {
 				to: unknown;
 				subject: string;
 				body: string;
-				attachmentIds: string[];
-			});
-			expect(relayed.to).toEqual(sent.email.to);
-			expect(relayed.subject).toBe(sent.email.subject);
-			expect(relayed.body).toBe(sent.email.html);
-			expect(relayed.attachmentIds).toEqual([]);
+			};
+			expect(stepUpArg.to).toEqual(sent.email.to);
+			expect(stepUpArg.subject).toBe(sent.email.subject);
+			expect(stepUpArg.body).toBe(sent.email.html);
 			expect(feedbackSuccess).toHaveBeenCalledWith("Email sent!");
 		});
 	});
 
-	// ── #285: Tier-2 step-up relay (phrase gate first) ───────────────────────
+	// ── Tier-2 step-up: phrase gate first, then WebAuthn relay ────────────────
 
-	describe("Tier-2 step-up confirm relay (#285)", () => {
-		it("enforces the phrase, then runs the popup flow and sends", async () => {
+	describe("Tier-2 step-up (WebAuthn)", () => {
+		it("enforces the phrase, then runs the step-up and sends", async () => {
 			preflightMock.mockResolvedValue({ tier: 2, reasons: ["BEC keyword"] });
-			const popup = makeFakePopup();
-			const openSpy = vi.fn(() => popup as unknown as Window);
-			vi.stubGlobal("open", openSpy);
+			stepUpMock.mockResolvedValue("tok-tier2");
 
 			const user = userEvent.setup();
 			renderPanel();
@@ -371,9 +326,7 @@ describe("Composer send-risk UI (#263)", () => {
 			);
 			await user.click(screen.getByTestId("send-button-tier2"));
 
-			await waitFor(() => expect(openSpy).toHaveBeenCalled());
-			await completeRelayHandshake(popup, "tok-tier2");
-
+			await waitFor(() => expect(stepUpMock).toHaveBeenCalled());
 			await waitFor(() => expect(sendEmailMutate).toHaveBeenCalled());
 			expect(sendEmailMutate).toHaveBeenCalledWith(
 				expect.objectContaining({ confirmationToken: "tok-tier2" }),
@@ -381,29 +334,18 @@ describe("Composer send-risk UI (#263)", () => {
 		});
 	});
 
-	// ── #285: error + edge handling ──────────────────────────────────────────
+	// ── step-up failure handling ──────────────────────────────────────────────
 
-	describe("Step-up relay error handling (#285)", () => {
-		it("surfaces a replayed/expired token error and does not send", async () => {
+	describe("Step-up failure handling", () => {
+		it("surfaces a step-up error, does not send, and re-enables the button", async () => {
 			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
-			const popup = makeFakePopup();
-			vi.stubGlobal("open", vi.fn(() => popup as unknown as Window));
+			stepUpMock.mockRejectedValue(new Error("invalid or expired confirmation token"));
 
 			const user = userEvent.setup();
 			renderPanel();
 			await typeToAndWaitForPreflight(user, "vendor@external.com", "send-button-tier1");
 			await user.type(screen.getByPlaceholderText(/email subject/i), "Hello");
 			await user.click(screen.getByTestId("send-button-tier1"));
-
-			postFromRelay({ source: "phishsoc-confirm", type: "ready" });
-			await waitFor(() => expect(popup.postMessage).toHaveBeenCalled());
-			const nonce = (popup.postMessage.mock.calls[0][0] as { nonce: string }).nonce;
-			postFromRelay({
-				source: "phishsoc-confirm",
-				type: "error",
-				nonce,
-				error: "invalid or expired confirmation token",
-			});
 
 			await waitFor(() =>
 				expect(feedbackError).toHaveBeenCalledWith(
@@ -411,15 +353,14 @@ describe("Composer send-risk UI (#263)", () => {
 				),
 			);
 			expect(sendEmailMutate).not.toHaveBeenCalled();
-			// isSending must not stick — the send button is interactive again.
 			await waitFor(() =>
 				expect(screen.getByTestId("send-button-tier1")).not.toBeDisabled(),
 			);
 		});
 
-		it("fails gracefully when the popup is blocked (window.open returns null)", async () => {
+		it("guides the user to enroll a passkey when none is enrolled", async () => {
 			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
-			vi.stubGlobal("open", vi.fn(() => null));
+			stepUpMock.mockRejectedValue(new StepUpNoPasskeyError());
 
 			const user = userEvent.setup();
 			renderPanel();
@@ -429,48 +370,19 @@ describe("Composer send-risk UI (#263)", () => {
 
 			await waitFor(() =>
 				expect(feedbackError).toHaveBeenCalledWith(
-					expect.stringMatching(/popup|blocked/i),
+					expect.stringMatching(/no passkey enrolled.*settings/i),
 				),
 			);
 			expect(sendEmailMutate).not.toHaveBeenCalled();
-			await waitFor(() =>
-				expect(screen.getByTestId("send-button-tier1")).not.toBeDisabled(),
-			);
-		});
-
-		it("fails gracefully when the popup is closed before completing auth", async () => {
-			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
-			const popup = makeFakePopup();
-			popup.closed = true; // closed/blocked-as-window immediately
-			vi.stubGlobal("open", vi.fn(() => popup as unknown as Window));
-
-			const user = userEvent.setup();
-			renderPanel();
-			await typeToAndWaitForPreflight(user, "vendor@external.com", "send-button-tier1");
-			await user.type(screen.getByPlaceholderText(/email subject/i), "Hello");
-			await user.click(screen.getByTestId("send-button-tier1"));
-
-			await waitFor(
-				() =>
-					expect(feedbackError).toHaveBeenCalledWith(
-						expect.stringMatching(/closed/i),
-					),
-				{ timeout: 3000 },
-			);
-			expect(sendEmailMutate).not.toHaveBeenCalled();
-			await waitFor(() =>
-				expect(screen.getByTestId("send-button-tier1")).not.toBeDisabled(),
-			);
 		});
 	});
 
-	// ── #285: second render path (modal) ─────────────────────────────────────
+	// ── second render path (modal) ────────────────────────────────────────────
 
-	describe("ComposeEmail modal render path (#285)", () => {
+	describe("ComposeEmail modal render path", () => {
 		it("runs the same step-up relay from the modal surface", async () => {
 			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
-			const popup = makeFakePopup();
-			vi.stubGlobal("open", vi.fn(() => popup as unknown as Window));
+			stepUpMock.mockResolvedValue("tok-modal");
 
 			const user = userEvent.setup();
 			renderModal();
@@ -478,7 +390,6 @@ describe("Composer send-risk UI (#263)", () => {
 			await user.type(screen.getByPlaceholderText(/email subject/i), "Hello");
 			await user.click(screen.getByTestId("send-button-tier1"));
 
-			await completeRelayHandshake(popup, "tok-modal");
 			await waitFor(() => expect(sendEmailMutate).toHaveBeenCalled());
 			expect(sendEmailMutate).toHaveBeenCalledWith(
 				expect.objectContaining({ confirmationToken: "tok-modal" }),

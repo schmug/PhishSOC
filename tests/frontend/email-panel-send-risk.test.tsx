@@ -1,10 +1,12 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 /**
- * Acceptance tests for issue #314 (EmailPanel draft-send step-up wiring).
+ * Acceptance tests for issue #314 (EmailPanel draft-send step-up wiring),
+ * reworked for #376 (WebAuthn step-up).
  *
- * Covers tier-0 (no prompt) and tier ≥ 1 (step-up popup + token relay)
- * paths through `handleSendDraft`, mirroring compose-send-risk.test.tsx.
+ * Covers tier-0 (no prompt) and tier ≥ 1 (step-up → token relay) paths through
+ * `handleSendDraft`. The step-up relay (now an in-page WebAuthn assertion) is
+ * mocked here; its internals live in step-up-confirm.test.ts.
  */
 
 import { screen, waitFor } from "@testing-library/react";
@@ -41,6 +43,12 @@ vi.mock("~/services/api", async () => {
 		},
 	};
 });
+
+const stepUpMock = vi.fn();
+vi.mock("~/lib/step-up-confirm", () => ({
+	requestStepUpConfirmation: (...args: unknown[]) => stepUpMock(...args),
+	StepUpNoPasskeyError: class StepUpNoPasskeyError extends Error {},
+}));
 
 // Stable spies so we can assert confirmationToken is threaded through.
 const sendEmailMutate = vi.fn().mockResolvedValue(undefined);
@@ -109,39 +117,6 @@ const DRAFT_EMAIL: Email = {
 	starred: false,
 };
 
-// ── popup harness ─────────────────────────────────────────────────────────────
-
-type FakePopup = {
-	closed: boolean;
-	close: ReturnType<typeof vi.fn>;
-	postMessage: ReturnType<typeof vi.fn<(message: unknown, targetOrigin: string) => void>>;
-	focus: ReturnType<typeof vi.fn>;
-};
-
-function makeFakePopup(): FakePopup {
-	const popup: FakePopup = {
-		closed: false,
-		close: vi.fn(() => { popup.closed = true; }),
-		postMessage: vi.fn<(message: unknown, targetOrigin: string) => void>(),
-		focus: vi.fn(),
-	};
-	return popup;
-}
-
-const ORIGIN = window.location.origin;
-
-function postFromRelay(data: unknown) {
-	window.dispatchEvent(new MessageEvent("message", { data, origin: ORIGIN }));
-}
-
-async function completeRelayHandshake(popup: FakePopup, token: string) {
-	postFromRelay({ source: "phishsoc-confirm", type: "ready" });
-	await waitFor(() => expect(popup.postMessage).toHaveBeenCalled());
-	const payloadMsg = popup.postMessage.mock.calls[0][0] as { nonce: string; payload: unknown };
-	postFromRelay({ source: "phishsoc-confirm", type: "token", nonce: payloadMsg.nonce, token });
-	return payloadMsg;
-}
-
 // ── render helper ─────────────────────────────────────────────────────────────
 
 function renderDraftPanel() {
@@ -161,6 +136,7 @@ describe("EmailPanel draft send-risk (#314)", () => {
 		feedbackInfo.mockReset();
 		feedbackError.mockReset();
 		feedbackSuccess.mockReset();
+		stepUpMock.mockReset();
 		sendEmailMutate.mockReset().mockResolvedValue(undefined);
 		replyMutate.mockReset().mockResolvedValue(undefined);
 		deleteEmailMutate.mockReset().mockResolvedValue(undefined);
@@ -189,6 +165,7 @@ describe("EmailPanel draft send-risk (#314)", () => {
 					confirmationToken: undefined,
 				}),
 			);
+			expect(stepUpMock).not.toHaveBeenCalled();
 			expect(feedbackSuccess).toHaveBeenCalledWith("Email sent!");
 			// closePanel must be called since we're in the draft folder.
 			expect(closePanelMock).toHaveBeenCalled();
@@ -208,28 +185,17 @@ describe("EmailPanel draft send-risk (#314)", () => {
 		});
 	});
 
-	// ── Tier ≥ 1: step-up popup + token relay ────────────────────────────────
+	// ── Tier ≥ 1: step-up (WebAuthn) → token relay ───────────────────────────
 
 	describe("Tier 1 send", () => {
-		it("opens the confirm popup, relays the token, and sends with confirmationToken", async () => {
+		it("runs the step-up with the exact payload and sends with confirmationToken", async () => {
 			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
-			const popup = makeFakePopup();
-			const openSpy = vi.fn(() => popup as unknown as Window);
-			vi.stubGlobal("open", openSpy);
+			stepUpMock.mockResolvedValue("tok-draft-tier1");
 
 			const user = userEvent.setup();
 			renderDraftPanel();
 
 			await user.click(screen.getByRole("button", { name: /^send$/i }));
-
-			await waitFor(() => expect(openSpy).toHaveBeenCalled());
-			expect(openSpy).toHaveBeenCalledWith(
-				"/api/v1/confirm",
-				expect.any(String),
-				expect.any(String),
-			);
-
-			const payloadMsg = await completeRelayHandshake(popup, "tok-draft-tier1");
 
 			await waitFor(() => expect(sendEmailMutate).toHaveBeenCalled());
 			expect(sendEmailMutate).toHaveBeenCalledWith(
@@ -239,64 +205,34 @@ describe("EmailPanel draft send-risk (#314)", () => {
 				}),
 			);
 
-			// The payload posted into the popup must match the exact wire values
-			// so the server payloadHash binding holds.
+			// The step-up payload must match the exact wire values so the server
+			// payloadHash binding holds.
 			const sent = sendEmailMutate.mock.calls[0][0] as {
 				email: { to: unknown; subject: string; html: string };
 			};
-			const relayed = payloadMsg.payload as {
+			const stepUpArg = stepUpMock.mock.calls[0][0] as {
 				to: unknown;
 				subject: string;
 				body: string;
-				attachmentIds: string[];
 			};
-			expect(relayed.to).toEqual(sent.email.to);
-			expect(relayed.subject).toBe(sent.email.subject);
-			expect(relayed.body).toBe(sent.email.html);
-			expect(relayed.attachmentIds).toEqual([]);
+			expect(stepUpArg.to).toEqual(sent.email.to);
+			expect(stepUpArg.subject).toBe(sent.email.subject);
+			expect(stepUpArg.body).toBe(sent.email.html);
 			expect(feedbackSuccess).toHaveBeenCalledWith("Email sent!");
 		});
 
-		it("surfaces a relay error and does not send", async () => {
+		it("surfaces a step-up error and does not send", async () => {
 			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
-			const popup = makeFakePopup();
-			vi.stubGlobal("open", vi.fn(() => popup as unknown as Window));
+			stepUpMock.mockRejectedValue(new Error("invalid or expired confirmation token"));
 
 			const user = userEvent.setup();
 			renderDraftPanel();
 
 			await user.click(screen.getByRole("button", { name: /^send$/i }));
-
-			postFromRelay({ source: "phishsoc-confirm", type: "ready" });
-			await waitFor(() => expect(popup.postMessage).toHaveBeenCalled());
-			const nonce = (popup.postMessage.mock.calls[0][0] as { nonce: string }).nonce;
-			postFromRelay({
-				source: "phishsoc-confirm",
-				type: "error",
-				nonce,
-				error: "invalid or expired confirmation token",
-			});
 
 			await waitFor(() =>
 				expect(feedbackError).toHaveBeenCalledWith(
 					expect.stringMatching(/invalid or expired confirmation token/i),
-				),
-			);
-			expect(sendEmailMutate).not.toHaveBeenCalled();
-		});
-
-		it("fails gracefully when the popup is blocked", async () => {
-			preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
-			vi.stubGlobal("open", vi.fn(() => null));
-
-			const user = userEvent.setup();
-			renderDraftPanel();
-
-			await user.click(screen.getByRole("button", { name: /^send$/i }));
-
-			await waitFor(() =>
-				expect(feedbackError).toHaveBeenCalledWith(
-					expect.stringMatching(/popup|blocked/i),
 				),
 			);
 			expect(sendEmailMutate).not.toHaveBeenCalled();

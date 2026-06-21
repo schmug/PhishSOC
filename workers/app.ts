@@ -10,8 +10,12 @@ import { app as apiApp, receiveEmail, receiveCatchall } from "./index";
 import { normalizeInbound } from "./providers/cf-routing";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
-import { confirmRoute } from "./routes/confirm";
+import { webauthnRoute } from "./routes/webauthn";
 import { callerAllowedForMailbox, emailAgentMailboxIdFromPath } from "./lib/mailbox-acl";
+import {
+	identityFromAccessPayload,
+	type AccessVariables,
+} from "./lib/access-identity";
 import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
@@ -46,7 +50,7 @@ function getAccessUrls(teamDomain: string) {
 }
 
 // Main app that wraps the API and adds React Router fallback
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<{ Bindings: Env; Variables: AccessVariables }>();
 
 // Global security headers
 app.use("*", async (c, next) => {
@@ -57,15 +61,12 @@ app.use("*", async (c, next) => {
 	c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 });
 
-// Step-up confirm endpoint — mounted BEFORE the CF Access middleware so that
-// the step-up JWT (audience = STEP_UP_AUD) is not rejected by the main-app
-// POLICY_AUD check. The route validates the step-up JWT itself.
-app.route("/api/v1/confirm", confirmRoute);
-
 // Cloudflare Access JWT validation middleware (production only)
 app.use("*", async (c, next) => {
-	// Skip validation in development
+	// Skip validation in development, but seed a synthetic interactive identity
+	// so the WebAuthn step-up routes (#376) are exercisable under `wrangler dev`.
 	if (import.meta.env.DEV) {
+		c.set("accessIdentity", { sub: "dev-user", email: "dev@localhost" });
 		return next();
 	}
 
@@ -87,10 +88,15 @@ app.use("*", async (c, next) => {
 	try {
 		const { issuer, certsUrl } = getAccessUrls(TEAM_DOMAIN);
 		const JWKS = createRemoteJWKSet(certsUrl);
-		await jwtVerify(token, JWKS, {
+		const { payload } = await jwtVerify(token, JWKS, {
 			issuer,
 			audience: POLICY_AUD,
 		});
+		// Carry the verified identity (sub + optional email) downstream for the
+		// WebAuthn step-up routes (#376). email is present only for interactive
+		// SSO sessions, so its absence marks a service-token / MCP caller.
+		const identity = identityFromAccessPayload(payload);
+		if (identity) c.set("accessIdentity", identity);
 	} catch {
 		return c.text("Invalid or expired Access token", 403);
 	}
@@ -109,6 +115,12 @@ app.all("/mcp", async (c) => {
 app.all("/mcp/*", async (c) => {
 	return mcpHandler.fetch(c.req.raw, c.env, c.executionCtx as ExecutionContext);
 });
+
+// WebAuthn step-up (issue #376). Mounted AFTER the main Access middleware so
+// c.var.accessIdentity (verified POLICY_AUD sub/email) is available for the
+// identity binding and interactive-only enrollment gates. Unlike the legacy
+// /api/v1/confirm relay, this needs no second Access app.
+app.route("/api/v1/webauthn", webauthnRoute);
 
 // Mount the API routes
 app.route("/", apiApp);

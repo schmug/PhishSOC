@@ -9,9 +9,8 @@
  *  4. applyYaraSignal never downgrades an existing score
  *
  * The callback route is tested by importing `yaramailCallbackRoute` and
- * mounting it in a lightweight Hono app — the same pattern used by
- * tests/routes/confirm.test.ts. The full workers/index.ts graph is never
- * imported to keep test startup fast.
+ * mounting it in a lightweight Hono app — the full workers/index.ts graph is
+ * never imported, to keep test startup fast.
  *
  * CodeQL URL rule: any URL routing in this file uses `new URL(url).hostname`,
  * never `url.startsWith` or `url.includes`.

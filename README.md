@@ -112,7 +112,7 @@ To exercise both inbound and outbound on independent domains (useful for validat
 - [Workers AI](https://developers.cloudflare.com/workers-ai/) enabled (for the agent)
 - [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) configured for deployed/shared environments (required in production)
 
-Any user who passes the shared Cloudflare Access policy can access all mailboxes in this app by design. This includes the MCP server at `/mcp` -- external AI tools (Claude Code, Cursor, etc.) connected via MCP can operate on any mailbox by passing a `mailboxId` parameter. There is no per-mailbox authorization; the Cloudflare Access policy is the single trust boundary.
+Cloudflare Access is the primary trust boundary: any user who passes the shared Access policy is admitted to the app, including the MCP server at `/mcp` -- external AI tools (Claude Code, Cursor, etc.) connected via MCP. Two mechanisms narrow it further: per-mailbox ACLs scope which teammates can act on a given mailbox (#27/#295), and an app-layer **WebAuthn step-up** (#376) demands a per-send, payload-bound passkey assertion -- bound to the Access identity -- before a risky (Tier >= 1) message can be sent. See [docs/step-up-auth.md](docs/step-up-auth.md).
 
 ## Security
 
