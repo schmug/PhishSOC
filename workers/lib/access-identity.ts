@@ -32,9 +32,13 @@ export function identityFromAccessPayload(payload: JWTPayload): AccessIdentity |
 	return email ? { sub, email } : { sub };
 }
 
-/** Read the Access identity set by upstream middleware, or null if unset. */
-export function getAccessIdentity(
-	c: Context<{ Variables: AccessVariables }>,
+/**
+ * Read the Access identity set by upstream middleware, or null if unset.
+ * Generic over the full Hono env so any route whose Variables include
+ * `accessIdentity` (regardless of its Bindings/path params) can call it.
+ */
+export function getAccessIdentity<E extends { Variables: AccessVariables }>(
+	c: Context<E>,
 ): AccessIdentity | null {
 	return c.get("accessIdentity") ?? null;
 }

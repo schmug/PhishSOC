@@ -11,6 +11,7 @@ import { normalizeInbound } from "./providers/cf-routing";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
 import { confirmRoute } from "./routes/confirm";
+import { webauthnRoute } from "./routes/webauthn";
 import { callerAllowedForMailbox, emailAgentMailboxIdFromPath } from "./lib/mailbox-acl";
 import {
 	identityFromAccessPayload,
@@ -120,6 +121,12 @@ app.all("/mcp", async (c) => {
 app.all("/mcp/*", async (c) => {
 	return mcpHandler.fetch(c.req.raw, c.env, c.executionCtx as ExecutionContext);
 });
+
+// WebAuthn step-up (issue #376). Mounted AFTER the main Access middleware so
+// c.var.accessIdentity (verified POLICY_AUD sub/email) is available for the
+// identity binding and interactive-only enrollment gates. Unlike the legacy
+// /api/v1/confirm relay, this needs no second Access app.
+app.route("/api/v1/webauthn", webauthnRoute);
 
 // Mount the API routes
 app.route("/", apiApp);
