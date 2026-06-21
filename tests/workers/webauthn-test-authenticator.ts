@@ -52,16 +52,36 @@ function rawSignatureToDer(raw: Uint8Array): Uint8Array {
 	return new Uint8Array([0x30, body.length, ...body]);
 }
 
-/** authenticatorData = rpIdHash(32) | flags(1) | signCount(4 BE). */
-function authenticatorData(rpIdHash: Uint8Array, flags: number, counter: number): Uint8Array {
-	const ad = new Uint8Array(37);
+/** authenticatorData = rpIdHash(32) | flags(1) | signCount(4 BE) | [extra]. */
+function authenticatorData(
+	rpIdHash: Uint8Array,
+	flags: number,
+	counter: number,
+	extra: Uint8Array = new Uint8Array(0),
+): Uint8Array {
+	const ad = new Uint8Array(37 + extra.length);
 	ad.set(rpIdHash, 0);
 	ad[32] = flags;
 	ad[33] = (counter >>> 24) & 0xff;
 	ad[34] = (counter >>> 16) & 0xff;
 	ad[35] = (counter >>> 8) & 0xff;
 	ad[36] = counter & 0xff;
+	ad.set(extra, 37);
 	return ad;
+}
+
+/** Minimal CBOR text-string (assumes length < 24). */
+function cborText(s: string): number[] {
+	const b = Array.from(new TextEncoder().encode(s));
+	return [0x60 + b.length, ...b];
+}
+
+/** Minimal CBOR byte-string (handles length < 65536). */
+function cborBstr(bytes: Uint8Array): number[] {
+	const b = Array.from(bytes);
+	if (b.length < 24) return [0x40 + b.length, ...b];
+	if (b.length < 256) return [0x58, b.length, ...b];
+	return [0x59, (b.length >> 8) & 0xff, b.length & 0xff, ...b];
 }
 
 export interface TestAuthenticator {
@@ -74,6 +94,14 @@ export interface TestAuthenticator {
 		origin: string;
 		counter: number;
 		/** Default true (UV flag set). Pass false to simulate a UV-absent key. */
+		userVerified?: boolean;
+	}): Promise<Record<string, unknown>>;
+	/** Produce a RegistrationResponseJSON (fmt: "none") for the given challenge. */
+	register(params: {
+		challenge: string;
+		rpId: string;
+		origin: string;
+		signCount?: number;
 		userVerified?: boolean;
 	}): Promise<Record<string, unknown>>;
 }
@@ -125,6 +153,60 @@ export async function createTestAuthenticator(
 					clientDataJSON: b64urlEncode(clientDataJSON),
 					signature: b64urlEncode(rawSignatureToDer(rawSig)),
 					userHandle: null,
+				},
+			};
+		},
+		async register(params) {
+			const UP = 0x01;
+			const UV = 0x04;
+			const AT = 0x40; // attested credential data present (registration)
+			const flags = AT | UP | (params.userVerified === false ? 0 : UV);
+			const rpIdHash = await sha256(new TextEncoder().encode(params.rpId));
+			const credIdBytes = b64urlDecode(credentialId);
+			const aaguid = new Uint8Array(16); // zero AAGUID (pinning deferred, #506)
+			const attestedCredentialData = new Uint8Array(
+				16 + 2 + credIdBytes.length + cosePublicKey.length,
+			);
+			attestedCredentialData.set(aaguid, 0);
+			attestedCredentialData[16] = (credIdBytes.length >> 8) & 0xff;
+			attestedCredentialData[17] = credIdBytes.length & 0xff;
+			attestedCredentialData.set(credIdBytes, 18);
+			attestedCredentialData.set(cosePublicKey, 18 + credIdBytes.length);
+
+			const authData = authenticatorData(
+				rpIdHash,
+				flags,
+				params.signCount ?? 0,
+				attestedCredentialData,
+			);
+			const attestationObject = new Uint8Array([
+				0xa3,
+				...cborText("fmt"),
+				...cborText("none"),
+				...cborText("attStmt"),
+				0xa0,
+				...cborText("authData"),
+				...cborBstr(authData),
+			]);
+			const clientDataJSON = new TextEncoder().encode(
+				JSON.stringify({
+					type: "webauthn.create",
+					challenge: params.challenge,
+					origin: params.origin,
+					crossOrigin: false,
+				}),
+			);
+			return {
+				id: credentialId,
+				rawId: credentialId,
+				type: "public-key",
+				clientExtensionResults: {},
+				response: {
+					clientDataJSON: b64urlEncode(clientDataJSON),
+					attestationObject: b64urlEncode(attestationObject),
+					authenticatorData: b64urlEncode(authData),
+					transports: ["internal"],
+					publicKeyAlgorithm: -7,
 				},
 			};
 		},

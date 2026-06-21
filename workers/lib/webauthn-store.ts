@@ -7,7 +7,9 @@
 // get-then-delete, which is racy and replayable (the bug #461 fixed for the
 // confirm-token jti). Schema: migrations/webauthn/0001_init.sql.
 
-export type ChallengeType = "registration" | "authentication";
+// "authentication" — per-send step-up; "registration" — enroll a credential;
+// "register-stepup" — existing-key proof gating a 2nd+ enrollment (#376 M4).
+export type ChallengeType = "registration" | "authentication" | "register-stepup";
 
 export type StoredCredential = {
 	credentialId: string;
