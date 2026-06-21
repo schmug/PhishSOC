@@ -32,6 +32,17 @@ export interface Env extends Cloudflare.Env {
 	 */
 	YARAMAIL_CALLBACK_SECRET?: string;
 	/**
+	 * Optional operator webhook for out-of-band security alerts (issue #376).
+	 * When set, a first-passkey (TOFU) enrollment in `register/verify` POSTs the
+	 * `webauthn.first_key_registered` audit payload here so the highest-risk
+	 * step-up window is actively detectable, not just logged. Dispatch is
+	 * fire-and-forget — a failed send never blocks or fails enrollment. When
+	 * unset, the dispatch no-ops (the `console.log` audit line still fires).
+	 * Set with `wrangler secret put SECURITY_ALERT_WEBHOOK_URL` (kept out of
+	 * `wrangler.jsonc` vars so it doesn't widen the generated `Cloudflare.Env`).
+	 */
+	SECURITY_ALERT_WEBHOOK_URL?: string;
+	/**
 	 * Comma-separated hostname allowlist for the community-hub URL
 	 * (GHSA-jfj6-w954-96vg f29). A `HUB_SECRET_*` API key is only resolved
 	 * and sent when `intel.hub.url` is https AND its hostname is on this

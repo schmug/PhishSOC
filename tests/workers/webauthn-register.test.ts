@@ -32,7 +32,7 @@ function makeKv() {
 	};
 }
 
-function makeApp(identity: AccessIdentity | null) {
+function makeApp(identity: AccessIdentity | null, opts: { alertWebhookUrl?: string } = {}) {
 	const app = new Hono();
 	app.use("*", async (c, next) => {
 		if (identity) c.set("accessIdentity", identity);
@@ -45,16 +45,32 @@ function makeApp(identity: AccessIdentity | null) {
 		RP_ORIGIN,
 		CONFIRMATION_TOKEN_SECRET: SECRET,
 		BLOOM_KV: makeKv(),
+		// Only present when a test opts in; absent → the first-key alert dispatch
+		// no-ops (no webhook configured) exactly as it does on an unconfigured deploy.
+		...(opts.alertWebhookUrl ? { SECURITY_ALERT_WEBHOOK_URL: opts.alertWebhookUrl } : {}),
 	};
+	// Provide a real ExecutionContext so the handler's fire-and-forget
+	// `ctx.waitUntil(...)` dispatch exercises the production path. Scheduled
+	// promises are collected so a test can await them before asserting.
+	const scheduled: Promise<unknown>[] = [];
+	const executionCtx = {
+		waitUntil: (p: Promise<unknown>) => {
+			scheduled.push(Promise.resolve(p));
+		},
+		passThroughOnException: () => {},
+	} as unknown as ExecutionContext;
 	const call = (path: string, body: unknown) =>
 		app.request(
 			path,
 			{ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
 			env,
+			executionCtx,
 		);
 	return {
 		regOptions: (body: unknown = {}) => call("/api/v1/webauthn/register/options", body),
 		regVerify: (body: unknown) => call("/api/v1/webauthn/register/verify", body),
+		/** Await every promise the handler scheduled via `ctx.waitUntil(...)`. */
+		settleAlerts: () => Promise.allSettled(scheduled),
 	};
 }
 
@@ -209,5 +225,143 @@ describe("register — adding a 2nd key requires an existing-key assertion", () 
 		expect(creds.map((c) => c.credentialId).sort()).toEqual(
 			[existing.credentialId, newKey.credentialId].sort(),
 		);
+	});
+});
+
+describe("register — first-key operator notification (TOFU alert)", () => {
+	// A surreptitious first-key registration is the highest-risk window: the
+	// console.log audit line is forensic, not an alert. register/verify dispatches
+	// the same audit payload to SECURITY_ALERT_WEBHOOK_URL — fire-and-forget, so a
+	// down/slow/throwing webhook can never block or fail the enrollment.
+	const WEBHOOK_URL = "https://soc-alerts.example.test/first-key";
+	const WEBHOOK_HOST = "soc-alerts.example.test";
+
+	// Hostname is PARSED (never substring-matched) per the CodeQL gate — both in
+	// the mock dispatcher and in the assertions below.
+	function hostOf(input: unknown): string | null {
+		const url = input instanceof Request ? input.url : typeof input === "string" ? input : String(input);
+		try {
+			return new URL(url).hostname;
+		} catch {
+			return null;
+		}
+	}
+
+	/** Spy on fetch; route only the webhook host to `handler`, pass everything
+	 *  else through (the register flow itself makes no outbound requests). */
+	function spyWebhookFetch(handler: (init?: RequestInit) => Response) {
+		const realFetch = globalThis.fetch;
+		return vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+				if (hostOf(input) === WEBHOOK_HOST) return handler(init);
+				return realFetch(input as RequestInfo | URL, init);
+			});
+	}
+
+	function webhookCalls(spy: ReturnType<typeof spyWebhookFetch>) {
+		return spy.mock.calls.filter((c) => hostOf(c[0]) === WEBHOOK_HOST);
+	}
+
+	async function enrollFirstKey(app: ReturnType<typeof makeApp>) {
+		const auth = await createTestAuthenticator();
+		const opt = (await (await app.regOptions()).json()) as {
+			registration: { challenge: string };
+		};
+		const attestation = await auth.register({
+			challenge: opt.registration.challenge,
+			rpId: RP_ID,
+			origin: RP_ORIGIN,
+		});
+		return app.regVerify({ attestation });
+	}
+
+	it("dispatches the notification with the audit payload on first-key registration", async () => {
+		const app = makeApp({ sub: "notify-first", email: "op@example.com" }, { alertWebhookUrl: WEBHOOK_URL });
+		const fetchSpy = spyWebhookFetch(() => new Response(null, { status: 200 }));
+
+		const verRes = await enrollFirstKey(app);
+		await app.settleAlerts();
+
+		expect(verRes.status).toBe(200);
+		const ver = (await verRes.json()) as { verified: boolean; firstKey: boolean };
+		expect(ver.verified).toBe(true);
+		expect(ver.firstKey).toBe(true);
+
+		const calls = webhookCalls(fetchSpy);
+		expect(calls).toHaveLength(1);
+		// The notification carries the same structured audit payload as the log line.
+		const body = JSON.parse(String((calls[0][1] as RequestInit).body)) as {
+			event: string;
+			sub: string;
+			email: string;
+		};
+		expect(body.event).toBe("webauthn.first_key_registered");
+		expect(body.sub).toBe("notify-first");
+		expect(body.email).toBe("op@example.com");
+	});
+
+	it("does NOT dispatch the notification when adding a 2nd key", async () => {
+		const sub = "notify-2nd";
+		const existing = await createTestAuthenticator();
+		await createCredential(testEnv.WEBAUTHN_DB, {
+			credentialId: existing.credentialId,
+			userSub: sub,
+			publicKey: existing.cosePublicKey,
+			counter: 0,
+			transports: ["internal"],
+			aaguid: null,
+			createdAt: 1_700_000_000_000,
+		});
+		const app = makeApp({ sub, email: "op@example.com" }, { alertWebhookUrl: WEBHOOK_URL });
+		const fetchSpy = spyWebhookFetch(() => new Response(null, { status: 200 }));
+
+		// Full add-2nd-key handshake: step-up assertion → registration options → store.
+		const phase1 = (await (await app.regOptions()).json()) as {
+			authentication: { challenge: string };
+		};
+		const stepUpAssertion = await existing.assert({
+			challenge: phase1.authentication.challenge,
+			rpId: RP_ID,
+			origin: RP_ORIGIN,
+			counter: 1,
+		});
+		const phase2 = (await (await app.regOptions({ stepUpAssertion })).json()) as {
+			registration: { challenge: string };
+		};
+		const newKey = await createTestAuthenticator();
+		const attestation = await newKey.register({
+			challenge: phase2.registration.challenge,
+			rpId: RP_ID,
+			origin: RP_ORIGIN,
+		});
+		const verRes = await app.regVerify({ attestation });
+		await app.settleAlerts();
+
+		expect(verRes.status).toBe(200);
+		const ver = (await verRes.json()) as { firstKey: boolean };
+		expect(ver.firstKey).toBe(false);
+		expect(webhookCalls(fetchSpy)).toHaveLength(0);
+	});
+
+	it("still completes enrollment (200, credential stored) when the notifier rejects", async () => {
+		const sub = "notify-throws";
+		const app = makeApp({ sub, email: "op@example.com" }, { alertWebhookUrl: WEBHOOK_URL });
+		const fetchSpy = spyWebhookFetch(() => {
+			throw new Error("alert webhook unreachable");
+		});
+
+		const verRes = await enrollFirstKey(app);
+		await app.settleAlerts();
+
+		expect(verRes.status).toBe(200);
+		const ver = (await verRes.json()) as { verified: boolean; firstKey: boolean };
+		expect(ver.verified).toBe(true);
+		expect(ver.firstKey).toBe(true);
+		// The dispatch was attempted (and its rejection swallowed) — enrollment held.
+		expect(webhookCalls(fetchSpy)).toHaveLength(1);
+
+		const creds = await listBySub(testEnv.WEBAUTHN_DB, sub);
+		expect(creds).toHaveLength(1);
 	});
 });

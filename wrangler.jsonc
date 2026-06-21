@@ -22,6 +22,12 @@
 		// hostname or every assertion is rejected.
 		"RP_ID": "inbox.cortech.online",
 		"RP_ORIGIN": "https://inbox.cortech.online"
+		// Operator security-alert webhook for first-passkey (TOFU) enrollment
+		// (issue #376) is set as a SECRET, not a var here — a literal var would
+		// widen the generated `Cloudflare.Env` and break `Env extends Cloudflare.Env`
+		// (see workers/types.ts). Configure with:
+		//   wrangler secret put SECURITY_ALERT_WEBHOOK_URL
+		// When unset, the first-key alert dispatch no-ops (the audit log still fires).
 	},
 	"send_email": [
 		{
