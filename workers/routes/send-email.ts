@@ -14,7 +14,7 @@ import {
 	generateMessageId,
 	buildThreadingHeaders,
 } from "../lib/email-helpers";
-import { SendEmailRequestSchema } from "../lib/schemas";
+import { parseSendEmailRequest } from "../lib/schemas";
 import { classifySend } from "../security/send-risk";
 import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
 import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
@@ -27,8 +27,9 @@ sendEmailRoutes.use("*", requireMailbox);
 
 sendEmailRoutes.post("/emails/preflight", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
-	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, subject, html, text, attachments, draft_id } = body;
+	const parsed = parseSendEmailRequest(await c.req.json().catch(() => null));
+	if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+	const { to, cc, bcc, subject, html, text, attachments, draft_id } = parsed.data;
 	const createdBy = await resolveCreatedByFromDraft(c.var.mailboxStub, draft_id);
 	const risk = classifySend({
 		to, cc, bcc, subject,
@@ -42,8 +43,9 @@ sendEmailRoutes.post("/emails/preflight", async (c) => {
 
 sendEmailRoutes.post("/emails", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
-	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments, in_reply_to, references, thread_id, draft_id } = body;
+	const parsed = parseSendEmailRequest(await c.req.json().catch(() => null));
+	if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+	const { to, cc, bcc, from, subject, html, text, attachments, in_reply_to, references, thread_id, draft_id } = parsed.data;
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {

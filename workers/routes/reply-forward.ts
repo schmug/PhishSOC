@@ -14,7 +14,7 @@ import {
 	buildThreadingHeaders,
 	resolveOriginalEmail,
 } from "../lib/email-helpers";
-import { SendEmailRequestSchema } from "../lib/schemas";
+import { parseSendEmailRequest } from "../lib/schemas";
 import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
 import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
 import { Folders } from "../../shared/folders";
@@ -26,8 +26,9 @@ type RateLimitStub = { checkSendRateLimit: () => Promise<string | null> };
 export async function handleReplyEmail(c: AppContext) {
 	const mailboxId = c.req.param("mailboxId") ?? "";
 	const id = c.req.param("id") ?? "";
-	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments, draft_id } = body;
+	const parsed = parseSendEmailRequest(await c.req.json().catch(() => null));
+	if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+	const { to, cc, bcc, from, subject, html, text, attachments, draft_id } = parsed.data;
 
 	const stub = c.var.mailboxStub;
 	const createdBy = await resolveCreatedByFromDraft(stub, draft_id);
@@ -134,8 +135,9 @@ export async function handleReplyEmail(c: AppContext) {
 export async function handleForwardEmail(c: AppContext) {
 	const mailboxId = c.req.param("mailboxId") ?? "";
 	const id = c.req.param("id") ?? "";
-	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments, draft_id } = body;
+	const parsed = parseSendEmailRequest(await c.req.json().catch(() => null));
+	if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+	const { to, cc, bcc, from, subject, html, text, attachments, draft_id } = parsed.data;
 
 	const stub = c.var.mailboxStub;
 	const createdBy = await resolveCreatedByFromDraft(stub, draft_id);
