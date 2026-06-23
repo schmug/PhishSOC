@@ -140,7 +140,7 @@ function resolveFeeds(env: Env, settings: MailboxIntelSettings): FeedDefinition[
 	return [...defaults, ...user];
 }
 
-function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
+export function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
 	const lines = body.split(/\r?\n/);
 	const out: string[] = [];
 	for (const raw of lines) {
@@ -149,9 +149,12 @@ function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
 		if (kind === "domain") {
 			out.push(normalizeDomain(line));
 		} else {
+			// `url` feeds (URLhaus, OpenPhish) list specific malicious URLs.
+			// Do NOT also derive the bare host: that would collapse e.g.
+			// `https://github.com/evil/x` to `github.com` and later flag every
+			// legitimate github.com link as a confirmed hit → hard_block. Match
+			// the full URL only; host-level blocking is the job of `domain` feeds.
 			out.push(line);
-			const host = safeHostname(line);
-			if (host) out.push(normalizeDomain(host));
 		}
 	}
 	return out;
@@ -373,9 +376,13 @@ export interface FeedMatch {
 }
 
 /**
- * Check a URL's hostname and full URL against all configured feeds.
- * Returns the first confirmed match, or the first bloom-only hit if no
- * exact confirmations are available.
+ * Check a URL against all configured feeds: the bare hostname for `domain`
+ * feeds, the full URL for `url` feeds. Returns the first confirmed match, or
+ * the first bloom-only hit if no exact confirmations are available.
+ *
+ * `url` feeds are matched on the full URL only — never on the apex host — so a
+ * URLhaus/OpenPhish entry hosted on a shared host (github.com, drive.google.com,
+ * …) cannot collateral-block every legitimate link to that host.
  */
 export async function checkUrlAgainstFeeds(
 	env: Env,
@@ -398,7 +405,11 @@ export async function checkUrlAgainstFeeds(
 		if (!serialized) continue;
 		const filter = deserializeBloom(serialized);
 		if (!filter) continue;
-		const candidates = feed.kind === "domain" ? [host] : [fullUrl, host];
+		// `domain` feeds match the bare host; `url` feeds match the full URL
+		// only. parseFeedBody no longer stores apex hosts for url feeds, so
+		// matching `host` here would never confirm and would only risk a
+		// shared-host false positive (e.g. github.com).
+		const candidates = feed.kind === "domain" ? [host] : [fullUrl];
 		// The exact blob is ~200 KB and this runs per URL on the security
 		// pipeline's hot path — fetch it lazily on the first bloom hit, at
 		// most once per feed.

@@ -228,10 +228,10 @@ describe("exact-blob read robustness", () => {
 
 describe("exact-blob dedupe", () => {
 	it("deduplicates values so the cap covers more unique entries", async () => {
-		// Two URLs on the same host parse to [urlA, host, urlB, host] — the
-		// blob should store each value once so the 2000-entry cap isn't
-		// wasted on repeated hostnames.
-		mockFetch("https://x.example/a\nhttps://x.example/b\n");
+		// url feeds store the full URL only (no derived apex host), and a
+		// duplicate line collapses to a single entry so the 2000-entry cap
+		// isn't wasted on repeats.
+		mockFetch("https://x.example/a\nhttps://x.example/b\nhttps://x.example/a\n");
 		const kv = makeKv();
 		const env = makeEnv({ mailboxSettings: urlFeedSettings(), kv });
 
@@ -240,7 +240,7 @@ describe("exact-blob dedupe", () => {
 		const blob = await kv.get("intel:testfeed:exact-blob");
 		const parsed = JSON.parse(blob as string) as string[];
 		expect(parsed.sort()).toEqual(
-			["https://x.example/a", "https://x.example/b", "x.example"].sort(),
+			["https://x.example/a", "https://x.example/b"].sort(),
 		);
 	});
 });
