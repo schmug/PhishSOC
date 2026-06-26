@@ -166,3 +166,55 @@ describe("SecuritySettingsPanel · attachment + folder controls", () => {
 		expect(saved.security?.folder_policies?.inbox?.treat_as_verified).toBe(true);
 	});
 });
+
+describe("SecuritySettingsPanel · mitigations toggle", () => {
+	beforeEach(() => {
+		mutateAsync.mockReset();
+		mutateAsync.mockResolvedValue(undefined);
+	});
+
+	it("defaults to checked (true) when mitigations key is absent", async () => {
+		mailboxFixture = makeMailbox({ enabled: true });
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /DMARC=pass cancels per-method SPF\/DKIM fail contributions/i,
+		});
+		expect(toggle).toBeChecked();
+	});
+
+	it("reflects persisted false value when mitigations.dmarc_pass_compensates_method_fail is false", async () => {
+		mailboxFixture = makeMailbox({
+			enabled: true,
+			mitigations: { dmarc_pass_compensates_method_fail: false },
+		});
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /DMARC=pass cancels per-method SPF\/DKIM fail contributions/i,
+		});
+		expect(toggle).not.toBeChecked();
+	});
+
+	it("persists dmarc_pass_compensates_method_fail=false without clobbering other security fields", async () => {
+		const user = userEvent.setup();
+		mailboxFixture = makeMailbox({
+			enabled: true,
+			ruf_ingestion: { enabled: true, retain_raw: false },
+		});
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /DMARC=pass cancels per-method SPF\/DKIM fail contributions/i,
+		});
+		// Default is on (true when absent) — click once to turn it off.
+		await user.click(toggle);
+
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+		const saved = await lastSavedSettings();
+		expect(saved.security?.mitigations?.dmarc_pass_compensates_method_fail).toBe(false);
+		// Sibling fields must survive the save.
+		expect(saved.security?.ruf_ingestion?.enabled).toBe(true);
+	});
+});
