@@ -88,6 +88,7 @@ export interface SecuritySettings {
 	ruf_ingestion?: RufIngestionSettings;
 	mitigations?: { dmarc_pass_compensates_method_fail?: boolean };
 	classification?: ClassificationSettings;
+	detectors?: { sender_graph?: { enabled?: boolean } };
 }
 
 export interface DmarcRufRecord {

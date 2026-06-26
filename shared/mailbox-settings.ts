@@ -62,12 +62,25 @@ const MitigationConfig = z
   })
   .passthrough();
 
+const SenderGraphSettings = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .passthrough();
+
+const DetectorSettings = z
+  .object({
+    sender_graph: SenderGraphSettings.optional(),
+  })
+  .passthrough();
+
 export const SecuritySettings = z
   .object({
     attachment_policy: AttachmentPolicy.optional(),
     folder_policies: z.record(z.string(), FolderPolicy).optional(),
     classification: ClassificationSettings.optional(),
     mitigations: MitigationConfig.optional(),
+    detectors: DetectorSettings.optional(),
   })
   .passthrough();
 

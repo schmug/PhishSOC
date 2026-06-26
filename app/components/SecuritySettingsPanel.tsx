@@ -322,6 +322,25 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 				/>
 			</div>
 
+			{/* Detectors */}
+			<div className="border-t border-line pt-5">
+				<div className="text-xs font-medium text-ink mb-2">Detectors</div>
+				<p className="text-xs text-ink-3 mb-3">
+					The sender-graph / BEC detector builds a per-mailbox graph of prior senders and
+					flags display-name impersonation — mail whose display name matches a known contact
+					but whose address does not. On by default; disable for a mailbox that receives
+					high-volume bulk mail where display-name reuse is expected and not a risk signal.
+				</p>
+				<Switch
+					label="Sender-graph / BEC detector"
+					checked={s.detectors?.sender_graph?.enabled ?? true}
+					onCheckedChange={(v) => patch({
+						detectors: { ...s.detectors, sender_graph: { ...s.detectors?.sender_graph, enabled: v } },
+					})}
+					disabled={!s.enabled}
+				/>
+			</div>
+
 			{/* Business hours */}
 			<div className="border-t border-line pt-5">
 				<div className="text-xs font-medium text-ink mb-2">Business hours</div>
