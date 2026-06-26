@@ -286,6 +286,24 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 				</div>
 			</div>
 
+			{/* DMARC pass compensates method fail */}
+			<div className="border-t border-line pt-5">
+				<div className="text-xs font-medium text-ink mb-2">Scoring mitigations</div>
+				<p className="text-xs text-ink-3 mb-3">
+					When DMARC=pass, the individual SPF and DKIM per-method failure contributions
+					are zeroed out in verdict scoring. DMARC alignment already proves one of the
+					two methods validated the sending domain — penalising the other double-counts
+					the failure and increases false positives on forwarded and mailing-list mail.
+					On by default; disable only if you want fail-closed scoring even when DMARC passes.
+				</p>
+				<Switch
+					label="DMARC pass cancels per-method SPF/DKIM fail contributions"
+					checked={s.mitigations?.dmarc_pass_compensates_method_fail ?? true}
+					onCheckedChange={(v) => patch({ mitigations: { ...s.mitigations, dmarc_pass_compensates_method_fail: v } })}
+					disabled={!s.enabled}
+				/>
+			</div>
+
 			{/* Business hours */}
 			<div className="border-t border-line pt-5">
 				<div className="text-xs font-medium text-ink mb-2">Business hours</div>

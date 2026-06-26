@@ -50,11 +50,18 @@ const ClassificationSettings = z
   })
   .passthrough();
 
+const MitigationConfig = z
+  .object({
+    dmarc_pass_compensates_method_fail: z.boolean().optional(),
+  })
+  .passthrough();
+
 export const SecuritySettings = z
   .object({
     attachment_policy: AttachmentPolicy.optional(),
     folder_policies: z.record(z.string(), FolderPolicy).optional(),
     classification: ClassificationSettings.optional(),
+    mitigations: MitigationConfig.optional(),
   })
   .passthrough();
 
