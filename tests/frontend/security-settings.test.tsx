@@ -256,3 +256,67 @@ describe("SecuritySettingsPanel · mitigations toggle", () => {
 		expect(saved.security?.ruf_ingestion?.enabled).toBe(true);
 	});
 });
+
+describe("SecuritySettingsPanel · sender-graph detector toggle", () => {
+	beforeEach(() => {
+		mutateAsync.mockReset();
+		mutateAsync.mockResolvedValue(undefined);
+	});
+
+	it("defaults to checked (true) when detectors is absent", async () => {
+		mailboxFixture = makeMailbox({ enabled: true });
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /sender-graph \/ bec detector/i,
+		});
+		expect(toggle).toBeChecked();
+	});
+
+	it("toggles off and saves sender_graph.enabled=false without clobbering other fields", async () => {
+		const user = userEvent.setup();
+		mailboxFixture = makeMailbox({
+			enabled: true,
+			intel_auto_block: true,
+		});
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /sender-graph \/ bec detector/i,
+		});
+		await user.click(toggle);
+
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+		const saved = await lastSavedSettings();
+		expect(saved.security?.detectors?.sender_graph?.enabled).toBe(false);
+		// other fields must survive
+		expect(saved.security?.intel_auto_block).toBe(true);
+	});
+
+	it("reflects a persisted true value", async () => {
+		mailboxFixture = makeMailbox({
+			enabled: true,
+			detectors: { sender_graph: { enabled: true } },
+		});
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /sender-graph \/ bec detector/i,
+		});
+		expect(toggle).toBeChecked();
+	});
+
+	it("reflects a persisted false value", async () => {
+		mailboxFixture = makeMailbox({
+			enabled: true,
+			detectors: { sender_graph: { enabled: false } },
+		});
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /sender-graph \/ bec detector/i,
+		});
+		expect(toggle).not.toBeChecked();
+	});
+});
