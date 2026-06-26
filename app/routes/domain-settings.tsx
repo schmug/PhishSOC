@@ -22,12 +22,19 @@ import { TEXT_MODELS } from "shared/mailbox-settings";
 
 const PROMPT_PLACEHOLDER = `(Leave empty to inherit from org-wide /settings)`;
 
+interface CatchallIntelShape {
+	enabled?: boolean;
+	retention_days?: number;
+	sample_limit?: number;
+}
+
 interface DomainSettingsShape {
 	agentSystemPrompt?: string;
 	agentModel?: string;
 	autoDraft?: { enabled?: boolean };
 	security?: SecuritySettings;
 	intel?: { hub?: HubConfigSettings };
+	catchall_intel?: CatchallIntelShape;
 }
 
 /**
@@ -53,6 +60,9 @@ export default function DomainSettingsRoute() {
 	const [autoDraftEnabled, setAutoDraftEnabled] = useState(true);
 	const [modelChoice, setModelChoice] = useState<string>(TEXT_MODELS[0]);
 	const [customModel, setCustomModel] = useState("");
+	const [catchallEnabled, setCatchallEnabled] = useState(false);
+	const [catchallRetention, setCatchallRetention] = useState("");
+	const [catchallSampleLimit, setCatchallSampleLimit] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
 
 	// Initialise once per domain (same useRef pattern as the per-mailbox
@@ -69,6 +79,17 @@ export default function DomainSettingsRoute() {
 		setHub(s.intel?.hub);
 		setHubErrors(undefined);
 		setAutoDraftEnabled(s.autoDraft?.enabled === undefined ? true : s.autoDraft.enabled);
+		setCatchallEnabled(s.catchall_intel?.enabled === true);
+		setCatchallRetention(
+			s.catchall_intel?.retention_days === undefined
+				? ""
+				: String(s.catchall_intel.retention_days),
+		);
+		setCatchallSampleLimit(
+			s.catchall_intel?.sample_limit === undefined
+				? ""
+				: String(s.catchall_intel.sample_limit),
+		);
 
 		const m = s.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
 		if (availableModels.includes(m)) {
@@ -103,12 +124,35 @@ export default function DomainSettingsRoute() {
 		const normalizedHub = normalizeHubConfig(hub);
 		const intelToPersist = normalizedHub ? { hub: normalizedHub } : undefined;
 
+		// Catch-all intel: always send `enabled`; only send the optional
+		// retention/sample fields when the operator typed a value, so
+		// absent-key-inherits semantics are preserved (the worker's
+		// stripDefaultEqual drops the disabled default after this).
+		const catchallIntel: CatchallIntelShape = { enabled: catchallEnabled };
+		const parsePositiveInt = (raw: string, label: string): number | null | undefined => {
+			const trimmed = raw.trim();
+			if (!trimmed) return undefined;
+			const n = Number(trimmed);
+			if (!Number.isInteger(n) || n <= 0) {
+				feedback.error(`${label} must be a positive whole number.`);
+				return null;
+			}
+			return n;
+		};
+		const retention = parsePositiveInt(catchallRetention, "Retention days");
+		if (retention === null) return;
+		if (retention !== undefined) catchallIntel.retention_days = retention;
+		const sampleLimit = parsePositiveInt(catchallSampleLimit, "Sample limit");
+		if (sampleLimit === null) return;
+		if (sampleLimit !== undefined) catchallIntel.sample_limit = sampleLimit;
+
 		const settings: DomainSettingsShape = {
 			agentSystemPrompt: agentPrompt.trim() || undefined,
 			autoDraft: { enabled: autoDraftEnabled },
 			agentModel: resolvedModel || undefined,
 			security,
 			intel: intelToPersist,
+			catchall_intel: catchallIntel,
 		};
 
 		setIsSaving(true);
@@ -231,6 +275,79 @@ export default function DomainSettingsRoute() {
 							Used for chat and auto-draft for every mailbox under this domain.
 						</p>
 					</div>
+				</div>
+
+				{/* Catch-all intel (#521) */}
+				<div className="pp-card p-5">
+					<div className="text-sm font-medium text-ink mb-1">Catch-all intel</div>
+					<p className="text-xs text-ink-3 mb-4 max-w-md">
+						Capture probes sent to non-existent mailboxes under this domain to
+						surface directory-harvesting attacks. Off by default.
+					</p>
+
+					<label className="flex items-start justify-between gap-3 mb-5">
+						<span className="flex flex-col">
+							<span className="text-sm text-ink">Catch-all probe capture</span>
+							<span className="text-xs text-ink-3 mt-1 max-w-md">
+								Record sources and local-parts targeted at addresses that
+								don't exist on this domain.
+							</span>
+						</span>
+						<input
+							type="checkbox"
+							checked={catchallEnabled}
+							onChange={(e) => setCatchallEnabled(e.target.checked)}
+							className="mt-1 h-4 w-4 accent-accent shrink-0"
+							aria-label="Catch-all probe capture"
+						/>
+					</label>
+
+					<div className="grid grid-cols-2 gap-4">
+						<div>
+							<label
+								htmlFor="catchall-retention-days"
+								className="block text-sm text-ink mb-1.5"
+							>
+								Retention (days)
+							</label>
+							<input
+								id="catchall-retention-days"
+								type="number"
+								min={1}
+								step={1}
+								inputMode="numeric"
+								placeholder="30"
+								value={catchallRetention}
+								onChange={(e) => setCatchallRetention(e.target.value)}
+								disabled={!catchallEnabled}
+								className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+							/>
+						</div>
+						<div>
+							<label
+								htmlFor="catchall-sample-limit"
+								className="block text-sm text-ink mb-1.5"
+							>
+								Sample limit
+							</label>
+							<input
+								id="catchall-sample-limit"
+								type="number"
+								min={1}
+								step={1}
+								inputMode="numeric"
+								placeholder="50"
+								value={catchallSampleLimit}
+								onChange={(e) => setCatchallSampleLimit(e.target.value)}
+								disabled={!catchallEnabled}
+								className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+							/>
+						</div>
+					</div>
+					<p className="text-xs text-ink-3 mt-2">
+						Leave the optional fields blank to inherit the defaults (30 days,
+						50 samples).
+					</p>
 				</div>
 
 				{/* Security defaults */}
