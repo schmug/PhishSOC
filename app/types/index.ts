@@ -59,6 +59,10 @@ export interface RufIngestionSettings {
 	retain_raw?: boolean;
 }
 
+export interface ClassificationSettings {
+	skip_on_timeout?: boolean;
+}
+
 export interface SecuritySettings {
 	enabled?: boolean;
 	learning_mode?: boolean;
@@ -83,6 +87,7 @@ export interface SecuritySettings {
 	folder_policies?: Record<string, FolderPolicySettings>;
 	ruf_ingestion?: RufIngestionSettings;
 	mitigations?: { dmarc_pass_compensates_method_fail?: boolean };
+	classification?: ClassificationSettings;
 }
 
 export interface DmarcRufRecord {

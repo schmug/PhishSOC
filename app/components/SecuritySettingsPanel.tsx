@@ -253,6 +253,24 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 				</div>
 			</div>
 
+			{/* Classifier */}
+			<div className="border-t border-line pt-5">
+				<div className="text-xs font-medium text-ink mb-2">Classifier</div>
+				<p className="text-xs text-ink-3 mb-3">
+					Controls what happens when the LLM classifier times out or returns an error.
+					The default (on) is fail-open: a timeout contributes 0 to the verdict and tags the
+					email as <code className="text-ink">llm_unavailable</code>, so transient
+					Workers AI throttling or cold starts don&apos;t send legitimate mail to quarantine.
+					Disable to restore the legacy fail-closed-to-<code className="text-ink">suspicious</code> behavior.
+				</p>
+				<Switch
+					label="Skip classification on timeout (fail-open)"
+					checked={s.classification?.skip_on_timeout ?? true}
+					onCheckedChange={(v) => patch({ classification: { ...s.classification, skip_on_timeout: v } })}
+					disabled={!s.enabled}
+				/>
+			</div>
+
 			{/* DMARC RUF ingestion */}
 			<div className="border-t border-line pt-5">
 				<div className="text-xs font-medium text-ink mb-2">DMARC forensic report ingestion (RUF)</div>

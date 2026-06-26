@@ -81,6 +81,44 @@ async function lastSavedSettings(): Promise<MailboxSettings> {
 	return payload.settings;
 }
 
+describe("SecuritySettingsPanel · classification.skip_on_timeout toggle", () => {
+	beforeEach(() => {
+		mutateAsync.mockReset();
+		mutateAsync.mockResolvedValue(undefined);
+	});
+
+	it("reflects default-on state when classification key is absent", async () => {
+		mailboxFixture = makeMailbox({ enabled: true });
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /skip classification on timeout/i,
+		});
+		expect(toggle).toBeChecked();
+	});
+
+	it("persists skip_on_timeout: false when toggled off without clobbering other fields", async () => {
+		const user = userEvent.setup();
+		mailboxFixture = makeMailbox({
+			enabled: true,
+			intel_auto_block: false,
+			classification: { skip_on_timeout: true },
+		});
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /skip classification on timeout/i,
+		});
+		await user.click(toggle);
+
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+		const saved = await lastSavedSettings();
+		expect(saved.security?.classification?.skip_on_timeout).toBe(false);
+		expect(saved.security?.intel_auto_block).toBe(false);
+	});
+});
+
 describe("SecuritySettingsPanel · attachment + folder controls", () => {
 	beforeEach(() => {
 		mutateAsync.mockReset();
