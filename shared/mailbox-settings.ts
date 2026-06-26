@@ -50,11 +50,23 @@ const ClassificationSettings = z
   })
   .passthrough();
 
+/**
+ * Compensating-control mitigations for the scoring pipeline (issue #100).
+ * Each field enables or disables a named mitigation. Absent key = on (matches
+ * absent-key-inherits semantics; defaults live in `DEFAULT_MITIGATION_CONFIG`).
+ */
+const MitigationConfig = z
+  .object({
+    dmarc_pass_compensates_method_fail: z.boolean().optional(),
+  })
+  .passthrough();
+
 export const SecuritySettings = z
   .object({
     attachment_policy: AttachmentPolicy.optional(),
     folder_policies: z.record(z.string(), FolderPolicy).optional(),
     classification: ClassificationSettings.optional(),
+    mitigations: MitigationConfig.optional(),
   })
   .passthrough();
 

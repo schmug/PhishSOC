@@ -59,6 +59,10 @@ export interface RufIngestionSettings {
 	retain_raw?: boolean;
 }
 
+export interface MitigationSettings {
+	dmarc_pass_compensates_method_fail?: boolean;
+}
+
 export interface SecuritySettings {
 	enabled?: boolean;
 	learning_mode?: boolean;
@@ -82,6 +86,7 @@ export interface SecuritySettings {
 	attachment_policy?: AttachmentPolicySettings;
 	folder_policies?: Record<string, FolderPolicySettings>;
 	ruf_ingestion?: RufIngestionSettings;
+	mitigations?: MitigationSettings;
 }
 
 export interface DmarcRufRecord {

@@ -81,6 +81,60 @@ async function lastSavedSettings(): Promise<MailboxSettings> {
 	return payload.settings;
 }
 
+describe("SecuritySettingsPanel · mitigations toggle", () => {
+	beforeEach(() => {
+		mutateAsync.mockReset();
+		mutateAsync.mockResolvedValue(undefined);
+	});
+
+	it("reflects default-on state when mitigations key is absent", async () => {
+		mailboxFixture = makeMailbox({ enabled: true });
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /DMARC=pass cancels per-method SPF\/DKIM fail contributions/i,
+		});
+		expect(toggle).toBeChecked();
+	});
+
+	it("persists dmarc_pass_compensates_method_fail: false when toggled off", async () => {
+		const user = userEvent.setup();
+		mailboxFixture = makeMailbox({ enabled: true });
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /DMARC=pass cancels per-method SPF\/DKIM fail contributions/i,
+		});
+		await user.click(toggle);
+
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+		const saved = await lastSavedSettings();
+		expect(saved.security?.mitigations?.dmarc_pass_compensates_method_fail).toBe(false);
+	});
+
+	it("does not clobber other security fields when toggling mitigations", async () => {
+		const user = userEvent.setup();
+		mailboxFixture = makeMailbox({
+			enabled: true,
+			intel_auto_block: false,
+			mitigations: { dmarc_pass_compensates_method_fail: true },
+		});
+		renderSettings();
+
+		const toggle = await screen.findByRole("switch", {
+			name: /DMARC=pass cancels per-method SPF\/DKIM fail contributions/i,
+		});
+		await user.click(toggle);
+
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+		const saved = await lastSavedSettings();
+		expect(saved.security?.mitigations?.dmarc_pass_compensates_method_fail).toBe(false);
+		expect(saved.security?.intel_auto_block).toBe(false);
+	});
+});
+
 describe("SecuritySettingsPanel · attachment + folder controls", () => {
 	beforeEach(() => {
 		mutateAsync.mockReset();
