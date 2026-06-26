@@ -145,7 +145,7 @@ function DomainBody({
 			{rufData?.enabled && rufData.records.length > 0 && (
 				<RufFailuresTable records={rufData.records} />
 			)}
-			<CatchallProbesCard data={catchallData} isLoading={catchallLoading} />
+			<CatchallProbesCard data={catchallData} isLoading={catchallLoading} domain={data.domain} />
 		</>
 	);
 }
@@ -673,9 +673,11 @@ function RecentCasesList({ cases }: { cases: DomainStats["recentCases"] }) {
 function CatchallProbesCard({
 	data,
 	isLoading,
+	domain,
 }: {
 	data: CatchallSummary | undefined;
 	isLoading: boolean;
+	domain: string;
 }) {
 	if (isLoading) {
 		return (
@@ -700,9 +702,14 @@ function CatchallProbesCard({
 			</div>
 			{empty ? (
 				<p className="text-[12.5px] text-ink-3">
-					No catch-all probe activity recorded. Enable{" "}
-					<span className="pp-mono">catchall_intel</span> on this domain to
-					start collecting directory-harvest data.
+					No catch-all probe activity recorded.{" "}
+					<RouterLink
+						to={`/domains/${encodeURIComponent(domain)}/settings`}
+						className="underline hover:opacity-80"
+					>
+						Enable catch-all intel in domain settings
+					</RouterLink>{" "}
+					to start collecting directory-harvest data.
 				</p>
 			) : (
 				<div className="space-y-5">

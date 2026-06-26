@@ -28,6 +28,7 @@ interface DomainSettingsShape {
 	autoDraft?: { enabled?: boolean };
 	security?: SecuritySettings;
 	intel?: { hub?: HubConfigSettings };
+	catchall_intel?: { enabled?: boolean };
 }
 
 /**
@@ -53,6 +54,7 @@ export default function DomainSettingsRoute() {
 	const [autoDraftEnabled, setAutoDraftEnabled] = useState(true);
 	const [modelChoice, setModelChoice] = useState<string>(TEXT_MODELS[0]);
 	const [customModel, setCustomModel] = useState("");
+	const [catchallIntelEnabled, setCatchallIntelEnabled] = useState<boolean | undefined>(undefined);
 	const [isSaving, setIsSaving] = useState(false);
 
 	// Initialise once per domain (same useRef pattern as the per-mailbox
@@ -69,6 +71,7 @@ export default function DomainSettingsRoute() {
 		setHub(s.intel?.hub);
 		setHubErrors(undefined);
 		setAutoDraftEnabled(s.autoDraft?.enabled === undefined ? true : s.autoDraft.enabled);
+		setCatchallIntelEnabled(s.catchall_intel?.enabled);
 
 		const m = s.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
 		if (availableModels.includes(m)) {
@@ -109,6 +112,7 @@ export default function DomainSettingsRoute() {
 			agentModel: resolvedModel || undefined,
 			security,
 			intel: intelToPersist,
+			catchall_intel: catchallIntelEnabled !== undefined ? { enabled: catchallIntelEnabled } : undefined,
 		};
 
 		setIsSaving(true);
@@ -245,6 +249,27 @@ export default function DomainSettingsRoute() {
 					}}
 					errors={hubErrors}
 				/>
+
+				{/* Catch-all intel */}
+				<div className="pp-card p-5">
+					<div className="text-sm font-medium text-ink mb-4">Catch-all intel</div>
+					<label className="flex items-start justify-between gap-3">
+						<span className="flex flex-col">
+							<span className="text-sm text-ink">Enable catch-all probe capture</span>
+							<span className="text-xs text-ink-3 mt-1 max-w-md">
+								Capture directory-harvest probe emails for this domain. Probes are
+								stored in the catch-all dashboard card for analysis.
+							</span>
+						</span>
+						<input
+							type="checkbox"
+							checked={catchallIntelEnabled ?? false}
+							onChange={(e) => setCatchallIntelEnabled(e.target.checked)}
+							className="mt-1 h-4 w-4 accent-accent shrink-0"
+							aria-label="Enable catch-all probe capture"
+						/>
+					</label>
+				</div>
 
 				<div className="flex justify-end">
 					<Button variant="primary" onClick={handleSave} loading={isSaving}>
