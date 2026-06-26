@@ -179,13 +179,35 @@ export interface SecurityVerdict {
 	triage?: "hard_allow" | "hard_block" | "attachment_block" | "folder_bypass";
 }
 
-export function parseVerdict(raw: string | null | undefined): SecurityVerdict | null {
+// ⚡ Bolt: Cache parsed verdicts to prevent expensive JSON.parse operations
+// on every re-render of email lists and thread views.
+const parseVerdictCache = new Map<string, SecurityVerdict | null>();
+
+export function parseVerdict(
+	raw: string | null | undefined,
+): SecurityVerdict | null {
 	if (!raw) return null;
-	try {
-		return JSON.parse(raw) as SecurityVerdict;
-	} catch {
-		return null;
+
+	if (parseVerdictCache.has(raw)) {
+		const cached = parseVerdictCache.get(raw);
+		if (cached !== undefined) return cached;
 	}
+
+	let result: SecurityVerdict | null = null;
+	try {
+		result = JSON.parse(raw) as SecurityVerdict;
+		if (result) Object.freeze(result);
+	} catch {
+		result = null;
+	}
+
+	if (parseVerdictCache.size >= 1000) {
+		const firstKey = parseVerdictCache.keys().next().value;
+		if (firstKey !== undefined) parseVerdictCache.delete(firstKey);
+	}
+
+	parseVerdictCache.set(raw, result);
+	return result;
 }
 
 export interface Attachment {
@@ -431,7 +453,11 @@ export interface CatchallRecentSample {
 
 /** Shape returned by `GET /api/v1/domains/:domain/catchall-intel` (#427). */
 export interface CatchallSummary {
-	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
+	totals: {
+		probe_count: number;
+		distinct_sources: number;
+		distinct_localparts: number;
+	};
 	topSources: CatchallSourceRollup[];
 	recent: CatchallRecentSample[];
 }
@@ -457,11 +483,18 @@ export interface HubSharingGroup {
  * normal state for a mailbox without `intel.hub` set; the UI renders one
  * "Configure hub credentials" panel and stops querying.
  */
-export type HubEnvelope<T> = { configured: true; data: T } | { configured: false };
+export type HubEnvelope<T> =
+	| { configured: true; data: T }
+	| { configured: false };
 
 export type HubContributionsResponse = HubEnvelope<HubContribution[]>;
-export type HubDestroylistResponse = HubEnvelope<{ values: string[]; count: number }>;
-export type HubSharingGroupsResponse = HubEnvelope<{ groups: HubSharingGroup[] }>;
+export type HubDestroylistResponse = HubEnvelope<{
+	values: string[];
+	count: number;
+}>;
+export type HubSharingGroupsResponse = HubEnvelope<{
+	groups: HubSharingGroup[];
+}>;
 
 /**
  * Hub invite request — mirrors the hub `POST /orgs/invite` zod schema. All

@@ -41,7 +41,8 @@ export function bucketThreatPressure(
 		if (!row.date || !row.security_verdict) continue;
 
 		const action = parseVerdictAction(row.security_verdict);
-		if (action !== "tag" && action !== "quarantine" && action !== "block") continue;
+		if (action !== "tag" && action !== "quarantine" && action !== "block")
+			continue;
 
 		const t = Date.parse(row.date);
 		if (Number.isNaN(t)) continue;
@@ -57,13 +58,30 @@ export function bucketThreatPressure(
 	return buckets;
 }
 
+// ⚡ Bolt: Cache parsed verdict actions to prevent expensive JSON.parse operations
+// on every row during dashboard aggregation queries.
+const parseVerdictActionCache = new Map<string, string | null>();
+
 function parseVerdictAction(json: string): string | null {
+	if (parseVerdictActionCache.has(json)) {
+		const cached = parseVerdictActionCache.get(json);
+		if (cached !== undefined) return cached;
+	}
+
+	let result: string | null = null;
 	try {
 		const parsed = JSON.parse(json) as { action?: unknown };
-		return typeof parsed.action === "string" ? parsed.action : null;
+		result = typeof parsed.action === "string" ? parsed.action : null;
 	} catch {
-		return null;
+		result = null;
 	}
+
+	if (parseVerdictActionCache.size >= 1000) {
+		const firstKey = parseVerdictActionCache.keys().next().value;
+		if (firstKey !== undefined) parseVerdictActionCache.delete(firstKey);
+	}
+	parseVerdictActionCache.set(json, result);
+	return result;
 }
 
 interface ParsedVerdict {
@@ -71,12 +89,30 @@ interface ParsedVerdict {
 	classification?: { label?: string };
 }
 
+// ⚡ Bolt: Cache parsed verdicts to prevent expensive JSON.parse operations
+// on every row during dashboard aggregation queries.
+const parseVerdictCache = new Map<string, ParsedVerdict | null>();
+
 function parseVerdict(json: string): ParsedVerdict | null {
-	try {
-		return JSON.parse(json) as ParsedVerdict;
-	} catch {
-		return null;
+	if (parseVerdictCache.has(json)) {
+		const cached = parseVerdictCache.get(json);
+		if (cached !== undefined) return cached;
 	}
+
+	let result: ParsedVerdict | null = null;
+	try {
+		result = JSON.parse(json) as ParsedVerdict;
+		if (result) Object.freeze(result);
+	} catch {
+		result = null;
+	}
+
+	if (parseVerdictCache.size >= 1000) {
+		const firstKey = parseVerdictCache.keys().next().value;
+		if (firstKey !== undefined) parseVerdictCache.delete(firstKey);
+	}
+	parseVerdictCache.set(json, result);
+	return result;
 }
 
 export interface PipelineSuccessInput {
@@ -89,7 +125,9 @@ export interface PipelineSuccessInput {
  * `null` when there's no data to report (UI surfaces an "—" placeholder rather
  * than a misleading 0%).
  */
-export function pipelineSuccessRate(input: PipelineSuccessInput): number | null {
+export function pipelineSuccessRate(
+	input: PipelineSuccessInput,
+): number | null {
 	const total = input.completed + input.failed;
 	if (total === 0) return null;
 	return input.completed / total;
@@ -311,7 +349,10 @@ export function aggregateOrgOverview(
 			const parsed = parseVerdict(row.security_verdict);
 			if (!parsed) continue;
 			const label = parsed.classification?.label;
-			if (typeof label === "string" && (VERDICT_MIX_KEYS as readonly string[]).includes(label)) {
+			if (
+				typeof label === "string" &&
+				(VERDICT_MIX_KEYS as readonly string[]).includes(label)
+			) {
 				verdictMix[label as keyof VerdictMix] += 1;
 			}
 			// Top-threats: count tag/quarantine/block by classification label.
