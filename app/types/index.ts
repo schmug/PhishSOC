@@ -82,6 +82,7 @@ export interface SecuritySettings {
 	attachment_policy?: AttachmentPolicySettings;
 	folder_policies?: Record<string, FolderPolicySettings>;
 	ruf_ingestion?: RufIngestionSettings;
+	mitigations?: { dmarc_pass_compensates_method_fail?: boolean };
 }
 
 export interface DmarcRufRecord {
