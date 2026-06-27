@@ -391,6 +391,16 @@ describe("resolveMailboxSettings — security allowlist extend-merge (#149)", ()
 		expect(resolved.security.classification.skip_on_timeout).toBe(true);
 	});
 
+	it("mergeSecurityWithDefault fills mitigations defaults when tier carries an empty object", async () => {
+		const bucket = makeFakeBucket({
+			[DOMAIN_KEY]: {
+				security: { enabled: true, mitigations: {} },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.mitigations.dmarc_pass_compensates_method_fail).toBe(true);
+	});
+
 	it("regression guard: trusted_authserv_ids stays whole-replace (NOT extended like allowlists)", async () => {
 		const bucket = makeFakeBucket({
 			"org/settings.json": {
