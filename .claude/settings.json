@@ -24,12 +24,12 @@
     ],
     "PostToolUse": [
       {
-        "$comment": "stripDefaultEqual must guard settings-tier writes (CLAUDE.md: 'stripDefaultEqual runs on every settings-tier write'; regressed in PRs #148, #154). Coarse file-wide tripwire: a settings-write file that performs an R2/helper write but no longer references stripDefaultEqual is flagged. Heuristic by design — if a write legitimately needs no strip, route it so the file still references stripDefaultEqual or move the write out of these files.",
+        "$comment": "stripDefaultEqual must guard settings-tier writes (CLAUDE.md: 'stripDefaultEqual runs on every settings-tier write'; regressed in PRs #148, #154). Coarse file-wide tripwire: an endpoint file that performs an R2/helper write but no longer references stripDefaultEqual is flagged. Scoped to endpoint files (workers/index.ts, workers/routes/*) and workers/lib/mailbox-settings.ts — NOT the lib reader/writer modules (org-settings.ts, domain-settings.ts) where the strip is applied at the caller (endpoint) layer, not the lib layer. See issue #534.",
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_response.filePath // .tool_input.file_path // \"\"' | { read -r f; case \"$f\" in *workers/index.ts|*workers/lib/mailbox-settings.ts|*workers/lib/domain-settings.ts|*workers/lib/org-settings.ts|*workers/security/settings.ts) if [ -f \"$f\" ] && grep -qE 'BUCKET\\.put\\(|putDomainSettings|putMailboxSettings|orgSettingsKey' \"$f\" && ! grep -q 'stripDefaultEqual' \"$f\"; then echo \"Blocked: $f performs a settings-tier write but no longer references stripDefaultEqual. Every settings-tier write (mailboxes/<id>.json, domains/<domain>.json, org/settings.json) must route through stripDefaultEqual from workers/lib/mailbox-settings.ts before BUCKET.put — see CLAUDE.md. This regressed in PRs #148 and #154.\" >&2; exit 2; fi ;; esac; }",
+            "command": "jq -r '.tool_response.filePath // .tool_input.file_path // \"\"' | { read -r f; case \"$f\" in *workers/index.ts|*workers/lib/mailbox-settings.ts|*workers/security/settings.ts|*workers/routes/*) if [ -f \"$f\" ] && grep -qE 'BUCKET\\.put\\(|putDomainSettings|putMailboxSettings|orgSettingsKey' \"$f\" && ! grep -q 'stripDefaultEqual' \"$f\"; then echo \"Blocked: $f performs a settings-tier write but no longer references stripDefaultEqual. Every settings-tier write (mailboxes/<id>.json, domains/<domain>.json, org/settings.json) must route through stripDefaultEqual from workers/lib/mailbox-settings.ts before BUCKET.put — see CLAUDE.md. This regressed in PRs #148 and #154.\" >&2; exit 2; fi ;; esac; }",
             "statusMessage": "Checking stripDefaultEqual on settings-tier writes..."
           }
         ]
