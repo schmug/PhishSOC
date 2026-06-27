@@ -118,6 +118,8 @@ persists those values as explicit overrides at the written tier,
 silently shadowing every upstream tier forever — which defeats
 absent-key-inherits semantics for the most common write path.
 
+Hook scope: the PostToolUse stripDefaultEqual guard monitors endpoint files (`workers/index.ts`, `workers/routes/*`) and `workers/lib/mailbox-settings.ts` — NOT `workers/lib/org-settings.ts` or `workers/lib/domain-settings.ts`, because the strip happens at the endpoint layer, not inside those lib helpers (narrowed in PR #534 to eliminate false-positive blocks on the lib readers).
+
 Origin: #106 acceptance criterion 6 originally read "PUT" only. PR #148
 shipped with the strip on mailbox PUT but not on mailbox POST — caught
 by advisor before merge and fixed in the same PR. PR #154 shipped with
