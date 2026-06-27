@@ -55,7 +55,10 @@ const SORT_COLUMN_MAP = {
 	date: schema.emails.date,
 	read: schema.emails.read,
 	starred: schema.emails.starred,
-} satisfies Record<SortColumn, typeof schema.emails[keyof typeof schema.emails]>;
+} satisfies Record<
+	SortColumn,
+	(typeof schema.emails)[keyof typeof schema.emails]
+>;
 
 interface SearchFilterOptions {
 	query: string;
@@ -145,8 +148,17 @@ export class MailboxDO extends DurableObject<Env> {
 		// Server-push only; ignore anything the client sends.
 	}
 
-	async webSocketClose(ws: WebSocket, code: number, _reason: string, _wasClean: boolean) {
-		try { ws.close(code, "closing"); } catch { /* already closed */ }
+	async webSocketClose(
+		ws: WebSocket,
+		code: number,
+		_reason: string,
+		_wasClean: boolean,
+	) {
+		try {
+			ws.close(code, "closing");
+		} catch {
+			/* already closed */
+		}
 	}
 
 	async webSocketError(_ws: WebSocket, _err: unknown) {
@@ -154,9 +166,17 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async notifyNewEmail(emailId: string, folderId: string) {
-		const payload = JSON.stringify({ type: "new-email", id: emailId, folder: folderId });
+		const payload = JSON.stringify({
+			type: "new-email",
+			id: emailId,
+			folder: folderId,
+		});
 		for (const ws of this.ctx.getWebSockets()) {
-			try { ws.send(payload); } catch { /* dead socket — hibernation will GC */ }
+			try {
+				ws.send(payload);
+			} catch {
+				/* dead socket — hibernation will GC */
+			}
 		}
 	}
 
@@ -265,11 +285,7 @@ export class MailboxDO extends DurableObject<Env> {
 	// ── Threaded queries (raw SQL — too complex for Drizzle's builder) ──
 
 	async getThreadedEmails(options: GetEmailsOptions = {}) {
-		const {
-			folder,
-			page = 1,
-			limit: rawLimit = 25,
-		} = options;
+		const { folder, page = 1, limit: rawLimit = 25 } = options;
 		const limit = Math.min(Math.max(rawLimit, 1), 100);
 
 		if (!folder) {
@@ -328,7 +344,9 @@ export class MailboxDO extends DurableObject<Env> {
 				WHERE lp.rn = 1
 				ORDER BY lp.date DESC
 				LIMIT ?2 OFFSET ?3`,
-				folder, limit, offset
+				folder,
+				limit,
+				offset,
 			);
 
 			const rows = [...result];
@@ -423,7 +441,9 @@ export class MailboxDO extends DurableObject<Env> {
 			WHERE lif.rn = 1
 			ORDER BY lif.date DESC
 			LIMIT ?2 OFFSET ?3`,
-			folder, limit, offset
+			folder,
+			limit,
+			offset,
 		);
 
 		const rows = [...result];
@@ -613,10 +633,7 @@ export class MailboxDO extends DurableObject<Env> {
 			.where(eq(schema.attachments.email_id, id))
 			.all();
 
-		this.db
-			.delete(schema.emails)
-			.where(eq(schema.emails.id, id))
-			.run();
+		this.db.delete(schema.emails).where(eq(schema.emails.id, id)).run();
 
 		return emailAttachments;
 	}
@@ -638,7 +655,10 @@ export class MailboxDO extends DurableObject<Env> {
 			.select({
 				id: schema.folders.id,
 				name: schema.folders.name,
-				unreadCount: sql<number>`COALESCE(SUM(CASE WHEN ${schema.emails.read} = 0 THEN 1 ELSE 0 END), 0)`.mapWith(Number),
+				unreadCount:
+					sql<number>`COALESCE(SUM(CASE WHEN ${schema.emails.read} = 0 THEN 1 ELSE 0 END), 0)`.mapWith(
+						Number,
+					),
 			})
 			.from(schema.folders)
 			.leftJoin(schema.emails, eq(schema.emails.folder_id, schema.folders.id))
@@ -656,7 +676,10 @@ export class MailboxDO extends DurableObject<Env> {
 				.get();
 			return { ...result, unreadCount: 0 };
 		} catch (e: unknown) {
-			if (e instanceof Error && e.message.includes("UNIQUE constraint failed")) {
+			if (
+				e instanceof Error &&
+				e.message.includes("UNIQUE constraint failed")
+			) {
 				return null;
 			}
 			throw e;
@@ -684,10 +707,7 @@ export class MailboxDO extends DurableObject<Env> {
 			return false;
 		}
 
-		this.db
-			.delete(schema.folders)
-			.where(eq(schema.folders.id, id))
-			.run();
+		this.db.delete(schema.folders).where(eq(schema.folders.id, id)).run();
 
 		return true;
 	}
@@ -720,7 +740,18 @@ export class MailboxDO extends DurableObject<Env> {
 		options: SearchFilterOptions,
 		tableAlias = "",
 	): { conditions: string[]; params: (string | number)[] } {
-		const { query, folder, from, to, subject, date_start, date_end, is_read, is_starred, has_attachment } = options;
+		const {
+			query,
+			folder,
+			from,
+			to,
+			subject,
+			date_start,
+			date_end,
+			is_read,
+			is_starred,
+			has_attachment,
+		} = options;
 		const prefix = tableAlias ? `${tableAlias}.` : "";
 		const conditions: string[] = [];
 		const params: (string | number)[] = [];
@@ -737,30 +768,64 @@ export class MailboxDO extends DurableObject<Env> {
 			const p2 = addParam(`%${query}%`);
 			const p3 = addParam(`%${query}%`);
 			const p4 = addParam(`%${query}%`);
-			conditions.push(`(${prefix}subject LIKE ${p1} OR ${prefix}body LIKE ${p2} OR ${prefix}sender LIKE ${p3} OR ${prefix}recipient LIKE ${p4} OR ${prefix}cc LIKE ${p4} OR ${prefix}bcc LIKE ${p4})`);
+			conditions.push(
+				`(${prefix}subject LIKE ${p1} OR ${prefix}body LIKE ${p2} OR ${prefix}sender LIKE ${p3} OR ${prefix}recipient LIKE ${p4} OR ${prefix}cc LIKE ${p4} OR ${prefix}bcc LIKE ${p4})`,
+			);
 		}
 		if (folder) {
 			const p = addParam(folder);
-			conditions.push(`${prefix}folder_id = (SELECT id FROM folders WHERE name = ${p} OR id = ${p} LIMIT 1)`);
+			conditions.push(
+				`${prefix}folder_id = (SELECT id FROM folders WHERE name = ${p} OR id = ${p} LIMIT 1)`,
+			);
 		}
-		if (from) { const p = addParam(`%${from}%`); conditions.push(`${prefix}sender LIKE ${p}`); }
-		if (to) { const p = addParam(`%${to}%`); conditions.push(`(${prefix}recipient LIKE ${p} OR ${prefix}cc LIKE ${p} OR ${prefix}bcc LIKE ${p})`); }
-		if (subject) { const p = addParam(`%${subject}%`); conditions.push(`${prefix}subject LIKE ${p}`); }
-		if (date_start) { const p = addParam(date_start); conditions.push(`${prefix}date >= ${p}`); }
-		if (date_end) { const p = addParam(date_end); conditions.push(`${prefix}date <= ${p}`); }
-		if (is_read !== undefined) { const p = addParam(is_read ? 1 : 0); conditions.push(`${prefix}read = ${p}`); }
-		if (is_starred !== undefined) { const p = addParam(is_starred ? 1 : 0); conditions.push(`${prefix}starred = ${p}`); }
-		if (has_attachment) { conditions.push(`${prefix}id IN (SELECT DISTINCT email_id FROM attachments)`); }
+		if (from) {
+			const p = addParam(`%${from}%`);
+			conditions.push(`${prefix}sender LIKE ${p}`);
+		}
+		if (to) {
+			const p = addParam(`%${to}%`);
+			conditions.push(
+				`(${prefix}recipient LIKE ${p} OR ${prefix}cc LIKE ${p} OR ${prefix}bcc LIKE ${p})`,
+			);
+		}
+		if (subject) {
+			const p = addParam(`%${subject}%`);
+			conditions.push(`${prefix}subject LIKE ${p}`);
+		}
+		if (date_start) {
+			const p = addParam(date_start);
+			conditions.push(`${prefix}date >= ${p}`);
+		}
+		if (date_end) {
+			const p = addParam(date_end);
+			conditions.push(`${prefix}date <= ${p}`);
+		}
+		if (is_read !== undefined) {
+			const p = addParam(is_read ? 1 : 0);
+			conditions.push(`${prefix}read = ${p}`);
+		}
+		if (is_starred !== undefined) {
+			const p = addParam(is_starred ? 1 : 0);
+			conditions.push(`${prefix}starred = ${p}`);
+		}
+		if (has_attachment) {
+			conditions.push(
+				`${prefix}id IN (SELECT DISTINCT email_id FROM attachments)`,
+			);
+		}
 
 		return { conditions, params };
 	}
 
-	async searchEmails(options: SearchFilterOptions & { page?: number; limit?: number }) {
+	async searchEmails(
+		options: SearchFilterOptions & { page?: number; limit?: number },
+	) {
 		const { page = 1, limit: rawLimit = 25 } = options;
 		const limit = Math.min(Math.max(rawLimit, 1), 100);
 		const { conditions, params } = this.#buildSearchConditions(options, "e");
 
-		const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+		const where =
+			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const offset = (page - 1) * limit;
 
 		const query = `
@@ -789,7 +854,8 @@ export class MailboxDO extends DurableObject<Env> {
 	async countSearchResults(options: SearchFilterOptions) {
 		const { conditions, params } = this.#buildSearchConditions(options);
 
-		const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+		const where =
+			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const query = `SELECT COUNT(*) as total FROM emails ${where}`;
 
 		const row = [...this.ctx.storage.sql.exec(query, ...params)][0] as
@@ -800,7 +866,10 @@ export class MailboxDO extends DurableObject<Env> {
 
 	// ── Threading helpers (raw SQL) ─────────────────────────────────
 
-	async findThreadBySubject(subject: string, senderAddress?: string): Promise<string | null> {
+	async findThreadBySubject(
+		subject: string,
+		senderAddress?: string,
+	): Promise<string | null> {
 		const normalized = subject
 			.replace(/^(?:(?:re|fwd?|fw|aw|wg|r[eé]f|sv)\s*:\s*)+/i, "")
 			.trim()
@@ -835,7 +904,9 @@ export class MailboxDO extends DurableObject<Env> {
 					[
 						...String((row as any).senders || "").split(","),
 						...String((row as any).recipients || "").split(","),
-					].map((a) => a.trim()).filter(Boolean),
+					]
+						.map((a) => a.trim())
+						.filter(Boolean),
 				);
 				if (!participantSet.has(normalizedSender)) continue;
 			}
@@ -853,23 +924,27 @@ export class MailboxDO extends DurableObject<Env> {
 	 * Returns null if under limit, or an error message string if exceeded.
 	 */
 	async checkSendRateLimit(): Promise<string | null> {
-		const hourRow = [...this.ctx.storage.sql.exec(
-			`SELECT COUNT(*) as cnt FROM emails
+		const hourRow = [
+			...this.ctx.storage.sql.exec(
+				`SELECT COUNT(*) as cnt FROM emails
 			 WHERE folder_id = ?1
 			   AND date >= datetime('now', '-1 hour')`,
-			Folders.SENT,
-		)][0] as { cnt: number } | undefined;
+				Folders.SENT,
+			),
+		][0] as { cnt: number } | undefined;
 
 		if ((hourRow?.cnt ?? 0) >= 20) {
 			return "Rate limit exceeded: max 20 emails per hour per mailbox";
 		}
 
-		const dayRow = [...this.ctx.storage.sql.exec(
-			`SELECT COUNT(*) as cnt FROM emails
+		const dayRow = [
+			...this.ctx.storage.sql.exec(
+				`SELECT COUNT(*) as cnt FROM emails
 			 WHERE folder_id = ?1
 			   AND date >= datetime('now', '-1 day')`,
-			Folders.SENT,
-		)][0] as { cnt: number } | undefined;
+				Folders.SENT,
+			),
+		][0] as { cnt: number } | undefined;
 
 		if ((dayRow?.cnt ?? 0) >= 100) {
 			return "Rate limit exceeded: max 100 emails per day per mailbox";
@@ -916,7 +991,7 @@ export class MailboxDO extends DurableObject<Env> {
 				cc: email.cc ?? null,
 				bcc: email.bcc ?? null,
 				date: email.date,
-				read: isSent ? 1 : (email.read ? 1 : 0),
+				read: isSent ? 1 : email.read ? 1 : 0,
 				starred: email.starred ? 1 : 0,
 				body: email.body,
 				in_reply_to: email.in_reply_to ?? null,
@@ -1077,10 +1152,13 @@ export class MailboxDO extends DurableObject<Env> {
 	 * `workers/lib/dashboard-aggregation.ts` so it's unit-testable without a
 	 * runtime SQL surface.
 	 */
-	async getPipelineDurations24h(opts: { now?: string } = {}): Promise<number[]> {
+	async getPipelineDurations24h(
+		opts: { now?: string } = {},
+	): Promise<number[]> {
 		const nowIso = opts.now ?? new Date().toISOString();
+		// ⚡ Bolt: Use Date.parse to avoid allocating a temporary Date object
 		const dayAgoIso = new Date(
-			new Date(nowIso).getTime() - 24 * 60 * 60 * 1000,
+			Date.parse(nowIso) - 24 * 60 * 60 * 1000,
 		).toISOString();
 		const rows = this.db
 			.select({ duration_ms: schema.pipelineRuns.duration_ms })
@@ -1180,7 +1258,8 @@ export class MailboxDO extends DurableObject<Env> {
 			return;
 		}
 		const cappedCount = Math.min(existing.message_count, 1000);
-		const newAvg = (existing.avg_score * cappedCount + newScore) / (cappedCount + 1);
+		const newAvg =
+			(existing.avg_score * cappedCount + newScore) / (cappedCount + 1);
 		this.db
 			.update(schema.senderReputation)
 			.set({
@@ -1202,7 +1281,9 @@ export class MailboxDO extends DurableObject<Env> {
 
 	// ── Sender graph (issue #26) ──────────────────────────────────
 
-	async getSenderGraphByName(senderName: string): Promise<Array<{ sender_address: string; message_count: number }>> {
+	async getSenderGraphByName(
+		senderName: string,
+	): Promise<Array<{ sender_address: string; message_count: number }>> {
 		if (!senderName) return [];
 		return this.db
 			.select({
@@ -1214,7 +1295,10 @@ export class MailboxDO extends DurableObject<Env> {
 			.all();
 	}
 
-	async upsertSenderGraph(senderName: string, senderAddress: string): Promise<void> {
+	async upsertSenderGraph(
+		senderName: string,
+		senderAddress: string,
+	): Promise<void> {
 		if (!senderName || !senderAddress) return;
 		const now = new Date().toISOString();
 		const existing = this.db
@@ -1230,7 +1314,13 @@ export class MailboxDO extends DurableObject<Env> {
 		if (!existing) {
 			this.db
 				.insert(schema.senderGraph)
-				.values({ sender_name: senderName, sender_address: senderAddress, message_count: 1, first_seen: now, last_seen: now })
+				.values({
+					sender_name: senderName,
+					sender_address: senderAddress,
+					message_count: 1,
+					first_seen: now,
+					last_seen: now,
+				})
 				.run();
 		} else {
 			this.db
@@ -1249,11 +1339,13 @@ export class MailboxDO extends DurableObject<Env> {
 	// ── Threat intel feed state ────────────────────────────────────
 
 	async getIntelFeedState(feedId: string) {
-		return this.db
-			.select()
-			.from(schema.intelFeedState)
-			.where(eq(schema.intelFeedState.feed_id, feedId))
-			.get() ?? null;
+		return (
+			this.db
+				.select()
+				.from(schema.intelFeedState)
+				.where(eq(schema.intelFeedState.feed_id, feedId))
+				.get() ?? null
+		);
 	}
 
 	async upsertIntelFeedState(
@@ -1384,7 +1476,10 @@ export class MailboxDO extends DurableObject<Env> {
 
 		// Find IPs not yet geo-enriched (not in dmarc_sources or asn is null).
 		const existingRows = this.db
-			.select({ source_ip: schema.dmarcSources.source_ip, asn: schema.dmarcSources.asn })
+			.select({
+				source_ip: schema.dmarcSources.source_ip,
+				asn: schema.dmarcSources.asn,
+			})
 			.from(schema.dmarcSources)
 			.where(inArray(schema.dmarcSources.source_ip, distinctIps))
 			.all();
@@ -1398,7 +1493,10 @@ export class MailboxDO extends DurableObject<Env> {
 
 		await Promise.all(
 			ipsNeedingGeo.map(async (ip) => {
-				const geo = await lookupIpGeo(ip).catch(() => ({ asn: null, country: null }));
+				const geo = await lookupIpGeo(ip).catch(() => ({
+					asn: null,
+					country: null,
+				}));
 				const existing = existingByIp.get(ip);
 				if (existing) {
 					this.db
@@ -1409,7 +1507,14 @@ export class MailboxDO extends DurableObject<Env> {
 				} else {
 					this.db
 						.insert(schema.dmarcSources)
-						.values({ source_ip: ip, asn: geo.asn, country: geo.country, label: null, legitimate: 0, notes: null })
+						.values({
+							source_ip: ip,
+							asn: geo.asn,
+							country: geo.country,
+							label: null,
+							legitimate: 0,
+							notes: null,
+						})
 						.onConflictDoNothing()
 						.run();
 				}
@@ -1417,11 +1522,14 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 	}
 
-	async listDmarcReports(options: { domain?: string; limit?: number; offset?: number } = {}) {
+	async listDmarcReports(
+		options: { domain?: string; limit?: number; offset?: number } = {},
+	) {
 		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
 		const offset = Math.max(options.offset ?? 0, 0);
 		const conditions: SQL[] = [];
-		if (options.domain) conditions.push(eq(schema.dmarcReports.domain, options.domain));
+		if (options.domain)
+			conditions.push(eq(schema.dmarcReports.domain, options.domain));
 		return this.db
 			.select()
 			.from(schema.dmarcReports)
@@ -1478,27 +1586,35 @@ export class MailboxDO extends DurableObject<Env> {
 			})
 			.run();
 		if (input.emailId) {
-			this.db.insert(schema.caseEmails).values({ case_id: id, email_id: input.emailId }).run();
+			this.db
+				.insert(schema.caseEmails)
+				.values({ case_id: id, email_id: input.emailId })
+				.run();
 		}
 		if (input.observables && input.observables.length > 0) {
 			this.db
 				.insert(schema.caseObservables)
-				.values(input.observables.map((o) => ({
-					id: crypto.randomUUID(),
-					case_id: id,
-					kind: o.kind,
-					value: o.value,
-				})))
+				.values(
+					input.observables.map((o) => ({
+						id: crypto.randomUUID(),
+						case_id: id,
+						kind: o.kind,
+						value: o.value,
+					})),
+				)
 				.run();
 		}
 		return { id };
 	}
 
-	async listCases(options: { status?: string; limit?: number; offset?: number } = {}) {
+	async listCases(
+		options: { status?: string; limit?: number; offset?: number } = {},
+	) {
 		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
 		const offset = Math.max(options.offset ?? 0, 0);
 		const conditions: SQL[] = [];
-		if (options.status) conditions.push(eq(schema.cases.status, options.status));
+		if (options.status)
+			conditions.push(eq(schema.cases.status, options.status));
 		return this.db
 			.select()
 			.from(schema.cases)
@@ -1529,7 +1645,9 @@ export class MailboxDO extends DurableObject<Env> {
 		const rawTrace = row.stage_trace ?? null;
 		const stage_trace = parseStageTrace(rawTrace);
 		const stage_trace_error =
-			stage_trace === null && typeof rawTrace === "string" && rawTrace.length > 0
+			stage_trace === null &&
+			typeof rawTrace === "string" &&
+			rawTrace.length > 0
 				? "malformed"
 				: null;
 		return {
@@ -1551,11 +1669,15 @@ export class MailboxDO extends DurableObject<Env> {
 			hub_event_uuid?: string | null;
 		},
 	) {
-		const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+		const patch: Record<string, unknown> = {
+			updated_at: new Date().toISOString(),
+		};
 		if (changes.status !== undefined) patch.status = changes.status;
 		if (changes.notes !== undefined) patch.notes = changes.notes;
-		if (changes.shared_to_hub !== undefined) patch.shared_to_hub = changes.shared_to_hub ? 1 : 0;
-		if (changes.hub_event_uuid !== undefined) patch.hub_event_uuid = changes.hub_event_uuid;
+		if (changes.shared_to_hub !== undefined)
+			patch.shared_to_hub = changes.shared_to_hub ? 1 : 0;
+		if (changes.hub_event_uuid !== undefined)
+			patch.hub_event_uuid = changes.hub_event_uuid;
 		this.db
 			.update(schema.cases)
 			.set(patch)
@@ -1670,7 +1792,11 @@ export class MailboxDO extends DurableObject<Env> {
 		return rows;
 	}
 
-	async setSourceLegitimate(source_ip: string, legitimate: boolean, notes: string | null = null) {
+	async setSourceLegitimate(
+		source_ip: string,
+		legitimate: boolean,
+		notes: string | null = null,
+	) {
 		this.ctx.storage.sql.exec(
 			`INSERT INTO dmarc_sources (source_ip, legitimate, notes)
 			 VALUES (?1, ?2, ?3)
@@ -1800,7 +1926,8 @@ export class MailboxDO extends DurableObject<Env> {
 		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
 		const offset = Math.max(options.offset ?? 0, 0);
 		const conditions: SQL[] = [];
-		if (options.domain) conditions.push(eq(schema.tlsrptReports.domain, options.domain));
+		if (options.domain)
+			conditions.push(eq(schema.tlsrptReports.domain, options.domain));
 		return this.db
 			.select()
 			.from(schema.tlsrptReports)
@@ -1824,10 +1951,18 @@ export class MailboxDO extends DurableObject<Env> {
 			.select({
 				sending_mta_ip: schema.tlsrptRecords.sending_mta_ip,
 				receiving_mx_hostname: schema.tlsrptRecords.receiving_mx_hostname,
-				successful_session_count: sql<number>`COALESCE(SUM(${schema.tlsrptRecords.successful_session_count}), 0)`.mapWith(Number),
-				failed_session_count: sql<number>`COALESCE(SUM(${schema.tlsrptRecords.failed_session_count}), 0)`.mapWith(Number),
-				first_seen: sql<string>`MIN(${schema.tlsrptReports.received_at})`.mapWith(String),
-				last_seen: sql<string>`MAX(${schema.tlsrptReports.received_at})`.mapWith(String),
+				successful_session_count:
+					sql<number>`COALESCE(SUM(${schema.tlsrptRecords.successful_session_count}), 0)`.mapWith(
+						Number,
+					),
+				failed_session_count:
+					sql<number>`COALESCE(SUM(${schema.tlsrptRecords.failed_session_count}), 0)`.mapWith(
+						Number,
+					),
+				first_seen:
+					sql<string>`MIN(${schema.tlsrptReports.received_at})`.mapWith(String),
+				last_seen:
+					sql<string>`MAX(${schema.tlsrptReports.received_at})`.mapWith(String),
 			})
 			.from(schema.tlsrptRecords)
 			.innerJoin(
@@ -1851,7 +1986,10 @@ export class MailboxDO extends DurableObject<Env> {
 		return this.db
 			.select({
 				result_type: schema.tlsrptRecords.result_type,
-				failed_session_count: sql<number>`COALESCE(SUM(${schema.tlsrptRecords.failed_session_count}), 0)`.mapWith(Number),
+				failed_session_count:
+					sql<number>`COALESCE(SUM(${schema.tlsrptRecords.failed_session_count}), 0)`.mapWith(
+						Number,
+					),
 			})
 			.from(schema.tlsrptRecords)
 			.innerJoin(
@@ -1922,7 +2060,8 @@ export class MailboxDO extends DurableObject<Env> {
 
 	async getDashboardSummary(opts: { now?: string } = {}) {
 		const nowIso = opts.now ?? new Date().toISOString();
-		const nowMs = new Date(nowIso).getTime();
+		// ⚡ Bolt: Use Date.parse to avoid allocating a temporary Date object
+		const nowMs = Date.parse(nowIso);
 		const dayAgoIso = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
 		const weekAgoIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -1982,8 +2121,10 @@ export class MailboxDO extends DurableObject<Env> {
 			.where(sql`${schema.emails.date} >= ${dayAgoIso}`)
 			.groupBy(schema.emails.deep_scan_status)
 			.all();
-		const completed = scanStatusRows.find((r) => r.status === "completed")?.count ?? 0;
-		const failed = scanStatusRows.find((r) => r.status === "failed")?.count ?? 0;
+		const completed =
+			scanStatusRows.find((r) => r.status === "completed")?.count ?? 0;
+		const failed =
+			scanStatusRows.find((r) => r.status === "failed")?.count ?? 0;
 
 		const verdictRows = this.db
 			.select({
@@ -2066,7 +2207,9 @@ export class MailboxDO extends DurableObject<Env> {
 			.limit(5)
 			.all();
 
-		const pipelineDurationsMs = await this.getPipelineDurations24h({ now: nowIso });
+		const pipelineDurationsMs = await this.getPipelineDurations24h({
+			now: nowIso,
+		});
 
 		return {
 			now: nowIso,
@@ -2228,9 +2371,15 @@ export class MailboxDO extends DurableObject<Env> {
  * GROUP_CONCAT participant lists produced by `findThreadBySubject`'s SQL query.
  * Exported for unit testing the exact-address (non-substring) invariant.
  */
-export function _isKnownParticipant(senders: string, recipients: string, senderAddress: string): boolean {
+export function _isKnownParticipant(
+	senders: string,
+	recipients: string,
+	senderAddress: string,
+): boolean {
 	const participantSet = new Set(
-		[...senders.split(","), ...recipients.split(",")].map((a) => a.trim()).filter(Boolean),
+		[...senders.split(","), ...recipients.split(",")]
+			.map((a) => a.trim())
+			.filter(Boolean),
 	);
 	return participantSet.has(senderAddress);
 }
