@@ -16,10 +16,15 @@ const updateDomainMock = {
 };
 
 let domainSettingsFixture: { domain: string; settings: Record<string, unknown> };
+let orgSettingsFixture: { settings: Record<string, unknown> } = { settings: {} };
 
 vi.mock("~/queries/domain-settings", () => ({
 	useDomainSettings: () => ({ data: domainSettingsFixture, isLoading: false }),
 	useUpdateDomainSettings: () => updateDomainMock,
+}));
+
+vi.mock("~/queries/org-settings", () => ({
+	useOrgSettings: () => ({ data: orgSettingsFixture, isLoading: false }),
 }));
 
 vi.mock("~/queries/text-models", () => ({
@@ -54,6 +59,7 @@ describe("DomainSettings · Catch-all intel toggle (#521)", () => {
 		mutateAsync.mockReset();
 		mutateAsync.mockResolvedValue(undefined);
 		domainSettingsFixture = { domain: "acme.com", settings: {} };
+		orgSettingsFixture = { settings: {} };
 	});
 
 	it("renders the catch-all intel toggle unchecked when setting is absent", async () => {
@@ -142,5 +148,65 @@ describe("DomainSettings · Catch-all intel toggle (#521)", () => {
 		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
 		// Never interacted — absent-key-inherits semantics: don't send it
 		expect(payload.catchall_intel).toBeUndefined();
+	});
+
+	it("preserves catchall_intel sub-fields when saving with enabled already true", async () => {
+		const user = userEvent.setup();
+		domainSettingsFixture = {
+			domain: "acme.com",
+			settings: {
+				catchall_intel: { enabled: true, retention_days: 14, sample_limit: 25 },
+			},
+		};
+		renderDomainSettings();
+
+		await screen.findByRole("checkbox", { name: /enable catch-all probe capture/i });
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		expect(payload.catchall_intel).toEqual({
+			enabled: true,
+			retention_days: 14,
+			sample_limit: 25,
+		});
+	});
+
+	it("preserves intel.feeds when saving without a hub override", async () => {
+		const user = userEvent.setup();
+		domainSettingsFixture = {
+			domain: "acme.com",
+			settings: {
+				intel: {
+					feeds: [{ id: "custom-feed", url: "https://feeds.example.com/list" }],
+				},
+			},
+		};
+		renderDomainSettings();
+
+		await screen.findByRole("button", { name: /save changes/i });
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		expect((payload.intel as { feeds: unknown[] }).feeds).toHaveLength(1);
+	});
+
+	it("does not persist security when inheriting org policy and the panel is untouched", async () => {
+		const user = userEvent.setup();
+		orgSettingsFixture = {
+			settings: {
+				security: { enabled: true, allowlist_domains: ["trusted.example"] },
+			},
+		};
+		domainSettingsFixture = { domain: "acme.com", settings: {} };
+		renderDomainSettings();
+
+		await screen.findByTestId("security-inheritance-badge");
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		expect(payload.security).toBeUndefined();
 	});
 });

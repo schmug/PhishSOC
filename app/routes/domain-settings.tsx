@@ -9,6 +9,7 @@ import {
 	useDomainSettings,
 	useUpdateDomainSettings,
 } from "~/queries/domain-settings";
+import { useOrgSettings } from "~/queries/org-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
 import {
@@ -27,8 +28,23 @@ interface DomainSettingsShape {
 	agentModel?: string;
 	autoDraft?: { enabled?: boolean };
 	security?: SecuritySettings;
-	intel?: { hub?: HubConfigSettings };
-	catchall_intel?: { enabled?: boolean };
+	intel?: { hub?: HubConfigSettings; feeds?: unknown[] };
+	catchall_intel?: { enabled?: boolean; retention_days?: number; sample_limit?: number };
+}
+
+function InheritanceBadge({ override, testId }: { override: boolean; testId?: string }) {
+	if (override) {
+		return (
+			<span data-testid={testId ?? "override-badge"}>
+				<Badge variant="primary">Override</Badge>
+			</span>
+		);
+	}
+	return (
+		<span data-testid={testId ?? "inherited-badge"}>
+			<Badge variant="secondary">Inherited from org</Badge>
+		</span>
+	);
 }
 
 /**
@@ -44,12 +60,16 @@ export default function DomainSettingsRoute() {
 	const domain = rawDomain?.toLowerCase();
 	const feedback = useFeedback();
 	const { data, isLoading } = useDomainSettings(domain);
+	const { data: orgData } = useOrgSettings();
 	const updateDomain = useUpdateDomainSettings(domain);
 	const { models: availableModels } = useTextModels();
+	const orgSettings = (orgData?.settings ?? {}) as DomainSettingsShape;
 
 	const [agentPrompt, setAgentPrompt] = useState("");
 	const [security, setSecurity] = useState<SecuritySettings | undefined>(undefined);
+	const [securityOverride, setSecurityOverride] = useState(false);
 	const [hub, setHub] = useState<HubConfigSettings | undefined>(undefined);
+	const [hubOverride, setHubOverride] = useState(false);
 	const [hubErrors, setHubErrors] = useState<HubFieldErrors | undefined>(undefined);
 	const [autoDraftEnabled, setAutoDraftEnabled] = useState(true);
 	const [modelChoice, setModelChoice] = useState<string>(TEXT_MODELS[0]);
@@ -67,8 +87,20 @@ export default function DomainSettingsRoute() {
 		initialisedFor.current = domain;
 		const s = data.settings as DomainSettingsShape;
 		setAgentPrompt(s.agentSystemPrompt ?? "");
-		setSecurity(s.security);
-		setHub(s.intel?.hub);
+		if (s.security) {
+			setSecurityOverride(true);
+			setSecurity(s.security);
+		} else {
+			setSecurityOverride(false);
+			setSecurity(orgSettings.security);
+		}
+		if (s.intel?.hub) {
+			setHubOverride(true);
+			setHub(s.intel.hub);
+		} else {
+			setHubOverride(false);
+			setHub(orgSettings.intel?.hub);
+		}
 		setHubErrors(undefined);
 		setAutoDraftEnabled(s.autoDraft?.enabled === undefined ? true : s.autoDraft.enabled);
 		setCatchallIntelEnabled(s.catchall_intel?.enabled);
@@ -84,6 +116,17 @@ export default function DomainSettingsRoute() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [data, domain]);
 
+	const resetSecurity = () => {
+		setSecurityOverride(false);
+		setSecurity(orgSettings.security);
+	};
+
+	const resetHub = () => {
+		setHubOverride(false);
+		setHub(orgSettings.intel?.hub);
+		setHubErrors(undefined);
+	};
+
 	const handleSave = async () => {
 		if (!domain) return;
 		const resolvedModel = modelChoice === "__custom__" ? customModel.trim() : modelChoice;
@@ -96,23 +139,40 @@ export default function DomainSettingsRoute() {
 			return;
 		}
 
-		const hubValidation = validateHubConfig(hub);
-		setHubErrors(hubValidation ?? undefined);
-		if (hubValidation) {
-			feedback.error("Fix the threat-intel hub fields before saving.");
-			return;
+		if (hubOverride) {
+			const hubValidation = validateHubConfig(hub);
+			setHubErrors(hubValidation ?? undefined);
+			if (hubValidation) {
+				feedback.error("Fix the threat-intel hub fields before saving.");
+				return;
+			}
 		}
 
-		const normalizedHub = normalizeHubConfig(hub);
-		const intelToPersist = normalizedHub ? { hub: normalizedHub } : undefined;
+		const existing = (data?.settings ?? {}) as DomainSettingsShape;
+		const normalizedHub = hubOverride ? normalizeHubConfig(hub) : undefined;
+
+		let nextIntel: DomainSettingsShape["intel"];
+		if (hubOverride) {
+			if (normalizedHub) {
+				nextIntel = { ...(existing.intel ?? {}), hub: normalizedHub };
+			} else {
+				const { hub: _hub, ...rest } = existing.intel ?? {};
+				nextIntel = Object.keys(rest).length > 0 ? rest : undefined;
+			}
+		} else {
+			nextIntel = existing.intel;
+		}
 
 		const settings: DomainSettingsShape = {
+			...existing,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
 			autoDraft: { enabled: autoDraftEnabled },
 			agentModel: resolvedModel || undefined,
-			security,
-			intel: intelToPersist,
-			catchall_intel: catchallIntelEnabled !== undefined ? { enabled: catchallIntelEnabled } : undefined,
+			security: securityOverride ? security : undefined,
+			intel: nextIntel,
+			catchall_intel: catchallIntelEnabled !== undefined
+				? { ...(existing.catchall_intel ?? {}), enabled: catchallIntelEnabled }
+				: undefined,
 		};
 
 		setIsSaving(true);
@@ -238,17 +298,67 @@ export default function DomainSettingsRoute() {
 				</div>
 
 				{/* Security defaults */}
-				<SecuritySettingsPanel value={security} onChange={setSecurity} />
+				<div className="pp-card p-5">
+					<div className="flex items-center justify-between mb-3">
+						<span className="text-sm font-medium text-ink inline-flex items-center gap-2">
+							Security
+							<InheritanceBadge override={securityOverride} testId="security-inheritance-badge" />
+						</span>
+						{securityOverride && (
+							<button
+								type="button"
+								onClick={resetSecurity}
+								className="text-xs text-ink-3 underline hover:text-ink"
+								data-testid="reset-security"
+							>
+								Reset to inherited
+							</button>
+						)}
+					</div>
+					{!securityOverride && (
+						<div className="rounded-md border border-line bg-paper-2 px-3 py-2 mb-3 text-xs text-ink-3">
+							Inheriting the org-wide security block. Editing below promotes this domain to an
+							override that <strong>replaces the entire upstream security block</strong> for
+							every mailbox under this domain without a mailbox-level override.
+						</div>
+					)}
+					<SecuritySettingsPanel
+						value={security}
+						onChange={(next) => {
+							setSecurity(next);
+							setSecurityOverride(true);
+						}}
+					/>
+				</div>
 
 				{/* Threat-intel hub */}
-				<HubSettingsPanel
-					value={hub}
-					onChange={(next) => {
-						setHub(next);
-						if (hubErrors) setHubErrors(validateHubConfig(next) ?? undefined);
-					}}
-					errors={hubErrors}
-				/>
+				<div className="pp-card p-5">
+					<div className="flex items-center justify-between mb-3">
+						<span className="text-sm font-medium text-ink inline-flex items-center gap-2">
+							Threat-intel hub
+							<InheritanceBadge override={hubOverride} />
+						</span>
+						{hubOverride && (
+							<button
+								type="button"
+								onClick={resetHub}
+								className="text-xs text-ink-3 underline hover:text-ink"
+								data-testid="reset-hub"
+							>
+								Reset to inherited
+							</button>
+						)}
+					</div>
+					<HubSettingsPanel
+						value={hub}
+						onChange={(next) => {
+							setHub(next);
+							setHubOverride(true);
+							if (hubErrors) setHubErrors(validateHubConfig(next) ?? undefined);
+						}}
+						errors={hubErrors}
+					/>
+				</div>
 
 				{/* Catch-all intel */}
 				<div className="pp-card p-5">
