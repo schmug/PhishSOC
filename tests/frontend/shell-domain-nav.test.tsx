@@ -108,6 +108,14 @@ function renderShellAt(initialEntries: string[]) {
 				}
 			/>
 			<Route
+				path="/domains/:domain/settings"
+				element={
+					<Shell>
+						<div>domain settings page</div>
+					</Shell>
+				}
+			/>
+			<Route
 				path="/mailbox/:mailboxId/*"
 				element={
 					<Shell>
@@ -143,13 +151,17 @@ describe("Shell domain-scoped sidebar (#139)", () => {
 		expect(bobLink).toHaveAttribute("href", "/mailbox/m2/dashboard");
 	});
 
-	it("falls back to org-level nav while the domain query is pending (no flash of 'undefined')", () => {
+	it("shows 'Domain settings' link while pending but not the mailbox list (no flash of 'undefined')", () => {
 		domainQueryState = { data: undefined, isLoading: true, isError: false };
 		const { container } = renderShellAt(["/domains/acme.com"]);
 
-		// No domain section header rendered.
+		// 'Domain settings' is derived from the route match synchronously — no
+		// data-load gate — so it appears even before domainStats resolves (#547).
+		expect(screen.getByRole("link", { name: /domain settings/i })).toBeInTheDocument();
+
+		// Mailbox list is still gated on data load — not rendered while pending.
 		expect(screen.queryByText(/mailboxes in/i)).toBeNull();
-		// And no leaked "undefined" text from a half-rendered list.
+		// No leaked "undefined" text from a half-rendered list.
 		expect(container.textContent ?? "").not.toContain("undefined");
 
 		// Org-level nav still shows.
@@ -176,10 +188,24 @@ describe("Shell domain-scoped sidebar (#139)", () => {
 			const { unmount } = renderShellAt([path]);
 			expect(
 				screen.queryByText(/mailboxes in acme\.com/i),
-				`should not render the domain section at ${path}`,
+				`should not render the mailbox list at ${path}`,
+			).toBeNull();
+			expect(
+				screen.queryByRole("link", { name: /domain settings/i }),
+				`should not render the domain settings link at ${path}`,
 			).toBeNull();
 			unmount();
 		}
+	});
+
+	it("renders 'Domain settings' link on the /settings sub-route (#547)", () => {
+		domainQueryState = { data: undefined, isLoading: false, isError: false };
+		renderShellAt(["/domains/acme.com/settings"]);
+
+		// The domain block is driven by useMatch("/domains/:domain/*") so it
+		// stays active on sub-routes like /domains/:domain/settings.
+		const link = screen.getByRole("link", { name: /domain settings/i });
+		expect(link).toHaveAttribute("href", "/domains/acme.com/settings");
 	});
 
 	it("URL-decodes the :domain route param in the section label", () => {

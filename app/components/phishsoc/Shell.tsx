@@ -471,22 +471,30 @@ function NavContents({
 						/>
 					</>
 				)}
-				{/* Domain-scoped block (#139): on `/domains/:domain` surface the
-				    mailboxes that belong to the domain, mirroring the
-				    mailbox-scoped block above. Only render once the query has
-				    resolved — while pending we fall through to the org-level
-				    nav rather than flashing an empty list or "undefined". */}
-				{domain && domainMailboxes && domainMailboxes.length > 0 && (
+				{/* Domain-scoped block (#139 / #547): on `/domains/:domain[/*]` show
+				    a persistent settings link (derived from the route match,
+				    no data-load gate) plus the mailbox list once loaded. */}
+				{domain && (
 					<>
-						<SectionLabel>Mailboxes in {domain}</SectionLabel>
-						{domainMailboxes.map((mb) => (
-							<NavItem
-								key={mb.id}
-								to={`/mailbox/${encodeURIComponent(mb.id)}/dashboard`}
-								icon={<EnvelopeIcon size={16} />}
-								label={mb.email || mb.name || mb.id}
-							/>
-						))}
+						<SectionLabel>This domain</SectionLabel>
+						<NavItem
+							to={`/domains/${encodeURIComponent(domain)}/settings`}
+							icon={<GearSixIcon size={16} />}
+							label="Domain settings"
+						/>
+						{domainMailboxes && domainMailboxes.length > 0 && (
+							<>
+								<SectionLabel>Mailboxes in {domain}</SectionLabel>
+								{domainMailboxes.map((mb) => (
+									<NavItem
+										key={mb.id}
+										to={`/mailbox/${encodeURIComponent(mb.id)}/dashboard`}
+										icon={<EnvelopeIcon size={16} />}
+										label={mb.email || mb.name || mb.id}
+									/>
+								))}
+							</>
+						)}
 					</>
 				)}
 			</nav>
@@ -589,7 +597,9 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 	// `useDomainStats` hook is `enabled: !!domain` internally, so passing
 	// `undefined` off-route is the gate that keeps other pages from paying
 	// the network cost.
-	const domainMatch = useMatch("/domains/:domain");
+	const domainMatchExact = useMatch("/domains/:domain");
+	const domainMatchWild = useMatch("/domains/:domain/*");
+	const domainMatch = domainMatchExact ?? domainMatchWild;
 	const rawDomain = domainMatch?.params.domain;
 	const activeDomain = rawDomain ? decodeURIComponent(rawDomain) : undefined;
 	const { data: domainStats } = useDomainStats(activeDomain);
