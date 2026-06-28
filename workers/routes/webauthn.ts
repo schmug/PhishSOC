@@ -47,6 +47,7 @@ import { dispatchSecurityAlert, type AlertExecutionContext } from "../lib/securi
 import {
 	consumeChallenge,
 	createCredential,
+	deleteAllBySub,
 	getByCredentialId,
 	listBySub,
 	putChallenge,
@@ -92,10 +93,38 @@ const RegisterVerifyBodySchema = z.object({
 	attestation: z.record(z.string(), z.unknown()),
 });
 
+const RecoverBodySchema = z.object({
+	// Access `sub` of the user whose lost credentials are being cleared.
+	userSub: z.string().min(1),
+});
+
 export const webauthnRoute = new Hono<{ Bindings: Env; Variables: AccessVariables }>();
 
 function authConfigured(env: Env): boolean {
 	return !!(env.WEBAUTHN_DB && env.RP_ID && env.RP_ORIGIN && env.CONFIRMATION_TOKEN_SECRET && env.BLOOM_KV);
+}
+
+/** Operator-only admin allowlist for the recovery endpoint (#507), parsed from
+ *  the comma-separated `WEBAUTHN_ADMIN_EMAILS` env var (case-insensitive). */
+function adminEmails(env: Env): string[] {
+	return (env.WEBAUTHN_ADMIN_EMAILS ?? "")
+		.split(",")
+		.map((s) => s.trim().toLowerCase())
+		.filter(Boolean);
+}
+
+/**
+ * An admin is an INTERACTIVE Access identity (email claim — never a service
+ * token / MCP / agent) whose email is on the operator `WEBAUTHN_ADMIN_EMAILS`
+ * allowlist. Fails CLOSED when the allowlist is empty/unset: with no admins
+ * configured, no recovery is possible. This is the only authority that may
+ * clear another user's step-up credentials.
+ */
+function isWebauthnAdmin(env: Env, identity: AccessIdentity | null): boolean {
+	if (!identity || !isInteractive(identity)) return false;
+	const allow = adminEmails(env);
+	if (allow.length === 0) return false;
+	return allow.includes((identity.email ?? "").toLowerCase());
 }
 
 function payloadHashFor(p: z.infer<typeof SendPayloadSchema>): Promise<string> {
@@ -392,4 +421,52 @@ webauthnRoute.post("/register/verify", async (c) => {
 	}
 
 	return c.json({ verified: true, credentialId: info.credential.id, firstKey });
+});
+
+// ── POST /recover ─────────────────────────────────────────────────────────────
+// Operator/admin-only OUT-OF-BAND recovery (#507). Clears ALL of a target
+// user's WebAuthn step-up credentials so they can re-enroll a new first
+// authenticator behind an interactive Access session (per #376). There is
+// deliberately NO self-serve / emailed / TOTP / mailbox-reachable path — those
+// reintroduce the exact phishing/injection surface the step-up exists to
+// eliminate (#376 req #4). Admin authority comes solely from the operator-only
+// WEBAUTHN_ADMIN_EMAILS allowlist: a non-admin teammate, a service token, or
+// the agent/MCP (no email ⇒ not interactive) is rejected with 403. The action
+// is audit-logged AND dispatches the same out-of-band security alert as a
+// first-key enrollment, since clearing credentials is a high-trust operation.
+webauthnRoute.post("/recover", async (c) => {
+	if (!authConfigured(c.env)) return c.json({ error: "webauthn not configured" }, 503);
+	const identity = getAccessIdentity(c);
+	if (!isWebauthnAdmin(c.env, identity)) {
+		return c.json({ error: "admin recovery not authorized" }, 403);
+	}
+
+	const parsed = RecoverBodySchema.safeParse(await c.req.json().catch(() => ({})));
+	if (!parsed.success) return c.json({ error: "invalid request body" }, 400);
+	const targetSub = parsed.data.userSub;
+
+	const removed = await deleteAllBySub(c.env.WEBAUTHN_DB, targetSub);
+
+	// `identity` is non-null here (isWebauthnAdmin would have rejected null).
+	const auditEvent = {
+		event: "webauthn.credentials_recovered",
+		admin_sub: identity!.sub,
+		admin_email: identity!.email,
+		target_sub: targetSub,
+		removed,
+	};
+	// Forensic audit line for retrospective log search.
+	console.log(JSON.stringify(auditEvent));
+	// Active operator notification — fire-and-forget; a failed/slow/missing
+	// webhook MUST NOT block or fail the recovery. No-ops when
+	// SECURITY_ALERT_WEBHOOK_URL is unset.
+	let alertCtx: AlertExecutionContext | undefined;
+	try {
+		alertCtx = c.executionCtx;
+	} catch {
+		alertCtx = undefined;
+	}
+	dispatchSecurityAlert(c.env, alertCtx, auditEvent);
+
+	return c.json({ recovered: true, targetSub, removed });
 });
