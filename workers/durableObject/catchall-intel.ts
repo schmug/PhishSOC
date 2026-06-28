@@ -73,7 +73,15 @@ export interface SqlLike {
 	exec<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Iterable<T>;
 }
 
-export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): void {
+/** Deep-scan results written back to a probe sample (#438). RDAP + redirect
+ *  only — never any IP-reputation signal, never a MailboxDO verdict. */
+export interface CatchallDeepScanResult {
+	resolved_url: string | null;
+	domain_age_days: number | null;
+	redirect_chain_length: number | null;
+}
+
+export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): string {
 	const {
 		ts, sourceIp, senderDomain, sender, localpart,
 		subjectSnippet, score, band, signals, retentionDays, sampleLimit,
@@ -140,6 +148,31 @@ export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): void 
 			total - sampleLimit,
 		);
 	}
+
+	// The newly inserted sample's id lets the caller (#438) dispatch an async
+	// deep-scan and write results back to this exact row via updateProbeDeepScan.
+	return id;
+}
+
+/**
+ * Write async deep-scan results (#438) back to a probe sample. No-op when the
+ * sample id is unknown (e.g. it was evicted from the ring buffer before the
+ * deep-scan completed). RDAP + redirect only — never touches any other table.
+ */
+export function _updateProbeDeepScanImpl(
+	sql: SqlLike,
+	sampleId: string,
+	result: CatchallDeepScanResult,
+): void {
+	sql.exec(
+		`UPDATE probe_recent
+         SET resolved_url = ?, domain_age_days = ?, redirect_chain_length = ?
+         WHERE id = ?`,
+		result.resolved_url,
+		result.domain_age_days,
+		result.redirect_chain_length,
+		sampleId,
+	);
 }
 
 export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): CatchallSummary {
@@ -212,8 +245,13 @@ export class CatchallIntelDO extends DurableObject<Env> {
 		applyMigrations(this.ctx.storage.sql, catchallIntelMigrations, this.ctx.storage);
 	}
 
-	async recordCatchallProbe(event: CatchallProbeEvent): Promise<void> {
-		_recordProbeImpl(this.ctx.storage.sql as SqlLike, event);
+	async recordCatchallProbe(event: CatchallProbeEvent): Promise<string> {
+		return _recordProbeImpl(this.ctx.storage.sql as SqlLike, event);
+	}
+
+	/** Write async deep-scan results (#438) back to the probe sample row. */
+	async updateProbeDeepScan(sampleId: string, result: CatchallDeepScanResult): Promise<void> {
+		_updateProbeDeepScanImpl(this.ctx.storage.sql as SqlLike, sampleId, result);
 	}
 
 	async getCatchallSummary(opts: { limit: number }): Promise<CatchallSummary> {

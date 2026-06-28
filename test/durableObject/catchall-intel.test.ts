@@ -31,6 +31,7 @@ vi.mock("cloudflare:workers", () => ({
 import {
 	_recordProbeImpl,
 	_getSummaryImpl,
+	_updateProbeDeepScanImpl,
 	type SqlLike,
 	type CatchallProbeEvent,
 } from "../../workers/durableObject/catchall-intel";
@@ -70,7 +71,10 @@ function makeSqlLike(): SqlLike {
             subject_snippet TEXT NOT NULL,
             score          INTEGER NOT NULL,
             band           TEXT NOT NULL,
-            signals_json   TEXT NOT NULL
+            signals_json   TEXT NOT NULL,
+            resolved_url          TEXT,
+            domain_age_days       INTEGER,
+            redirect_chain_length INTEGER
         );
         CREATE INDEX idx_probe_recent_ts ON probe_recent(ts DESC);
     `);
@@ -252,5 +256,50 @@ describe("_getSummaryImpl", () => {
 		expect(summary.recent).toHaveLength(3);
 		// recent is ordered newest first; signals_json is the stored JSON blob
 		expect(typeof summary.recent[0].signals_json).toBe("string");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Tests: deep-scan write-back (#438)
+// ---------------------------------------------------------------------------
+
+describe("_recordProbeImpl — returns the new sample id", () => {
+	it("returns the id of the inserted probe_recent row", () => {
+		const sql = makeSqlLike();
+		const id = _recordProbeImpl(sql, makeEvent());
+		expect(typeof id).toBe("string");
+		expect(id.length).toBeGreaterThan(0);
+		const rows = [...sql.exec<{ id: string }>("SELECT id FROM probe_recent")];
+		expect(rows.map((r) => r.id)).toContain(id);
+	});
+});
+
+describe("_updateProbeDeepScanImpl — writes deep-scan results to the sample row", () => {
+	let sql: SqlLike;
+	beforeEach(() => { sql = makeSqlLike(); });
+
+	it("sets resolved_url, domain_age_days and redirect_chain_length on the matching row", () => {
+		const id = _recordProbeImpl(sql, makeEvent());
+		_updateProbeDeepScanImpl(sql, id, {
+			resolved_url: "https://phish.example/final",
+			domain_age_days: 4,
+			redirect_chain_length: 3,
+		});
+		const [row] = [...sql.exec<{
+			resolved_url: string | null; domain_age_days: number | null; redirect_chain_length: number | null;
+		}>("SELECT resolved_url, domain_age_days, redirect_chain_length FROM probe_recent WHERE id = ?", id)];
+		expect(row.resolved_url).toBe("https://phish.example/final");
+		expect(row.domain_age_days).toBe(4);
+		expect(row.redirect_chain_length).toBe(3);
+	});
+
+	it("is a no-op for an unknown sample id (e.g. evicted before the scan completed)", () => {
+		_recordProbeImpl(sql, makeEvent());
+		_updateProbeDeepScanImpl(sql, "no-such-id", {
+			resolved_url: "https://x.example", domain_age_days: 1, redirect_chain_length: 1,
+		});
+		const rows = [...sql.exec<{ resolved_url: string | null }>("SELECT resolved_url FROM probe_recent")];
+		// The only existing row is untouched (still NULL).
+		expect(rows.every((r) => r.resolved_url === null)).toBe(true);
 	});
 });

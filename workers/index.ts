@@ -1619,7 +1619,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
  * Best-effort: any analysis or persistence failure is caught and logged so
  * a throw never propagates to `email()` and bounces the message.
  */
-export async function receiveCatchall(normalized: CatchallInbound, env: Env, _ctx: ExecutionContext): Promise<void> {
+export async function receiveCatchall(normalized: CatchallInbound, env: Env, ctx: ExecutionContext): Promise<void> {
 	const { analyzeCatchall } = await import("./security/catchall");
 	const { parsedEmail, domain, retentionDays, sampleLimit } = normalized;
 
@@ -1638,11 +1638,12 @@ export async function receiveCatchall(normalized: CatchallInbound, env: Env, _ct
 	})();
 	const senderDomain = parsedEmail.from?.address?.split("@")[1] ?? "";
 
+	let sampleId: string | undefined;
 	try {
 		const stub = env.CATCHALL_INTEL.get(env.CATCHALL_INTEL.idFromName(domain)) as unknown as {
-			recordCatchallProbe(e: unknown): Promise<void>;
+			recordCatchallProbe(e: unknown): Promise<string | void>;
 		};
-		await stub.recordCatchallProbe({
+		const recorded = await stub.recordCatchallProbe({
 			ts: new Date().toISOString(),
 			sourceIp: verdict.sourceIp ?? "",
 			senderDomain,
@@ -1655,6 +1656,7 @@ export async function receiveCatchall(normalized: CatchallInbound, env: Env, _ct
 			retentionDays,
 			sampleLimit,
 		});
+		if (typeof recorded === "string") sampleId = recorded;
 	} catch (e) {
 		console.error(`catchall: persistence failed for ${domain}:`, (e as Error).message);
 	}
@@ -1698,6 +1700,40 @@ export async function receiveCatchall(normalized: CatchallInbound, env: Env, _ct
 		}
 	} catch (e) {
 		console.error(`catchall: hub report failed for ${domain}:`, (e as Error).message);
+	}
+
+	// Async deep-scan (#438): for probes scoring at or above the deep-scan
+	// threshold, enrich the sample with RDAP domain age + redirect-chain
+	// resolution OUT of band (ctx.waitUntil), never on this path. Scope is RDAP
+	// + redirect only and it writes back to CatchallIntelDO exclusively — it
+	// never accesses any MailboxDO. Skipped when the sample id is unknown (the
+	// record failed) or no ExecutionContext.waitUntil is available.
+	try {
+		if (sampleId && typeof ctx?.waitUntil === "function") {
+			const { getDomainSettings } = await import("./lib/domain-settings");
+			const { DEFAULT_CATCHALL_DEEP_SCAN_THRESHOLD } = await import("./intel/defaults");
+			const ci = (await getDomainSettings(env, domain)).catchall_intel;
+			const threshold = ci?.deep_scan_threshold ?? DEFAULT_CATCHALL_DEEP_SCAN_THRESHOLD;
+			if (verdict.score >= threshold) {
+				const { extractUrls } = await import("./security/urls");
+				const { runCatchallDeepScan } = await import("./intel/catchall-deep-scan");
+				const body = parsedEmail.html ?? parsedEmail.text ?? null;
+				const firstUrl = extractUrls(body)[0]?.url ?? null;
+				const stub = env.CATCHALL_INTEL.get(env.CATCHALL_INTEL.idFromName(domain)) as unknown as {
+					updateProbeDeepScan(id: string, r: unknown): Promise<void>;
+				};
+				ctx.waitUntil(
+					runCatchallDeepScan(
+						{ sampleId, senderDomain, url: firstUrl },
+						{ stub: stub as Parameters<typeof runCatchallDeepScan>[1]["stub"] },
+					).catch((e) =>
+						console.error(`catchall: deep-scan failed for ${domain}:`, (e as Error).message),
+					),
+				);
+			}
+		}
+	} catch (e) {
+		console.error(`catchall: deep-scan dispatch failed for ${domain}:`, (e as Error).message);
 	}
 }
 

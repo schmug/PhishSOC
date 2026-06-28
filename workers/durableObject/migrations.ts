@@ -586,4 +586,18 @@ export const catchallIntelMigrations: Migration[] = [
             CREATE INDEX idx_probe_recent_ts ON probe_recent(ts DESC);
         `),
 	},
+	{
+		// Async deep-scan results written back to the probe sample (#438).
+		// Forward-only ALTERs; existing rows leave all three NULL until a
+		// high-score probe triggers `runCatchallDeepScan`. RDAP + redirect only:
+		// `resolved_url` is the final URL after the redirect chain,
+		// `domain_age_days` is the RDAP age of the sender domain, and
+		// `redirect_chain_length` is the number of hops followed.
+		name: "2_catchall_deep_scan",
+		sql: `
+            ALTER TABLE probe_recent ADD COLUMN resolved_url TEXT;
+            ALTER TABLE probe_recent ADD COLUMN domain_age_days INTEGER;
+            ALTER TABLE probe_recent ADD COLUMN redirect_chain_length INTEGER;
+        `,
+	},
 ];

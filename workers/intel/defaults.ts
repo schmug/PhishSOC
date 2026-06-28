@@ -24,6 +24,13 @@
  */
 export const DEFAULT_CATCHALL_HUB_REPORT_THRESHOLD = 70;
 
+/**
+ * Default score threshold at or above which a catch-all probe is dispatched for
+ * an async deep-scan (RDAP domain age + redirect-chain resolution) (#438).
+ * Overridable per-domain via `catchall_intel.deep_scan_threshold`.
+ */
+export const DEFAULT_CATCHALL_DEEP_SCAN_THRESHOLD = 60;
+
 export interface FeedDefinition {
 	id: string;
 	url: string;
