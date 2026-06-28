@@ -209,4 +209,42 @@ describe("DomainSettings · Catch-all intel toggle (#521)", () => {
 		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
 		expect(payload.security).toBeUndefined();
 	});
+
+	it("drops intel.hub on save after reset to inherited while preserving feeds", async () => {
+		const user = userEvent.setup();
+		orgSettingsFixture = {
+			settings: {
+				intel: {
+					hub: {
+						url: "https://org-hub.example",
+						org_uuid: "11111111-2222-3333-4444-555555555555",
+						api_key_secret_name: "org-key",
+					},
+				},
+			},
+		};
+		domainSettingsFixture = {
+			domain: "acme.com",
+			settings: {
+				intel: {
+					hub: {
+						url: "https://domain-hub.example",
+						org_uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+						api_key_secret_name: "domain-key",
+					},
+					feeds: [{ id: "custom-feed", url: "https://feeds.example.com/list" }],
+				},
+			},
+		};
+		renderDomainSettings();
+
+		await user.click(await screen.findByTestId("reset-hub"));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		const intel = payload.intel as { hub?: unknown; feeds?: unknown[] };
+		expect(intel.hub).toBeUndefined();
+		expect(intel.feeds).toHaveLength(1);
+	});
 });

@@ -61,7 +61,7 @@ export default function DomainSettingsRoute() {
 	const domain = rawDomain?.toLowerCase();
 	const feedback = useFeedback();
 	const { data, isLoading } = useDomainSettings(domain);
-	const { data: orgData } = useOrgSettings();
+	const { data: orgData, isLoading: isOrgLoading } = useOrgSettings();
 	const updateDomain = useUpdateDomainSettings(domain);
 	const { models: availableModels } = useTextModels();
 	const orgSettings = (orgData?.settings ?? {}) as DomainSettingsShape;
@@ -83,7 +83,7 @@ export default function DomainSettingsRoute() {
 	// would otherwise clobber edits on every re-render).
 	const initialisedFor = useRef<string | null>(null);
 	useEffect(() => {
-		if (!data?.settings || !domain) return;
+		if (!data?.settings || !orgData?.settings || !domain) return;
 		if (initialisedFor.current === domain) return;
 		initialisedFor.current = domain;
 		const s = data.settings as DomainSettingsShape;
@@ -115,7 +115,7 @@ export default function DomainSettingsRoute() {
 			setCustomModel(m);
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [data, domain]);
+	}, [data, orgData, domain]);
 
 	const resetSecurity = () => {
 		setSecurityOverride(false);
@@ -161,7 +161,10 @@ export default function DomainSettingsRoute() {
 				nextIntel = Object.keys(rest).length > 0 ? rest : undefined;
 			}
 		} else {
-			nextIntel = existing.intel;
+			// Preserve intel.feeds (and other intel.* keys) while dropping a
+			// domain-level hub override when the operator reset to inherited.
+			const { hub: _hub, ...rest } = existing.intel ?? {};
+			nextIntel = Object.keys(rest).length > 0 ? rest : undefined;
 		}
 
 		const settings: DomainSettingsShape = {
@@ -197,7 +200,7 @@ export default function DomainSettingsRoute() {
 		);
 	}
 
-	if (isLoading) {
+	if (isLoading || isOrgLoading) {
 		return (
 			<Shell>
 				<div className="flex justify-center py-20">
