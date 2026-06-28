@@ -17,6 +17,9 @@ import {
  * - `hub_report_threshold` governs when a high-score probe is submitted to the
  *   community hub via the corroboration API (#437); default in
  *   `workers/intel/defaults.ts`.
+ * - `deep_scan_threshold` governs when a high-score probe is dispatched for an
+ *   async RDAP + redirect deep-scan (#438); default in
+ *   `workers/intel/defaults.ts`.
  *
  * All fields are optional so absent-key-inherits semantics are preserved.
  * Defaults live in `workers/intel/catchall-alert.ts` (alert fields),
@@ -31,6 +34,7 @@ export const CatchallIntelSettings = z
 		harvest_alert_threshold: z.number().int().positive().optional(),
 		harvest_alert_window_minutes: z.number().int().positive().optional(),
 		hub_report_threshold: z.number().int().min(0).max(100).optional(),
+		deep_scan_threshold: z.number().int().min(0).max(100).optional(),
 	})
 	.passthrough();
 

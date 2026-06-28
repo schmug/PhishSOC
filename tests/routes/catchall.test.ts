@@ -825,3 +825,100 @@ describe("receiveCatchall — hub corroboration (#437)", () => {
 		vi.unstubAllGlobals();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// 5. receiveCatchall — async deep-scan dispatch (#438)
+// ---------------------------------------------------------------------------
+
+describe("receiveCatchall — deep-scan dispatch (#438)", () => {
+	/** A MAILBOX namespace that fails the test if catch-all deep-scan ever touches it. */
+	function throwingMailbox() {
+		return new Proxy({}, {
+			get() { throw new Error("MailboxDO must not be accessed during catch-all deep-scan"); },
+		});
+	}
+
+	function makeDeepScanEnv(deepScanThreshold: number) {
+		const probeStub = {
+			recordCatchallProbe: vi.fn().mockResolvedValue("sample-123"),
+			updateProbeDeepScan: vi.fn().mockResolvedValue(undefined),
+		};
+		const bucket = makeR2({
+			"domains/acme.example.json": JSON.stringify({
+				catchall_intel: {
+					enabled: true, retention_days: 30, sample_limit: 50,
+					deep_scan_threshold: deepScanThreshold,
+				},
+			}),
+			"org/settings.json": JSON.stringify({}),
+		});
+		const env = {
+			AI: new Proxy({}, { get() { throw new Error("env.AI must not be called"); } }),
+			BUCKET: bucket,
+			CATCHALL_INTEL: { idFromName: () => "stub-id", get: () => probeStub },
+			MAILBOX: throwingMailbox(),
+		} as unknown as Parameters<typeof import("../../workers/index").receiveCatchall>[1];
+		return { env, probeStub };
+	}
+
+	function makeNormalizedWithUrl() {
+		const parsedEmail = {
+			to: [{ address: "probe@acme.example", name: "" }],
+			from: { address: "attacker@evil.example", name: "" },
+			subject: "test", text: "see http://phish.example/landing", html: null, headers: [], attachments: [],
+		};
+		return {
+			kind: "catchall" as const,
+			rawEmail: new ArrayBuffer(0),
+			parsedEmail: parsedEmail as unknown as import("postal-mime").Email,
+			domain: "acme.example",
+			retentionDays: 30,
+			sampleLimit: 50,
+		};
+	}
+
+	async function freshState() {
+		const { receiveCatchall } = await import("../../workers/index");
+		const { clearDomainSettingsCache } = await import("../../workers/lib/domain-settings");
+		const { clearOrgSettingsCache } = await import("../../workers/lib/org-settings");
+		clearDomainSettingsCache();
+		clearOrgSettingsCache();
+		return receiveCatchall;
+	}
+
+	it("dispatches the deep-scan for the recorded sample id when score >= deep_scan_threshold, never touching MailboxDO", async () => {
+		const receiveCatchall = await freshState();
+		// Stub fetch so the real RDAP / redirect resolvers complete without network.
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 200 })));
+
+		const { env, probeStub } = makeDeepScanEnv(0); // threshold 0 → any score qualifies
+		const scheduled: Promise<unknown>[] = [];
+		const ctx = { waitUntil: (p: Promise<unknown>) => { scheduled.push(Promise.resolve(p)); } } as unknown as ExecutionContext;
+
+		await receiveCatchall(makeNormalizedWithUrl(), env, ctx);
+		await Promise.allSettled(scheduled);
+
+		expect(probeStub.recordCatchallProbe).toHaveBeenCalledOnce();
+		expect(probeStub.updateProbeDeepScan).toHaveBeenCalledOnce();
+		expect(probeStub.updateProbeDeepScan.mock.calls[0][0]).toBe("sample-123");
+
+		vi.unstubAllGlobals();
+	});
+
+	it("does not dispatch the deep-scan when score < deep_scan_threshold", async () => {
+		const receiveCatchall = await freshState();
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 200 })));
+
+		const { env, probeStub } = makeDeepScanEnv(100); // benign probe never reaches 100
+		const scheduled: Promise<unknown>[] = [];
+		const ctx = { waitUntil: (p: Promise<unknown>) => { scheduled.push(Promise.resolve(p)); } } as unknown as ExecutionContext;
+
+		await receiveCatchall(makeNormalizedWithUrl(), env, ctx);
+		await Promise.allSettled(scheduled);
+
+		expect(probeStub.recordCatchallProbe).toHaveBeenCalledOnce();
+		expect(probeStub.updateProbeDeepScan).not.toHaveBeenCalled();
+
+		vi.unstubAllGlobals();
+	});
+});
