@@ -17,8 +17,21 @@ import {
 	TrayIcon,
 	XIcon,
 } from "@phosphor-icons/react";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { NavLink, useLocation, useMatch, useNavigate, useParams } from "react-router";
+import {
+	type FormEvent,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
+import {
+	NavLink,
+	useLocation,
+	useMatch,
+	useNavigate,
+	useParams,
+} from "react-router";
 import { useUIStore } from "~/hooks/useUIStore";
 import { useDashboardSummary } from "~/queries/dashboard";
 import { useDomainStats } from "~/queries/domains";
@@ -136,12 +149,15 @@ const FOLDER_NAV_STORAGE_PREFIX = "phishsoc-folder-nav-";
 function loadFolderNavPrefs(mailboxId: string): FolderNavPrefs {
 	if (typeof window === "undefined") return { favorites: [], collapsed: false };
 	try {
-		const raw = localStorage.getItem(`${FOLDER_NAV_STORAGE_PREFIX}${mailboxId}`);
+		const raw = localStorage.getItem(
+			`${FOLDER_NAV_STORAGE_PREFIX}${mailboxId}`,
+		);
 		if (raw) {
 			const parsed = JSON.parse(raw) as Partial<FolderNavPrefs>;
 			return {
 				favorites: Array.isArray(parsed.favorites) ? parsed.favorites : [],
-				collapsed: typeof parsed.collapsed === "boolean" ? parsed.collapsed : false,
+				collapsed:
+					typeof parsed.collapsed === "boolean" ? parsed.collapsed : false,
 			};
 		}
 	} catch {
@@ -168,8 +184,12 @@ function saveFolderNavPrefs(mailboxId: string, prefs: FolderNavPrefs) {
  */
 function sortFolders(folders: Folder[]): Folder[] {
 	return [...folders].sort((a, b) => {
-		const ai = SYSTEM_FOLDER_IDS.indexOf(a.id as (typeof SYSTEM_FOLDER_IDS)[number]);
-		const bi = SYSTEM_FOLDER_IDS.indexOf(b.id as (typeof SYSTEM_FOLDER_IDS)[number]);
+		const ai = SYSTEM_FOLDER_IDS.indexOf(
+			a.id as (typeof SYSTEM_FOLDER_IDS)[number],
+		);
+		const bi = SYSTEM_FOLDER_IDS.indexOf(
+			b.id as (typeof SYSTEM_FOLDER_IDS)[number],
+		);
 		// Both system folders — use SYSTEM_FOLDER_IDS order
 		if (ai !== -1 && bi !== -1) return ai - bi;
 		// Only a is a system folder
@@ -281,7 +301,12 @@ interface FolderNavItemProps {
 	onToggleFavorite: (id: string) => void;
 }
 
-function FolderNavItem({ folder, base, isFavorite, onToggleFavorite }: FolderNavItemProps) {
+function FolderNavItem({
+	folder,
+	base,
+	isFavorite,
+	onToggleFavorite,
+}: FolderNavItemProps) {
 	return (
 		<div className="group relative flex items-center">
 			<NavLink
@@ -320,7 +345,11 @@ function FolderNavItem({ folder, base, isFavorite, onToggleFavorite }: FolderNav
 			<button
 				type="button"
 				onClick={() => onToggleFavorite(folder.id)}
-				aria-label={isFavorite ? `Unpin ${getFolderDisplayName(folder.id)}` : `Pin ${getFolderDisplayName(folder.id)}`}
+				aria-label={
+					isFavorite
+						? `Unpin ${getFolderDisplayName(folder.id)}`
+						: `Pin ${getFolderDisplayName(folder.id)}`
+				}
 				className={`absolute right-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors ${
 					isFavorite
 						? "text-accent opacity-100"
@@ -419,11 +448,7 @@ function NavContents({
 					label="Mailboxes"
 					count={mailboxCount > 0 ? mailboxCount : undefined}
 				/>
-				<NavItem
-					to="/domains"
-					icon={<GlobeIcon size={16} />}
-					label="Domains"
-				/>
+				<NavItem to="/domains" icon={<GlobeIcon size={16} />} label="Domains" />
 				{/* Org-wide settings (#153) — surfaced as a top-level entry so
 				    operators can reach `/settings` from a cold start, without
 				    first picking a mailbox. The per-mailbox `Settings` entry
@@ -452,11 +477,7 @@ function NavContents({
 						    rather than flashing an empty list (mirrors the
 						    domain-mailboxes guard above). */}
 						{folders && folders.length > 0 && (
-							<FolderNav
-								mailboxId={mailboxId}
-								folders={folders}
-								base={base}
-							/>
+							<FolderNav mailboxId={mailboxId} folders={folders} base={base} />
 						)}
 						<NavItem
 							to={`${base}/hub`}
@@ -525,9 +546,7 @@ function NavContents({
 							className={`relative inline-flex h-2 w-2 rounded-full ${PIPELINE_DOT_BG[pipelineState.tone]}`}
 						/>
 					</span>
-					<span className="text-[11px] text-ink-2">
-						{pipelineState.label}
-					</span>
+					<span className="text-[11px] text-ink-2">{pipelineState.label}</span>
 				</button>
 			)}
 
@@ -543,7 +562,9 @@ function NavContents({
 					type="button"
 					onClick={onToggleTheme}
 					className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-paper-3 hover:text-ink transition-colors"
-					aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+					aria-label={
+						theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+					}
 				>
 					{theme === "dark" ? <SunIcon size={14} /> : <MoonIcon size={14} />}
 				</button>
@@ -692,6 +713,7 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 						onClick={closeSidebar}
 					/>
 					<aside
+						id="mobile-drawer"
 						role="dialog"
 						aria-label="Primary navigation"
 						className="md:hidden fixed left-0 top-0 bottom-0 z-50 w-[260px] max-w-[85vw] flex flex-col bg-paper-2 border-r border-line shadow-xl"
@@ -717,6 +739,7 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 						onClick={openSidebar}
 						aria-label="Open menu"
 						aria-expanded={isSidebarOpen}
+						aria-controls={isSidebarOpen ? "mobile-drawer" : undefined}
 						className="md:hidden flex h-8 w-8 items-center justify-center rounded-md text-ink-3 hover:bg-paper-2 hover:text-ink transition-colors shrink-0"
 					>
 						<ListIcon size={18} />
