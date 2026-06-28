@@ -217,12 +217,65 @@ dispatch no-ops and only the audit line is emitted.
 
 ---
 
+## 7. Admin recovery for lost authenticators (#507)
+
+A user who loses **all** their step-up authenticators is locked out of every
+Tier-2 send. The threat model (§invariants, #376 req #4) forbids any self-serve,
+emailed, TOTP, or mailbox-reachable reset — each would reintroduce the exact
+phishing/injection surface the step-up exists to eliminate. Recovery is
+therefore **out-of-band and admin-mediated only**.
+
+### Endpoint
+
+```
+POST /api/v1/webauthn/recover
+{ "userSub": "<Access sub of the locked-out user>" }
+```
+
+Clears every credential registered to `userSub`. The user then re-enters the
+**first-key (TOFU) enrollment** flow (§3) behind an interactive Access session —
+`register/options` returns registration options directly (no `requiresStepUp`),
+since they now have zero credentials.
+
+### Authorization
+
+The caller must be an **interactive** Access identity (email claim — never a
+service token, the MCP server, or the agent) whose email is on the operator
+allowlist:
+
+```bash
+wrangler secret put WEBAUTHN_ADMIN_EMAILS
+# comma-separated, case-insensitive, e.g. "op@example.com, sec@example.com"
+```
+
+- **Unset/empty ⇒ fail closed:** no recovery is possible until an operator sets
+  the allowlist. Admin authority is operator-only env, never teammate-editable
+  settings.
+- A non-admin teammate, or any non-interactive caller, is rejected with `403`.
+
+### Audit
+
+Every recovery emits a forensic audit line and dispatches the same out-of-band
+security alert as a first-key enrollment (`SECURITY_ALERT_WEBHOOK_URL`, §6):
+
+```json
+{
+  "event": "webauthn.credentials_recovered",
+  "admin_sub": "…",
+  "admin_email": "op@example.com",
+  "target_sub": "a1b2c3d4-…",
+  "removed": 2
+}
+```
+
+---
+
 ## Cross-References
 
 - **#376** — this work: app-layer WebAuthn step-up replacing the Access-JWT step-up.
 - **#364 / #287** — superseded same-hostname / separate-hostname Access approaches.
 - **#506** — AAGUID hardware-pinning (deferred).
-- **#507** — admin recovery tooling (deferred).
+- **#507** — admin recovery tooling (§7, this work).
 - `workers/routes/webauthn.ts` — authenticate + register endpoints.
 - `workers/lib/webauthn-store.ts` — D1 credential + challenge store.
 - `workers/lib/confirm-token.ts` — one-shot token contract (unchanged).

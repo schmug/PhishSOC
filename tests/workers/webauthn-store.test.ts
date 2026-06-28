@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	consumeChallenge,
 	createCredential,
+	deleteAllBySub,
 	deleteExpiredChallenges,
 	getByCredentialId,
 	listBySub,
@@ -68,6 +69,22 @@ describe("webauthn-store: credentials", () => {
 		const got = await getByCredentialId(db(), "c-upd");
 		expect(got!.counter).toBe(6);
 		expect(got!.lastUsedAt).toBe(1_700_000_111_000);
+	});
+
+	it("deleteAllBySub removes only the target user's credentials and reports the count", async () => {
+		await createCredential(db(), sampleCredential({ credentialId: "d1", userSub: "u-del", createdAt: 1 }));
+		await createCredential(db(), sampleCredential({ credentialId: "d2", userSub: "u-del", createdAt: 2 }));
+		await createCredential(db(), sampleCredential({ credentialId: "d3", userSub: "u-keep", createdAt: 3 }));
+
+		const removed = await deleteAllBySub(db(), "u-del");
+		expect(removed).toBe(2);
+		expect(await listBySub(db(), "u-del")).toEqual([]);
+		// Another user's credentials are untouched.
+		expect((await listBySub(db(), "u-keep")).map((c) => c.credentialId)).toEqual(["d3"]);
+	});
+
+	it("deleteAllBySub returns 0 when the user has no credentials", async () => {
+		expect(await deleteAllBySub(db(), "u-never-enrolled")).toBe(0);
 	});
 });
 

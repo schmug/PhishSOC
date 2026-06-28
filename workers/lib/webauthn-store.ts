@@ -121,6 +121,23 @@ export async function listBySub(db: D1Database, userSub: string): Promise<Stored
 	return results.map(rowToCredential);
 }
 
+/**
+ * Delete every credential registered to `userSub`. Returns the number of rows
+ * removed. This is the operator/admin recovery primitive (#507): a user who has
+ * lost all their step-up authenticators is locked out of Tier-2 sends, and the
+ * threat model forbids any self-serve / emailed / TOTP reset. An admin clears
+ * the user's credentials with this, after which the user re-enters the first-key
+ * (TOFU) enrollment flow behind an interactive Access session. Caller-side
+ * admin gating and audit logging live in `workers/routes/webauthn.ts`.
+ */
+export async function deleteAllBySub(db: D1Database, userSub: string): Promise<number> {
+	const { meta } = await db
+		.prepare("DELETE FROM webauthn_credentials WHERE user_sub = ?")
+		.bind(userSub)
+		.run();
+	return meta.changes ?? 0;
+}
+
 export async function updateCounter(
 	db: D1Database,
 	credentialId: string,

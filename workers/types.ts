@@ -60,4 +60,15 @@ export interface Env extends Cloudflare.Env {
 	 * Off-allowlist feeds still fetch — they just never carry the secret.
 	 */
 	FEED_ALLOWED_HOSTS?: string;
+	/**
+	 * Comma-separated operator allowlist of admin emails for the WebAuthn
+	 * step-up recovery endpoint (#507). Only an INTERACTIVE Access identity
+	 * (email claim — never a service token / MCP) whose email is on this list
+	 * may clear another user's lost step-up credentials so they can re-enroll.
+	 * Unset/empty → no admin recovery is possible (fail closed), so operators
+	 * MUST set this (e.g. `op@example.com`) to enable recovery. Kept in env,
+	 * not teammate-editable settings: admin authority is operator-only. Set with
+	 * `wrangler secret put WEBAUTHN_ADMIN_EMAILS` (or as a wrangler var).
+	 */
+	WEBAUTHN_ADMIN_EMAILS?: string;
 }
