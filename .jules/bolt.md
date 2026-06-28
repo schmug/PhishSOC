@@ -18,3 +18,6 @@
 ## 2026-06-06 - Optimize Intl.DateTimeFormat Instantiations by Timezone
 **Learning:** Instantiating `Intl.DateTimeFormat` instances inside functions like `localDateParts` which are called repeatedly during time rule evaluations incurs significant performance overhead. Micro-benchmarks demonstrate that creating a new `Intl.DateTimeFormat` instance repeatedly takes hundreds of milliseconds, while fetching a pre-instantiated, cached version from a Map takes barely anything.
 **Action:** Replaced repetitive instantiations of `Intl.DateTimeFormat` in `workers/security/time-rules.ts` with a module-level `Map` cache (`FORMATTER_CACHE`) keyed by `timezone`. This drastically speeds up business-hours calculations, reducing overhead by ~36x for repeated calls.
+## 2026-06-28 - Avoid Unnecessary Date Object Allocation
+**Learning:** Instantiating `new Date` to get a timestamp via `.getTime()` inside hot paths causes unnecessary object allocation and garbage collection overhead.
+**Action:** Replace `new Date(string).getTime()` with `Date.parse(string)` for pure timestamp parsing.
