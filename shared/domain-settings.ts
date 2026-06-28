@@ -14,10 +14,14 @@ import {
  *   stores (wired in #426).
  * - `harvest_alert_threshold` / `harvest_alert_window_minutes` govern when
  *   `computeHarvestAlerts` fires an alert (this issue, #429).
+ * - `hub_report_threshold` governs when a high-score probe is submitted to the
+ *   community hub via the corroboration API (#437); default in
+ *   `workers/intel/defaults.ts`.
  *
  * All fields are optional so absent-key-inherits semantics are preserved.
- * Defaults live in `workers/intel/catchall-alert.ts` (alert fields) and in
- * the wiring layer of #426 (capture fields), not on this schema.
+ * Defaults live in `workers/intel/catchall-alert.ts` (alert fields),
+ * `workers/intel/defaults.ts` (hub-report threshold), and in the wiring layer
+ * of #426 (capture fields), not on this schema.
  */
 export const CatchallIntelSettings = z
 	.object({
@@ -26,6 +30,7 @@ export const CatchallIntelSettings = z
 		sample_limit: z.number().int().positive().optional(),
 		harvest_alert_threshold: z.number().int().positive().optional(),
 		harvest_alert_window_minutes: z.number().int().positive().optional(),
+		hub_report_threshold: z.number().int().min(0).max(100).optional(),
 	})
 	.passthrough();
 

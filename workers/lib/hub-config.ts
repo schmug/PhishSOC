@@ -9,8 +9,10 @@
  * from `c.env` at call time so an org can rotate without rewriting blobs.
  */
 
+import { getDomainSettings } from "./domain-settings";
 import { hostAllowed } from "./host-allowlist";
 import { resolveMailboxSettings } from "./mailbox-settings";
+import { getOrgSettings } from "./org-settings";
 
 export interface HubConfig {
 	url: string;
@@ -26,14 +28,14 @@ interface BucketEnv {
 	HUB_ALLOWED_HOSTS?: string;
 }
 
-/** Returns the resolved hub config for a mailbox, or null when neither
- *  tier supplies a complete one. */
-export async function loadHubConfig(
-	env: BucketEnv,
-	mailboxId: string,
-): Promise<HubConfig | null> {
-	const resolved = await resolveMailboxSettings(env, mailboxId);
-	const raw = resolved.intel.hub;
+/**
+ * Validate a raw `intel.hub` block into a complete, destination-pinned
+ * `HubConfig`, or null when incomplete / unsafe. Shared by the mailbox-scoped
+ * and domain-scoped resolvers so both enforce the identical security checks:
+ * required fields, `HUB_SECRET_` secret-name prefix, and `HUB_ALLOWED_HOSTS`
+ * destination pinning (GHSA-jfj6-w954-96vg f29).
+ */
+function validateHubConfig(env: BucketEnv, raw: unknown): HubConfig | null {
 	if (!raw || typeof raw !== "object") return null;
 	const cfg = raw as Partial<HubConfig>;
 	if (!cfg.url || !cfg.org_uuid || !cfg.api_key_secret_name) return null;
@@ -55,6 +57,36 @@ export async function loadHubConfig(
 	};
 }
 
+/** Returns the resolved hub config for a mailbox, or null when neither
+ *  tier supplies a complete one. */
+export async function loadHubConfig(
+	env: BucketEnv,
+	mailboxId: string,
+): Promise<HubConfig | null> {
+	const resolved = await resolveMailboxSettings(env, mailboxId);
+	return validateHubConfig(env, resolved.intel.hub);
+}
+
+/**
+ * Domain-scoped hub config for the catch-all path (#437), which has no mailbox.
+ * Resolves `intel.hub` from the domain settings, falling back to the org tier
+ * (`domain > org`, mirroring the mailbox resolver minus the per-mailbox tier).
+ * Returns null when neither tier supplies a complete, allowlisted config.
+ */
+export async function loadHubConfigForDomain(
+	env: BucketEnv,
+	domain: string,
+): Promise<HubConfig | null> {
+	const domainSettings = await getDomainSettings(env, domain);
+	const domainHub = (domainSettings.intel as { hub?: unknown } | undefined)?.hub;
+	if (domainHub) {
+		const cfg = validateHubConfig(env, domainHub);
+		if (cfg) return cfg;
+	}
+	const org = await getOrgSettings(env);
+	return validateHubConfig(env, (org.intel as { hub?: unknown } | undefined)?.hub);
+}
+
 /**
  * Resolve a hub config + the live API key. Returns null if either the config
  * is missing or the named secret is unset on `env`. Callers that need the
@@ -67,6 +99,22 @@ export async function loadHubCredentials(
 	mailboxId: string,
 ): Promise<{ cfg: HubConfig; apiKey: string } | null> {
 	const cfg = await loadHubConfig(env, mailboxId);
+	if (!cfg) return null;
+	const apiKey = env[cfg.api_key_secret_name];
+	if (typeof apiKey !== "string" || !apiKey) return null;
+	return { cfg, apiKey };
+}
+
+/**
+ * Domain-scoped variant of `loadHubCredentials` for the catch-all path (#437).
+ * Resolves the hub config from the domain (then org) tier and the live API key
+ * from the named secret. Returns null if either is missing.
+ */
+export async function loadHubCredentialsForDomain(
+	env: Record<string, unknown> & BucketEnv,
+	domain: string,
+): Promise<{ cfg: HubConfig; apiKey: string } | null> {
+	const cfg = await loadHubConfigForDomain(env, domain);
 	if (!cfg) return null;
 	const apiKey = env[cfg.api_key_secret_name];
 	if (typeof apiKey !== "string" || !apiKey) return null;

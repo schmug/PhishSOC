@@ -1658,6 +1658,47 @@ export async function receiveCatchall(normalized: CatchallInbound, env: Env, _ct
 	} catch (e) {
 		console.error(`catchall: persistence failed for ${domain}:`, (e as Error).message);
 	}
+
+	// Hub corroboration (#437): submit high-score probes to the community hub.
+	// Best-effort and fully independent of probe recording above — a missing
+	// hub config, a below-threshold score, or any submission failure must never
+	// affect the recorded probe or bounce the message. The submission only
+	// posts when the hub integration is configured AND opted in (auto_report).
+	try {
+		const { getDomainSettings } = await import("./lib/domain-settings");
+		const { DEFAULT_CATCHALL_HUB_REPORT_THRESHOLD } = await import("./intel/defaults");
+		const ci = (await getDomainSettings(env, domain)).catchall_intel;
+		const threshold = ci?.hub_report_threshold ?? DEFAULT_CATCHALL_HUB_REPORT_THRESHOLD;
+		if (verdict.score >= threshold && (senderDomain || verdict.sourceIp)) {
+			const { loadHubCredentialsForDomain } = await import("./lib/hub-config");
+			const creds = await loadHubCredentialsForDomain(
+				env as unknown as Record<string, unknown> & { BUCKET: R2Bucket },
+				domain,
+			);
+			if (creds) {
+				const { reportCatchallProbes } = await import("./intel/catchall-hub-report");
+				const nowIso = new Date().toISOString();
+				await reportCatchallProbes({
+					hubConfig: creds.cfg,
+					apiKey: creds.apiKey,
+					domain,
+					summary: {
+						topSources: [
+							{
+								source_ip: verdict.sourceIp ?? "",
+								sender_domain: senderDomain,
+								count: 1,
+								first_seen: nowIso,
+								last_seen: nowIso,
+							},
+						],
+					},
+				});
+			}
+		}
+	} catch (e) {
+		console.error(`catchall: hub report failed for ${domain}:`, (e as Error).message);
+	}
 }
 
 export { app, receiveEmail };
