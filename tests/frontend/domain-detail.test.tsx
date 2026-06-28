@@ -316,8 +316,9 @@ describe("DomainDetailRoute", () => {
 		expect(within(dmarcCard).getByText("97%")).toBeInTheDocument();
 	});
 
-	it("renders the catch-all probes empty-state when no probe data is available (#427)", () => {
+	it("renders disabled empty-state when catch-all intel is not enabled (#427, #548)", () => {
 		queryState = { data: populated, isLoading: false, isError: false };
+		// Default useCatchallIntel mock returns data: undefined → disabled state.
 		renderDomainDetail("acme.com");
 		const card = screen
 			.getByText(/catch-all probes/i)
@@ -325,11 +326,50 @@ describe("DomainDetailRoute", () => {
 		expect(
 			within(card).getByText(/no catch-all probe activity recorded/i),
 		).toBeInTheDocument();
+		expect(
+			within(card).getByRole("link", { name: /enable catch-all intel in domain settings/i }),
+		).toBeInTheDocument();
 	});
 
-	it("renders catch-all probes populated card when useCatchallIntel returns data (#427)", async () => {
+	it("renders 'awaiting probe activity' state when enabled but zero probes (#548)", async () => {
+		const domainsModule = await import("~/queries/domains");
+		const awaitingData: CatchallSummary = {
+			enabled: true,
+			totals: { probe_count: 0, distinct_sources: 0, distinct_localparts: 0 },
+			topSources: [],
+			recent: [],
+		};
+		vi.spyOn(domainsModule, "useCatchallIntel").mockReturnValue({
+			data: awaitingData,
+			isLoading: false,
+			isError: false,
+		} as ReturnType<typeof domainsModule.useCatchallIntel>);
+
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderDomainDetail("acme.com");
+
+		const card = screen
+			.getByText(/catch-all probes/i)
+			.closest(".pp-card") as HTMLElement;
+
+		expect(
+			within(card).getByText(/catch-all probe capture is enabled/i),
+		).toBeInTheDocument();
+		expect(
+			within(card).getByText(/awaiting first probe activity/i),
+		).toBeInTheDocument();
+		// Must not show the "go enable it" link.
+		expect(
+			within(card).queryByRole("link", { name: /enable catch-all intel/i }),
+		).not.toBeInTheDocument();
+
+		vi.restoreAllMocks();
+	});
+
+	it("renders catch-all probes populated card when useCatchallIntel returns data (#427, #548)", async () => {
 		const domainsModule = await import("~/queries/domains");
 		const catchallData: CatchallSummary = {
+			enabled: true,
 			totals: { probe_count: 42, distinct_sources: 3, distinct_localparts: 17 },
 			topSources: [
 				{
