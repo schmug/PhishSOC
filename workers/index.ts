@@ -1625,7 +1625,7 @@ export async function receiveCatchall(normalized: CatchallInbound, env: Env, _ct
 
 	let verdict;
 	try {
-		verdict = await analyzeCatchall(env, { parsedEmail });
+		verdict = await analyzeCatchall(env, { parsedEmail, domain });
 	} catch (e) {
 		console.error(`catchall: analysis failed for ${domain}:`, (e as Error).message);
 		return;
