@@ -32,6 +32,7 @@ import {
 	_recordProbeImpl,
 	_getSummaryImpl,
 	_updateProbeDeepScanImpl,
+	_checkHarvestAlertImpl,
 	type SqlLike,
 	type CatchallProbeEvent,
 } from "../../workers/durableObject/catchall-intel";
@@ -77,6 +78,14 @@ function makeSqlLike(): SqlLike {
             redirect_chain_length INTEGER
         );
         CREATE INDEX idx_probe_recent_ts ON probe_recent(ts DESC);
+        CREATE TABLE harvest_alert_log (
+            source_ip      TEXT NOT NULL,
+            sender_domain  TEXT NOT NULL,
+            alerted_at     TEXT NOT NULL,
+            distinct_count INTEGER NOT NULL
+        );
+        CREATE INDEX idx_harvest_alert_log_lookup
+            ON harvest_alert_log(source_ip, sender_domain, alerted_at DESC);
     `);
 
 	return {
@@ -301,5 +310,66 @@ describe("_updateProbeDeepScanImpl — writes deep-scan results to the sample ro
 		const rows = [...sql.exec<{ resolved_url: string | null }>("SELECT resolved_url FROM probe_recent")];
 		// The only existing row is untouched (still NULL).
 		expect(rows.every((r) => r.resolved_url === null)).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Tests: directory-harvest alerting (#436)
+// ---------------------------------------------------------------------------
+
+describe("_checkHarvestAlertImpl — directory-harvest debounce (#436)", () => {
+	let sql: SqlLike;
+	beforeEach(() => { sql = makeSqlLike(); });
+
+	// Crossing metric is distinct_localparts (NOT raw probe count); 24h window.
+	const config = { threshold: 3, window_minutes: 1440 };
+	const now = new Date("2026-06-05T12:00:00.000Z");
+
+	/** Record `n` probes from one (ip, domain) pair, each a distinct local-part. */
+	function recordDistinctLocalparts(n: number) {
+		for (let i = 0; i < n; i++) {
+			_recordProbeImpl(sql, makeEvent({ localpart: `user${i}`, ts: now.toISOString() }));
+		}
+	}
+
+	it("emits no alert when distinct_localparts is below threshold", async () => {
+		recordDistinctLocalparts(2); // threshold is 3
+		const alerts = await _checkHarvestAlertImpl(sql, makeEvent(), config, now);
+		expect(alerts).toHaveLength(0);
+		expect([...sql.exec("SELECT * FROM harvest_alert_log")]).toHaveLength(0);
+	});
+
+	it("emits exactly one alert when distinct_localparts crosses the threshold", async () => {
+		recordDistinctLocalparts(3);
+		const alerts = await _checkHarvestAlertImpl(sql, makeEvent(), config, now);
+		expect(alerts).toHaveLength(1);
+		expect(alerts[0].source_ip).toBe("1.2.3.4");
+		expect(alerts[0].sender_domain).toBe("attacker.example");
+		expect(alerts[0].distinct_localpart_count).toBe(3);
+		// The alert is recorded in the debounce log.
+		expect([...sql.exec("SELECT * FROM harvest_alert_log")]).toHaveLength(1);
+	});
+
+	it("does not emit a second alert when the pair re-crosses within the 24h window", async () => {
+		recordDistinctLocalparts(3);
+		const first = await _checkHarvestAlertImpl(sql, makeEvent(), config, now);
+		expect(first).toHaveLength(1);
+
+		// 6h later — still inside the 24h debounce window — even though the pair
+		// is still over threshold, no second alert fires.
+		const sixHoursLater = new Date(now.getTime() + 6 * 60 * 60_000);
+		const second = await _checkHarvestAlertImpl(sql, makeEvent(), config, sixHoursLater);
+		expect(second).toHaveLength(0);
+		expect([...sql.exec("SELECT * FROM harvest_alert_log")]).toHaveLength(1);
+	});
+
+	it("emits again once the debounce window has elapsed", async () => {
+		recordDistinctLocalparts(3);
+		await _checkHarvestAlertImpl(sql, makeEvent(), config, now);
+
+		const afterWindow = new Date(now.getTime() + (config.window_minutes + 1) * 60_000);
+		const again = await _checkHarvestAlertImpl(sql, makeEvent(), config, afterWindow);
+		expect(again).toHaveLength(1);
+		expect([...sql.exec("SELECT * FROM harvest_alert_log")]).toHaveLength(2);
 	});
 });
