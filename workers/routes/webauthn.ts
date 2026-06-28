@@ -104,6 +104,16 @@ function authConfigured(env: Env): boolean {
 	return !!(env.WEBAUTHN_DB && env.RP_ID && env.RP_ORIGIN && env.CONFIRMATION_TOKEN_SECRET && env.BLOOM_KV);
 }
 
+/** Operator-only AAGUID allowlist for enrollment (#506), parsed from the
+ *  comma-separated `WEBAUTHN_AAGUID_ALLOWLIST` env var (case-insensitive).
+ *  Empty/unset ⇒ allow all (no change from #376). */
+function aaguidAllowlist(env: Env): string[] {
+	return (env.WEBAUTHN_AAGUID_ALLOWLIST ?? "")
+		.split(",")
+		.map((s) => s.trim().toLowerCase())
+		.filter(Boolean);
+}
+
 /** Operator-only admin allowlist for the recovery endpoint (#507), parsed from
  *  the comma-separated `WEBAUTHN_ADMIN_EMAILS` env var (case-insensitive). */
 function adminEmails(env: Env): string[] {
@@ -380,6 +390,24 @@ webauthnRoute.post("/register/verify", async (c) => {
 	}
 
 	const info = verification.registrationInfo;
+
+	// AAGUID hardware-pinning (#506). With a non-empty operator allowlist,
+	// reject enrollment of any authenticator whose AAGUID is not approved —
+	// BEFORE the credential is stored. Reuses the AAGUID @simplewebauthn already
+	// parsed (no hand-rolled attestation parsing). Empty/unset ⇒ allow all.
+	const allowlist = aaguidAllowlist(c.env);
+	if (allowlist.length > 0 && !allowlist.includes((info.aaguid ?? "").toLowerCase())) {
+		console.log(
+			JSON.stringify({
+				event: "webauthn.aaguid_rejected",
+				sub: identity.sub,
+				email: identity.email,
+				aaguid: info.aaguid,
+			}),
+		);
+		return c.json({ error: "authenticator model not allowed" }, 403);
+	}
+
 	const responseTransports = (attestation.response as { transports?: string[] } | undefined)?.transports;
 	const existingBefore = await listBySub(c.env.WEBAUTHN_DB, identity.sub);
 	const firstKey = existingBefore.length === 0;

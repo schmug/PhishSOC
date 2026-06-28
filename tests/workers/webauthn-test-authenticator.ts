@@ -84,9 +84,22 @@ function cborBstr(bytes: Uint8Array): number[] {
 	return [0x59, (b.length >> 8) & 0xff, b.length & 0xff, ...b];
 }
 
+/** Parse a dashed/undashed UUID into its 16 raw bytes. Defaults to all-zeros. */
+function aaguidToBytes(aaguid?: string): Uint8Array {
+	const out = new Uint8Array(16);
+	if (!aaguid) return out;
+	const hex = aaguid.replace(/-/g, "");
+	for (let i = 0; i < 16 && i * 2 + 1 < hex.length; i++) {
+		out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16) || 0;
+	}
+	return out;
+}
+
 export interface TestAuthenticator {
 	credentialId: string;
 	cosePublicKey: Uint8Array;
+	/** The AAGUID this authenticator reports at registration (dashed UUID). */
+	aaguid: string;
 	/** Produce an AuthenticationResponseJSON for the given options challenge. */
 	assert(params: {
 		challenge: string;
@@ -107,8 +120,11 @@ export interface TestAuthenticator {
 }
 
 export async function createTestAuthenticator(
-	over: { credentialId?: string } = {},
+	over: { credentialId?: string; aaguid?: string } = {},
 ): Promise<TestAuthenticator> {
+	const aaguidBytes = aaguidToBytes(over.aaguid);
+	// The dashed-UUID string @simplewebauthn parses these bytes back into.
+	const aaguidString = over.aaguid ?? "00000000-0000-0000-0000-000000000000";
 	const { publicKey, privateKey } = await crypto.subtle.generateKey(
 		{ name: "ECDSA", namedCurve: "P-256" },
 		true,
@@ -122,6 +138,7 @@ export async function createTestAuthenticator(
 	return {
 		credentialId,
 		cosePublicKey,
+		aaguid: aaguidString,
 		async assert(params) {
 			const UP = 0x01;
 			const UV = 0x04;
@@ -163,7 +180,9 @@ export async function createTestAuthenticator(
 			const flags = AT | UP | (params.userVerified === false ? 0 : UV);
 			const rpIdHash = await sha256(new TextEncoder().encode(params.rpId));
 			const credIdBytes = b64urlDecode(credentialId);
-			const aaguid = new Uint8Array(16); // zero AAGUID (pinning deferred, #506)
+			// AAGUID the authenticator self-reports (all-zeros by default; set via
+			// `createTestAuthenticator({ aaguid })` to exercise the #506 allowlist).
+			const aaguid = aaguidBytes;
 			const attestedCredentialData = new Uint8Array(
 				16 + 2 + credIdBytes.length + cosePublicKey.length,
 			);
