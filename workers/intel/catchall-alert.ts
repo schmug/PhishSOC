@@ -43,10 +43,18 @@ export interface HarvestAlertConfig {
 	window_minutes: number;
 }
 
-/** Default alert config used when `catchall_intel` doesn't specify values. */
+/**
+ * Default alert config used when `catchall_intel` doesn't specify values.
+ *
+ * `threshold` is the number of distinct local-parts a single (source_ip,
+ * sender_domain) pair must hit to look like a directory harvest. `window_minutes`
+ * is the debounce window — at most one alert per pair per window. The window
+ * defaults to 24h (1440 min) so a sustained harvest doesn't re-alert hourly
+ * (#436; the crossing metric stays `distinct_localparts`, not raw probe count).
+ */
 export const DEFAULT_HARVEST_ALERT_CONFIG: HarvestAlertConfig = {
 	threshold: 50,
-	window_minutes: 60,
+	window_minutes: 1440,
 };
 
 /**

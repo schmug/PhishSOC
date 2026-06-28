@@ -22,6 +22,14 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../types";
 import { applyMigrations, catchallIntelMigrations } from "./migrations";
+import {
+	computeHarvestAlerts,
+	DEFAULT_HARVEST_ALERT_CONFIG,
+	type AlertDebounceStore,
+	type HarvestAlert,
+	type HarvestAlertConfig,
+	type ProbeRollupEntry,
+} from "../intel/catchall-alert";
 
 export interface CatchallProbeEvent {
 	/** ISO-8601 timestamp of the probe (injected by caller so tests can freeze time). */
@@ -40,6 +48,14 @@ export interface CatchallProbeEvent {
 	retentionDays: number;
 	/** From domain settings; controls ring-buffer cap. */
 	sampleLimit: number;
+	/**
+	 * Harvest-alert config from domain settings (#436), resolved by the caller.
+	 * Absent ⇒ `DEFAULT_HARVEST_ALERT_CONFIG`. The crossing metric is
+	 * `distinct_localparts` (not raw probe count); `harvestAlertWindowMinutes`
+	 * is the debounce window (24h default).
+	 */
+	harvestAlertThreshold?: number;
+	harvestAlertWindowMinutes?: number;
 }
 
 /** Public API shape for `GET /api/v1/domains/:domain/catchall-intel` (#427). */
@@ -175,6 +191,76 @@ export function _updateProbeDeepScanImpl(
 	);
 }
 
+/**
+ * `AlertDebounceStore` backed by the `harvest_alert_log` table (#436). `now` is
+ * injected so the window cutoff is deterministic in tests without patching the
+ * global clock.
+ */
+export function _harvestAlertStore(sql: SqlLike, now: Date): AlertDebounceStore {
+	return {
+		async getLastAlertTime(sourceIp, senderDomain, windowMinutes) {
+			const cutoff = new Date(now.getTime() - windowMinutes * 60_000).toISOString();
+			const rows = [...sql.exec<{ alerted_at: string }>(
+				`SELECT alerted_at FROM harvest_alert_log
+				 WHERE source_ip = ? AND sender_domain = ? AND alerted_at > ?
+				 ORDER BY alerted_at DESC LIMIT 1`,
+				sourceIp, senderDomain, cutoff,
+			)];
+			return rows[0]?.alerted_at ?? null;
+		},
+		async recordAlertTime(sourceIp, senderDomain, alertedAt, distinctCount) {
+			sql.exec(
+				`INSERT INTO harvest_alert_log (source_ip, sender_domain, alerted_at, distinct_count)
+				 VALUES (?, ?, ?, ?)`,
+				sourceIp, senderDomain, alertedAt, distinctCount,
+			);
+		},
+	};
+}
+
+/** Resolve the harvest-alert config carried on the probe event (#436), filling
+ *  in `DEFAULT_HARVEST_ALERT_CONFIG` for any field the caller omitted. */
+export function alertConfigFromEvent(event: CatchallProbeEvent): HarvestAlertConfig {
+	return {
+		threshold: event.harvestAlertThreshold ?? DEFAULT_HARVEST_ALERT_CONFIG.threshold,
+		window_minutes: event.harvestAlertWindowMinutes ?? DEFAULT_HARVEST_ALERT_CONFIG.window_minutes,
+	};
+}
+
+/**
+ * Run the directory-harvest alert check for the just-recorded probe (#436).
+ * Inspects the rollup row for (event.sourceIp, event.senderDomain) — the pair
+ * that may have crossed the distinct-localpart threshold — and returns the
+ * alerts to emit, recording each in `harvest_alert_log` so it is debounced for
+ * the window. Pass `now` to control time in tests.
+ */
+export async function _checkHarvestAlertImpl(
+	sql: SqlLike,
+	event: CatchallProbeEvent,
+	config: HarvestAlertConfig,
+	now: Date = new Date(),
+): Promise<HarvestAlert[]> {
+	const rollups = [...sql.exec<ProbeRollupEntry>(
+		`SELECT source_ip, sender_domain, count, distinct_localparts, max_score, first_seen, last_seen
+		 FROM probe_rollup WHERE source_ip = ? AND sender_domain = ?`,
+		event.sourceIp, event.senderDomain,
+	)];
+	return computeHarvestAlerts(rollups, config, _harvestAlertStore(sql, now), now);
+}
+
+/**
+ * Emit a directory-harvest alert (#436). `console.warn` for now; this is the
+ * single extension point for a richer channel (e.g. an EMAIL-binding operator
+ * notification) so the emission mechanism can evolve without touching the
+ * detection logic above.
+ */
+export function emitHarvestAlert(alert: HarvestAlert): void {
+	console.warn(
+		`[harvest-alert] directory-harvest pattern: ${alert.distinct_localpart_count} distinct local-parts ` +
+		`from ${alert.source_ip} via ${alert.sender_domain} (at ${alert.triggered_at})`,
+	);
+}
+
 export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): CatchallSummary {
 	const limit = Math.max(1, Math.min(opts.limit, 100));
 
@@ -246,7 +332,18 @@ export class CatchallIntelDO extends DurableObject<Env> {
 	}
 
 	async recordCatchallProbe(event: CatchallProbeEvent): Promise<string> {
-		return _recordProbeImpl(this.ctx.storage.sql as SqlLike, event);
+		const sql = this.ctx.storage.sql as SqlLike;
+		const id = _recordProbeImpl(sql, event);
+		// Directory-harvest alert check (#436) runs AFTER the lazy GC + rollup
+		// update inside _recordProbeImpl. Best-effort: an alert failure must not
+		// fail probe recording.
+		try {
+			const alerts = await _checkHarvestAlertImpl(sql, event, alertConfigFromEvent(event));
+			for (const alert of alerts) emitHarvestAlert(alert);
+		} catch (e) {
+			console.error("catchall harvest-alert check failed:", (e as Error).message);
+		}
+		return id;
 	}
 
 	/** Write async deep-scan results (#438) back to the probe sample row. */

@@ -1638,6 +1638,21 @@ export async function receiveCatchall(normalized: CatchallInbound, env: Env, ctx
 	})();
 	const senderDomain = parsedEmail.from?.address?.split("@")[1] ?? "";
 
+	// Resolve the directory-harvest alert config (#436) from domain settings so
+	// the DO can run the debounced threshold check after recording the probe.
+	// Left undefined on failure → the DO falls back to DEFAULT_HARVEST_ALERT_CONFIG.
+	let harvestAlertThreshold: number | undefined;
+	let harvestAlertWindowMinutes: number | undefined;
+	try {
+		const { getDomainSettings } = await import("./lib/domain-settings");
+		const { resolveAlertConfig } = await import("./intel/catchall-alert");
+		const alertConfig = resolveAlertConfig((await getDomainSettings(env, domain)).catchall_intel);
+		harvestAlertThreshold = alertConfig.threshold;
+		harvestAlertWindowMinutes = alertConfig.window_minutes;
+	} catch {
+		// fall through with undefined config
+	}
+
 	let sampleId: string | undefined;
 	try {
 		const stub = env.CATCHALL_INTEL.get(env.CATCHALL_INTEL.idFromName(domain)) as unknown as {
@@ -1655,6 +1670,8 @@ export async function receiveCatchall(normalized: CatchallInbound, env: Env, ctx
 			signals: verdict.signals,
 			retentionDays,
 			sampleLimit,
+			harvestAlertThreshold,
+			harvestAlertWindowMinutes,
 		});
 		if (typeof recorded === "string") sampleId = recorded;
 	} catch (e) {

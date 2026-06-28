@@ -600,4 +600,23 @@ export const catchallIntelMigrations: Migration[] = [
             ALTER TABLE probe_recent ADD COLUMN redirect_chain_length INTEGER;
         `,
 	},
+	{
+		// Directory-harvest alert debounce log (#436). One row per alert fired
+		// for a (source_ip, sender_domain) pair so `getLastAlertTime` can suppress
+		// duplicate alerts within the (24h default) window. Append-only; pruned
+		// implicitly by the catch-all retention GC is NOT applied here — the log
+		// is tiny (one row per alert, debounced) so it is left to grow with the
+		// alert history. Index supports the windowed most-recent lookup.
+		name: "3_harvest_alert_log",
+		sql: `
+            CREATE TABLE IF NOT EXISTS harvest_alert_log (
+                source_ip      TEXT NOT NULL,
+                sender_domain  TEXT NOT NULL,
+                alerted_at     TEXT NOT NULL,
+                distinct_count INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_harvest_alert_log_lookup
+                ON harvest_alert_log(source_ip, sender_domain, alerted_at DESC);
+        `,
+	},
 ];
