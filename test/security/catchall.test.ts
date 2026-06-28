@@ -14,6 +14,8 @@
 
 import { describe, expect, it } from "vitest";
 import { analyzeCatchall } from "../../workers/security/catchall";
+import { addToBloom, createBloom, serializeBloom } from "../../workers/intel/bloom";
+import { clearDomainSettingsCache } from "../../workers/lib/domain-settings";
 import type { Env } from "../../workers/types";
 import type { Email } from "postal-mime";
 
@@ -180,6 +182,46 @@ describe("analyzeCatchall — Spamhaus DROP signal", () => {
 		const result = await analyzeCatchall(env, { parsedEmail: email });
 		expect(result.intelMatch.drop).toBe(true);
 		expect(result.signals.some((s) => s.includes("spamhaus-drop"))).toBe(true);
+	});
+});
+
+describe("analyzeCatchall — domain-scoped URL feed signal (#435)", () => {
+	const HOMOGRAPH_URL = "http://xn--pypal-4ve.com/login";
+
+	function kvWithUrlFeed(feedId: string, urls: string[]): KVNamespace {
+		const bloom = createBloom(urls.length);
+		for (const u of urls) addToBloom(bloom, u);
+		const store = new Map<string, string | Uint8Array>([
+			[`intel:${feedId}:bloom`, serializeBloom(bloom)],
+			[`intel:${feedId}:exact-blob`, JSON.stringify(urls)],
+		]);
+		return {
+			async get(k: string, type?: "text" | "arrayBuffer") {
+				const v = store.get(k);
+				if (v === undefined) return null;
+				if (type === "arrayBuffer") return v instanceof Uint8Array ? v.buffer : null;
+				if (type === "text") return typeof v === "string" ? v : null;
+				return v ?? null;
+			},
+		} as unknown as KVNamespace;
+	}
+
+	it("boosts score and flags urlFeed when a message URL is on a default feed", async () => {
+		clearDomainSettingsCache();
+		const env = makeEnv({ BLOOM_KV: kvWithUrlFeed("urlhaus", [HOMOGRAPH_URL]) });
+		const result = await analyzeCatchall(env, {
+			parsedEmail: makePhishingEmail(),
+			domain: "acme.example",
+		});
+		expect(result.intelMatch.urlFeed).toBe(true);
+		expect(result.signals.some((s) => s.startsWith("url-feed:"))).toBe(true);
+	});
+
+	it("does not flag urlFeed when no domain is supplied (unit path)", async () => {
+		clearDomainSettingsCache();
+		const env = makeEnv({ BLOOM_KV: kvWithUrlFeed("urlhaus", [HOMOGRAPH_URL]) });
+		const result = await analyzeCatchall(env, { parsedEmail: makePhishingEmail() });
+		expect(result.intelMatch.urlFeed).toBe(false);
 	});
 });
 

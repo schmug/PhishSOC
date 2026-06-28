@@ -34,6 +34,7 @@ import { findCidrMatch, parseCidr, parseIpv4, type Ipv4Cidr } from "./cidr";
 import { getMailboxStub, listMailboxes } from "../lib/email-helpers";
 import { hostAllowed } from "../lib/host-allowlist";
 import { resolveMailboxSettings } from "../lib/mailbox-settings";
+import { getDomainSettings } from "../lib/domain-settings";
 
 const EXACT_KEY_CAP = 2000; // per-feed cap — exact blob stores at most this many entries
 
@@ -78,6 +79,22 @@ async function loadMailboxIntelSettings(env: Env, mailboxId: string): Promise<Ma
 	try {
 		const resolved = await resolveMailboxSettings(env, mailboxId);
 		return resolved.intel as MailboxIntelSettings;
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * Load the domain-level intel block for the catch-all path, which has no
+ * `mailboxId`. Returns whatever `intel` the domain settings carry (its `feeds`
+ * array is the same shape as `MailboxIntelSettings.feeds`); `resolveFeeds`
+ * stitches in `DEFAULT_FEEDS` when no domain-level overrides exist. Any read
+ * failure degrades to `{}` so the lookup falls back to the default feeds.
+ */
+async function loadDomainIntelSettings(env: Env, domain: string): Promise<MailboxIntelSettings> {
+	try {
+		const resolved = await getDomainSettings(env, domain);
+		return (resolved.intel ?? {}) as MailboxIntelSettings;
 	} catch {
 		return {};
 	}
@@ -393,7 +410,40 @@ export async function checkUrlAgainstFeeds(
 	const host = safeHostname(fullUrl);
 	if (!host) return null;
 	const settings = await loadMailboxIntelSettings(env, mailboxId);
-	const feeds = resolveFeeds(env, settings);
+	return matchUrlAgainstFeeds(env, resolveFeeds(env, settings), fullUrl, host);
+}
+
+/**
+ * Domain-scoped variant of `checkUrlAgainstFeeds` for the catch-all path,
+ * which has no `mailboxId`. Resolves feeds from the domain's intel settings
+ * (a domain-level `intel.feeds` override, else `DEFAULT_FEEDS` via
+ * `resolveFeeds`) and matches the URL the same way. Returns `null` when
+ * `BLOOM_KV` is unconfigured or the URL has no parseable host — never throws.
+ */
+export async function checkUrlAgainstFeedsForDomain(
+	env: Env,
+	domain: string,
+	fullUrl: string,
+): Promise<FeedMatch | null> {
+	if (!env.BLOOM_KV) return null;
+	const host = safeHostname(fullUrl);
+	if (!host) return null;
+	const settings = await loadDomainIntelSettings(env, domain);
+	return matchUrlAgainstFeeds(env, resolveFeeds(env, settings), fullUrl, host);
+}
+
+/**
+ * Shared bloom-then-confirm matching loop for `url`/`domain` feeds. Returns
+ * the first confirmed (exact-blob) match, or the first bloom-only hit if no
+ * exact confirmation is available. CIDR feeds are skipped — they are matched
+ * by `checkIpAgainstFeeds`. Assumes `env.BLOOM_KV` is present (callers guard).
+ */
+async function matchUrlAgainstFeeds(
+	env: Env,
+	feeds: FeedDefinition[],
+	fullUrl: string,
+	host: string,
+): Promise<FeedMatch | null> {
 	let bloomOnly: FeedMatch | null = null;
 
 	for (const feed of feeds) {

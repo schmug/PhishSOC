@@ -13,12 +13,19 @@ import type { Env } from "../types";
 import { parseAuthResults, scoreAuth, extractReceivedFromIp } from "./auth";
 import { extractUrls, scoreUrls } from "./urls";
 import { lookupIp } from "../intel/crowdsec-cti";
-import { checkIpAgainstDefaultFeeds } from "../intel/feeds";
+import { checkIpAgainstDefaultFeeds, checkUrlAgainstFeedsForDomain } from "../intel/feeds";
 
 export type CatchallBand = "low" | "medium" | "high";
 
 export interface CatchallInput {
 	parsedEmail: Email;
+	/**
+	 * Recipient (catch-all) domain. When provided, message URLs are checked
+	 * against the domain's intel feeds (a domain-level `intel.feeds` override,
+	 * else `DEFAULT_FEEDS`). Omitted on the no-mailbox unit-test path — feed
+	 * matching is then skipped entirely.
+	 */
+	domain?: string;
 }
 
 export interface CatchallVerdict {
@@ -27,7 +34,7 @@ export interface CatchallVerdict {
 	signals: string[];
 	auth: ReturnType<typeof parseAuthResults>;
 	urlFlags: { homograph: boolean; shortener: boolean };
-	intelMatch: { crowdsec: boolean; drop: boolean };
+	intelMatch: { crowdsec: boolean; drop: boolean; urlFeed: boolean };
 	sender: string;
 	sourceIp: string | undefined;
 }
@@ -57,7 +64,24 @@ export async function analyzeCatchall(
 	let score = Math.min(authScore.score, 30) + Math.min(urlScore.score, 25);
 	const signals: string[] = [...authScore.reasons, ...urlScore.reasons];
 
-	const intelMatch = { crowdsec: false, drop: false };
+	const intelMatch = { crowdsec: false, drop: false, urlFeed: false };
+
+	// Domain-scoped URL bloom-feed check (#435): a message URL listed on the
+	// domain's intel feeds is a strong phishing signal. Best-effort — a feed
+	// lookup failure must never fail catch-all analysis. Skipped when no domain
+	// is supplied (the no-mailbox unit-test path) or BLOOM_KV is unconfigured.
+	if (input.domain) {
+		for (const u of urls) {
+			const match = await checkUrlAgainstFeedsForDomain(env, input.domain, u.url).catch(() => null);
+			if (!match) continue;
+			score += match.confirmed ? 30 : 15;
+			signals.push(
+				`url-feed: ${match.value} in ${match.feedId}${match.confirmed ? "" : " (bloom-only)"}`,
+			);
+			intelMatch.urlFeed = true;
+			break;
+		}
+	}
 
 	if (sourceIp) {
 		const [cti, drop] = await Promise.all([
