@@ -436,8 +436,9 @@ export interface CatchallRecentSample {
 	signals_json: string;
 }
 
-/** Shape returned by `GET /api/v1/domains/:domain/catchall-intel` (#427). */
+/** Shape returned by `GET /api/v1/domains/:domain/catchall-intel` (#427, #548). */
 export interface CatchallSummary {
+	enabled: boolean;
 	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
 	topSources: CatchallSourceRollup[];
 	recent: CatchallRecentSample[];
