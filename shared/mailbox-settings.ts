@@ -220,6 +220,29 @@ export const YaraMailScannerSettings = z
 export type YaraMailScannerSettings = z.infer<typeof YaraMailScannerSettings>;
 
 /**
+ * Honeypot mailbox configuration (issue #24). A honeypot is an ephemeral burner
+ * address seeded where phishing is likely to find it. Everything that lands in
+ * one is unsolicited by construction, so its inbound IOCs are auto-published to
+ * the community hub with elevated trust and the inbox never surfaces in the
+ * user UI. Honeypots are created via `POST /api/v1/honeypots`, not the normal
+ * mailbox flow, and are reaped by the hourly cron once `expires_at` passes.
+ */
+export const HoneypotSettings = z
+  .object({
+    /** Marks this mailbox as a honeypot sensor (excluded from the UI listing). */
+    enabled: z.boolean().optional(),
+    /** ISO-8601 timestamp after which the cron reaps this honeypot + its blobs. */
+    expires_at: z.string().optional(),
+    /** Per-honeypot inbound cap; auto-disabled once exceeded (storage-abuse guard). */
+    max_inbound: z.number().int().positive().optional(),
+    /** Set true by the rate-cap auto-disable; suppresses further IOC publishing. */
+    disabled: z.boolean().optional(),
+  })
+  .passthrough();
+
+export type HoneypotSettings = z.infer<typeof HoneypotSettings>;
+
+/**
  * Per-mailbox settings stored at R2 key `mailboxes/<mailboxId>.json`.
  *
  * Semantic shift introduced by #106: **field absence = inherit**. Defaults
@@ -247,6 +270,7 @@ export const MailboxSettings = z.object({
   security: SecuritySettings.optional(),
   intel: IntelSettings.optional(),
   yaramail_scanner: YaraMailScannerSettings.optional(),
+  honeypot: HoneypotSettings.optional(),
 }).passthrough();
 
 export type MailboxSettings = z.infer<typeof MailboxSettings>;
