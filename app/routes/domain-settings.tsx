@@ -4,6 +4,7 @@ import { Badge, Button, Loader } from "@cloudflare/kumo";
 import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
+import Shell from "~/components/phishsoc/Shell";
 import { useFeedback } from "~/lib/feedback";
 import {
 	useDomainSettings,
@@ -124,23 +125,28 @@ export default function DomainSettingsRoute() {
 
 	if (!domain) {
 		return (
-			<div className="px-4 py-4 md:px-8 md:py-6">
-				<p className="text-sm text-ink-3">Missing domain in URL.</p>
-			</div>
+			<Shell>
+				<div className="px-4 py-4 md:px-8 md:py-6">
+					<p className="text-sm text-ink-3">Missing domain in URL.</p>
+				</div>
+			</Shell>
 		);
 	}
 
 	if (isLoading) {
 		return (
-			<div className="flex justify-center py-20">
-				<Loader size="lg" />
-			</div>
+			<Shell>
+				<div className="flex justify-center py-20">
+					<Loader size="lg" />
+				</div>
+			</Shell>
 		);
 	}
 
 	const isCustomPrompt = agentPrompt.trim().length > 0;
 
 	return (
+		<Shell>
 		<div className="max-w-2xl px-4 py-4 md:px-8 md:py-6 h-full overflow-y-auto">
 			<h1 className="pp-serif text-ink mb-2">Domain settings — {domain}</h1>
 			<p className="text-xs text-ink-3 mb-6 max-w-xl">
@@ -253,5 +259,6 @@ export default function DomainSettingsRoute() {
 				</div>
 			</div>
 		</div>
+		</Shell>
 	);
 }
