@@ -46,6 +46,14 @@ updates:
           - "react-router"
           - "@react-router/*"
           - "workers-ai-provider"
+      # Security-update only: keeps react-router and @react-router/* in lockstep so a
+      # security bump never skews react-router vs @react-router/dev (TS2314 on +types).
+      # Without this group, Dependabot bundles all npm security updates into one PR.
+      react-router-security:
+        applies-to: security-updates
+        patterns:
+          - "react-router"
+          - "@react-router/*"
 
   - package-ecosystem: npm
     directory: "/hub"
