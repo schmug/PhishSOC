@@ -11,14 +11,10 @@
  */
 
 /** Parse safely — returns null on invalid dates instead of NaN-date. */
-function safeParse(dateStr: string | undefined | null): Date | null {
+function safeParse(dateStr: string | undefined | null): number | null {
 	if (!dateStr) return null;
-	try {
-		const d = new Date(dateStr);
-		return Number.isNaN(d.getTime()) ? null : d;
-	} catch {
-		return null;
-	}
+	const ms = Date.parse(dateStr);
+	return Number.isNaN(ms) ? null : ms;
 }
 
 // ⚡ Bolt: Cache Intl.DateTimeFormat instances to prevent expensive instantiations
@@ -62,6 +58,12 @@ const quotedDateFormatter = new Intl.DateTimeFormat("en-US", {
 	hour12: true,
 });
 
+let _lastNowMs = 0;
+let _lastNowMidnightMs = 0;
+let _lastNowMidnightNextMs = 0;
+let _lastNowYearStartMs = 0;
+let _lastNowYearEndMs = 0;
+
 /**
  * Email list rows.
  * - Today: "3:42 PM"
@@ -69,17 +71,44 @@ const quotedDateFormatter = new Intl.DateTimeFormat("en-US", {
  * - Older: "Apr 15, 2024"
  */
 export function formatListDate(dateStr: string): string {
-	const date = safeParse(dateStr);
-	if (!date) return dateStr;
+	// ⚡ Bolt: Use Date.parse() instead of new Date() to avoid object allocation in render loops
+	const ms = safeParse(dateStr);
+	// strict null check because Date.parse("1970-01-01T00:00:00Z") === 0
+	if (ms === null) return dateStr;
 
-	const now = new Date();
-	if (date.toDateString() === now.toDateString()) {
-		return listTimeFormatter.format(date);
+	const nowMs = Date.now();
+	// ⚡ Bolt: Cache current date properties to avoid expensive new Date() calls on every format execution.
+	// Math.abs handles time-travel in tests (e.g. mock timers resetting the clock).
+	if (Math.abs(nowMs - _lastNowMs) > 1000) {
+		const now = new Date(nowMs);
+		// Note: using local time Date constructor to let the runtime handle DST transitions
+		_lastNowMidnightMs = new Date(
+			now.getFullYear(),
+			now.getMonth(),
+			now.getDate(),
+		).getTime();
+		_lastNowMidnightNextMs = new Date(
+			now.getFullYear(),
+			now.getMonth(),
+			now.getDate() + 1,
+		).getTime();
+		_lastNowYearStartMs = new Date(now.getFullYear(), 0, 1).getTime();
+		_lastNowYearEndMs = new Date(now.getFullYear() + 1, 0, 1).getTime();
+		_lastNowMs = nowMs;
 	}
-	if (date.getFullYear() === now.getFullYear()) {
-		return listDateThisYearFormatter.format(date);
+
+	// ⚡ Bolt: Use fast numerical comparisons instead of string allocations/Date methods
+	// If the timestamp is today (bounded between midnight today and midnight tomorrow)
+	if (ms >= _lastNowMidnightMs && ms < _lastNowMidnightNextMs) {
+		return listTimeFormatter.format(ms);
 	}
-	return listDateOlderFormatter.format(date);
+
+	// Fast check for this year without allocating a Date object
+	if (ms >= _lastNowYearStartMs && ms < _lastNowYearEndMs) {
+		return listDateThisYearFormatter.format(ms);
+	}
+
+	return listDateOlderFormatter.format(ms);
 }
 
 /**
@@ -87,10 +116,10 @@ export function formatListDate(dateStr: string): string {
  * "Tue, Apr 15, 3:42 PM"
  */
 export function formatDetailDate(dateStr: string): string {
-	const date = safeParse(dateStr);
-	if (!date) return dateStr;
+	const ms = safeParse(dateStr);
+	if (ms === null) return dateStr;
 
-	return detailDateFormatter.format(date);
+	return detailDateFormatter.format(ms);
 }
 
 /**
@@ -98,10 +127,10 @@ export function formatDetailDate(dateStr: string): string {
  * "3:42 PM"
  */
 export function formatShortDate(dateStr: string): string {
-	const date = safeParse(dateStr);
-	if (!date) return dateStr;
+	const ms = safeParse(dateStr);
+	if (ms === null) return dateStr;
 
-	return shortDateFormatter.format(date);
+	return shortDateFormatter.format(ms);
 }
 
 /**
@@ -113,8 +142,8 @@ export function formatShortDate(dateStr: string): string {
  */
 export function formatQuotedDate(dateStr: string | undefined): string {
 	if (!dateStr) return "";
-	const date = safeParse(dateStr);
-	if (!date) return dateStr;
+	const ms = safeParse(dateStr);
+	if (ms === null) return dateStr;
 
-	return quotedDateFormatter.format(date);
+	return quotedDateFormatter.format(ms);
 }
