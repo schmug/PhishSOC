@@ -26,23 +26,23 @@
  * consistent.
  */
 
-import { Folders } from "../../shared/folders";
-import { getMailboxStub } from "../lib/email-helpers";
-import { isHomographic } from "../security/urls";
-import type { FinalVerdict, VerdictThresholds } from "../security/verdict";
-import { DEFAULT_THRESHOLDS } from "../security/verdict";
 import type { Env } from "../types";
+import type { FinalVerdict, VerdictThresholds } from "../security/verdict";
+import { getMailboxStub } from "../lib/email-helpers";
+import { Folders } from "../../shared/folders";
+import { checkIpAgainstFeeds, checkUrlAgainstFeeds } from "./feeds";
+import { DEFAULT_FEEDS } from "./defaults";
+import { lookupDomainAge } from "./rdap";
+import { resolveUrl } from "./url-resolver";
+import { lookupIp, type CtiSummary } from "./crowdsec-cti";
 import {
 	aggregateAttachmentSignals,
 	detectEncryptedArchive,
 	finalExtension,
 	scoreAttachment,
 } from "./attachment-checks";
-import { type CtiSummary, lookupIp } from "./crowdsec-cti";
-import { DEFAULT_FEEDS } from "./defaults";
-import { checkIpAgainstFeeds, checkUrlAgainstFeeds } from "./feeds";
-import { lookupDomainAge } from "./rdap";
-import { resolveUrl } from "./url-resolver";
+import { isHomographic } from "../security/urls";
+import { DEFAULT_THRESHOLDS } from "../security/verdict";
 
 export interface DeepScanInput {
 	env: Env;
@@ -65,9 +65,7 @@ export interface DeepScanResult {
  */
 const DEEP_SCAN_MAX_ADD = 40;
 
-export async function runDeepScan(
-	input: DeepScanInput,
-): Promise<DeepScanResult> {
+export async function runDeepScan(input: DeepScanInput): Promise<DeepScanResult> {
 	const { env, mailboxId, emailId } = input;
 	const thresholds = input.thresholds ?? DEFAULT_THRESHOLDS;
 	const stub = getMailboxStub(env, mailboxId);
@@ -113,10 +111,7 @@ export async function runDeepScan(
 			try {
 				resolvedIps = await resolveHostsToIps(resolvedHosts);
 			} catch (e) {
-				console.error(
-					"deep-scan host resolution failed:",
-					(e as Error).message,
-				);
+				console.error("deep-scan host resolution failed:", (e as Error).message);
 			}
 		}
 	}
@@ -147,10 +142,7 @@ export async function runDeepScan(
 
 	let finalAction: FinalVerdict["action"] | "unchanged" = "unchanged";
 	if (baseVerdict && added > 0) {
-		const newScore = Math.min(
-			100,
-			(stored?.score ?? baseVerdict.score) + added,
-		);
+		const newScore = Math.min(100, (stored?.score ?? baseVerdict.score) + added);
 		const newAction = actionForScore(newScore, thresholds);
 		const upgraded = tierIndex(newAction) > tierIndex(baseVerdict.action);
 		if (upgraded) {
@@ -159,17 +151,16 @@ export async function runDeepScan(
 				score: newScore,
 				action: newAction,
 				signals: [...baseVerdict.signals, ...reasons],
-				explanation: dedupe([...baseVerdict.signals.slice(0, 2), ...reasons])
-					.slice(0, 4)
-					.join("; "),
+				explanation: dedupe([
+					...baseVerdict.signals.slice(0, 2),
+					...reasons,
+				]).slice(0, 4).join("; "),
 			};
-			await stub
-				.persistSecurityVerdict(emailId, {
-					verdict_json: JSON.stringify(upgradedVerdict),
-					score: newScore,
-					explanation: upgradedVerdict.explanation,
-				})
-				.catch(() => {});
+			await stub.persistSecurityVerdict(emailId, {
+				verdict_json: JSON.stringify(upgradedVerdict),
+				score: newScore,
+				explanation: upgradedVerdict.explanation,
+			}).catch(() => {});
 			if (newAction === "quarantine" || newAction === "block") {
 				await stub.moveEmail(emailId, Folders.QUARANTINE).catch(() => {});
 			}
@@ -222,25 +213,19 @@ async function scanUrls(
 				urlVerdict.push(`domain_age_${age.age_days}d`);
 				score += age.age_days < 7 ? 20 : 10;
 			}
-			const feedMatch = await checkUrlAgainstFeeds(
-				env,
-				mailboxId,
-				finalUrl,
-			).catch(() => null);
+			const feedMatch = await checkUrlAgainstFeeds(env, mailboxId, finalUrl).catch(() => null);
 			if (feedMatch?.confirmed) {
 				urlVerdict.push(`intel_match:${feedMatch.feedId}`);
 				score += 20;
 			}
 		}
 
-		await stub
-			.updateUrlScan(urlRow.id, {
-				resolved_url: finalUrl,
-				page_title: resolved?.title ?? null,
-				fetch_status: resolved ? "completed" : "failed",
-				verdict: urlVerdict.length > 0 ? urlVerdict.join(",") : null,
-			})
-			.catch(() => {});
+		await stub.updateUrlScan(urlRow.id, {
+			resolved_url: finalUrl,
+			page_title: resolved?.title ?? null,
+			fetch_status: resolved ? "completed" : "failed",
+			verdict: urlVerdict.length > 0 ? urlVerdict.join(",") : null,
+		}).catch(() => {});
 
 		if (urlVerdict.length > 0) {
 			reasons.push(`URL ${host ?? urlRow.url}: ${urlVerdict.join(",")}`);
@@ -262,13 +247,8 @@ async function scanAttachments(
 	emailId: string,
 ): Promise<{ score: number; reasons: string[] }> {
 	const stub = getMailboxStub(env, mailboxId);
-	const rows = (await stub.getAttachmentsForEmail(
-		emailId,
-	)) as unknown as Array<{
-		id: string;
-		filename: string;
-		mimetype: string;
-		size: number;
+	const rows = (await stub.getAttachmentsForEmail(emailId)) as unknown as Array<{
+		id: string; filename: string; mimetype: string; size: number;
 	}>;
 	if (!rows.length) return { score: 0, reasons: [] };
 
@@ -278,21 +258,17 @@ async function scanAttachments(
 	// that can sit after a prefix, without the cost of a full object read.
 	// Skipped for non-archives and for very small files where any "archive"
 	// is certainly junk.
-	const verdicts = await Promise.all(
-		rows.map(async (r) => {
-			const signals = await detectArchiveSignals(env, emailId, r);
-			return { row: r, verdict: scoreAttachment(r, signals) };
-		}),
-	);
+	const verdicts = await Promise.all(rows.map(async (r) => {
+		const signals = await detectArchiveSignals(env, emailId, r);
+		return { row: r, verdict: scoreAttachment(r, signals) };
+	}));
 	const agg = aggregateAttachmentSignals(verdicts.map((v) => v.verdict));
 
 	for (const { row, verdict } of verdicts) {
-		await stub
-			.updateAttachmentScan(row.id, {
-				scan_status: "completed",
-				scan_verdict: JSON.stringify(verdict),
-			})
-			.catch(() => {});
+		await stub.updateAttachmentScan(row.id, {
+			scan_status: "completed",
+			scan_verdict: JSON.stringify(verdict),
+		}).catch(() => {});
 	}
 
 	return { score: agg.score, reasons: agg.reasons };
@@ -386,14 +362,10 @@ async function scanCti(
 		let perIp = 0;
 		const hitReasons: string[] = [];
 
-		const dangerousBehavior = summary.behaviors.find((b) =>
-			/phish|exploit/i.test(b),
-		);
+		const dangerousBehavior = summary.behaviors.find((b) => /phish|exploit/i.test(b));
 		if (dangerousBehavior) {
 			perIp = Math.max(perIp, 25);
-			hitReasons.push(
-				`redirect target IP ${ip} behavior=crowdsec:${dangerousBehavior}`,
-			);
+			hitReasons.push(`redirect target IP ${ip} behavior=crowdsec:${dangerousBehavior}`);
 		}
 
 		if (summary.reputation === "malicious") {
@@ -438,9 +410,7 @@ async function scanCti(
 async function ipStageEnabled(env: Env, _mailboxId: string): Promise<boolean> {
 	if (env.CROWDSEC_CTI_API_KEY) return true;
 	if (!env.BLOOM_KV) return false;
-	const cidrFeedIds = DEFAULT_FEEDS.filter((f) => f.kind === "ip-cidr").map(
-		(f) => f.id,
-	);
+	const cidrFeedIds = DEFAULT_FEEDS.filter((f) => f.kind === "ip-cidr").map((f) => f.id);
 	for (const id of cidrFeedIds) {
 		try {
 			const present = await env.BLOOM_KV.get(`intel:${id}:cidrs`, "text");
@@ -488,18 +458,14 @@ async function scanIpFeeds(
 	const reasons: string[] = [];
 	let score = 0;
 	for (const ip of ips) {
-		const match = await checkIpAgainstFeeds(env, mailboxId, ip).catch(
-			() => null,
-		);
+		const match = await checkIpAgainstFeeds(env, mailboxId, ip).catch(() => null);
 		if (!match) continue;
 		score += IP_FEED_PER_HIT;
 		// Feed name preference: human-readable description first word
 		// ("Spamhaus DROP — ..."), falling back to the feed id. The reason
 		// string is operator-facing so a recognizable name matters.
 		const feedLabel = feedDisplayName(match.feedDescription, match.feedId);
-		reasons.push(
-			`redirect target IP ${match.ip} (${match.cidr}) on ${feedLabel}`,
-		);
+		reasons.push(`redirect target IP ${match.ip} (${match.cidr}) on ${feedLabel}`);
 	}
 	return { score: Math.min(IP_FEED_MAX_ADD, score), reasons };
 }
@@ -543,8 +509,7 @@ async function resolveHostA(host: string): Promise<string[]> {
 	} catch {
 		return [];
 	}
-	const answer = (body as { Answer?: Array<{ type?: number; data?: unknown }> })
-		.Answer;
+	const answer = (body as { Answer?: Array<{ type?: number; data?: unknown }> }).Answer;
 	if (!Array.isArray(answer)) return [];
 	const ips: string[] = [];
 	for (const a of answer) {
@@ -589,53 +554,21 @@ async function detectArchiveSignals(
 		const buf = new Uint8Array(await obj.arrayBuffer());
 		return { encryptedArchive: detectEncryptedArchive(buf, ext) };
 	} catch (e) {
-		console.error(
-			"deep-scan archive header read failed:",
-			(e as Error).message,
-		);
+		console.error("deep-scan archive header read failed:", (e as Error).message);
 		return {};
 	}
 }
 
 // ── Internals ────────────────────────────────────────────────────
 
-interface StoredVerdict {
-	verdict: string | null;
-	score: number | null;
-}
-
-// ⚡ Bolt: Cache parsed verdicts to prevent expensive JSON.parse operations
-const parseVerdictCache = new Map<string, FinalVerdict | null>();
+interface StoredVerdict { verdict: string | null; score: number | null; }
 
 function parseVerdict(raw: string | null | undefined): FinalVerdict | null {
 	if (!raw) return null;
-
-	if (parseVerdictCache.has(raw)) {
-		const cached = parseVerdictCache.get(raw);
-		if (cached !== undefined) return cached;
-	}
-
-	let result: FinalVerdict | null = null;
-	try {
-		result = JSON.parse(raw) as FinalVerdict;
-		if (result) Object.freeze(result);
-	} catch {
-		result = null;
-	}
-
-	if (parseVerdictCache.size >= 1000) {
-		const firstKey = parseVerdictCache.keys().next().value;
-		if (firstKey !== undefined) parseVerdictCache.delete(firstKey);
-	}
-
-	parseVerdictCache.set(raw, result);
-	return result;
+	try { return JSON.parse(raw) as FinalVerdict; } catch { return null; }
 }
 
-function actionForScore(
-	score: number,
-	thresholds: VerdictThresholds,
-): FinalVerdict["action"] {
+function actionForScore(score: number, thresholds: VerdictThresholds): FinalVerdict["action"] {
 	if (score >= thresholds.block) return "block";
 	if (score >= thresholds.quarantine) return "quarantine";
 	if (score >= thresholds.tag) return "tag";
@@ -644,23 +577,15 @@ function actionForScore(
 
 function tierIndex(action: FinalVerdict["action"]): number {
 	switch (action) {
-		case "allow":
-			return 0;
-		case "tag":
-			return 1;
-		case "quarantine":
-			return 2;
-		case "block":
-			return 3;
+		case "allow": return 0;
+		case "tag": return 1;
+		case "quarantine": return 2;
+		case "block": return 3;
 	}
 }
 
 function safeHost(url: string): string | null {
-	try {
-		return new URL(url).hostname.toLowerCase();
-	} catch {
-		return null;
-	}
+	try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
 }
 
 function dedupe(items: string[]): string[] {
