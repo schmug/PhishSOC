@@ -667,3 +667,161 @@ describe("receiveCatchall — best-effort dispatch", () => {
 		).resolves.toBeUndefined();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// 4. receiveCatchall — hub corroboration (#437)
+// ---------------------------------------------------------------------------
+
+describe("receiveCatchall — hub corroboration (#437)", () => {
+	const HUB_HOST = "hub.example.com";
+
+	/** Parse the request URL's hostname (never substring-match — CodeQL gate). */
+	function hostOf(input: unknown): string | null {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : String(input);
+		try {
+			return new URL(url).hostname;
+		} catch {
+			return null;
+		}
+	}
+
+	/** Build a receiveCatchall env whose domain settings opt into the hub. */
+	function makeHubEnv(opts: { hubReportThreshold?: number; autoReport?: boolean }) {
+		const probeStub = { recordCatchallProbe: vi.fn().mockResolvedValue(undefined) };
+		const domainSettings: Record<string, unknown> = {
+			catchall_intel: {
+				enabled: true,
+				retention_days: 30,
+				sample_limit: 50,
+				...(opts.hubReportThreshold !== undefined
+					? { hub_report_threshold: opts.hubReportThreshold }
+					: {}),
+			},
+			intel: {
+				hub: {
+					url: `https://${HUB_HOST}`,
+					org_uuid: "aaaaaaaa-0000-0000-0000-000000000001",
+					api_key_secret_name: "HUB_SECRET_MAIN",
+					auto_report: opts.autoReport ?? true,
+					default_sharing_group_uuid: "bbbbbbbb-0000-0000-0000-000000000002",
+				},
+			},
+		};
+		const bucket = makeR2({
+			"domains/acme.example.json": JSON.stringify(domainSettings),
+			"org/settings.json": JSON.stringify({}),
+		});
+		const env = {
+			AI: new Proxy({}, { get() { throw new Error("env.AI must not be called"); } }),
+			BUCKET: bucket,
+			CATCHALL_INTEL: { idFromName: () => "stub-id", get: () => probeStub },
+			HUB_ALLOWED_HOSTS: HUB_HOST,
+			HUB_SECRET_MAIN: "live-key",
+		} as unknown as Parameters<typeof import("../../workers/index").receiveCatchall>[1];
+		return { env, probeStub };
+	}
+
+	function makeNormalized() {
+		const parsedEmail = {
+			to: [{ address: "probe@acme.example", name: "" }],
+			from: { address: "attacker@evil.example", name: "" },
+			subject: "test", text: "body", html: null, headers: [], attachments: [],
+		};
+		return {
+			kind: "catchall" as const,
+			rawEmail: new ArrayBuffer(0),
+			parsedEmail: parsedEmail as unknown as import("postal-mime").Email,
+			domain: "acme.example",
+			retentionDays: 30,
+			sampleLimit: 50,
+		};
+	}
+
+	async function freshState() {
+		const { receiveCatchall } = await import("../../workers/index");
+		const { clearDomainSettingsCache } = await import("../../workers/lib/domain-settings");
+		const { clearOrgSettingsCache } = await import("../../workers/lib/org-settings");
+		clearDomainSettingsCache();
+		clearOrgSettingsCache();
+		return receiveCatchall;
+	}
+
+	it("submits to the hub when score >= hub_report_threshold and hub is configured", async () => {
+		const receiveCatchall = await freshState();
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ Event: { uuid: "posted-uuid" } }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		// Threshold 0 → any score qualifies.
+		const { env, probeStub } = makeHubEnv({ hubReportThreshold: 0 });
+		await receiveCatchall(makeNormalized(), env, {} as ExecutionContext);
+
+		expect(probeStub.recordCatchallProbe).toHaveBeenCalledOnce();
+		const hubCalls = fetchMock.mock.calls.filter((c) => hostOf(c[0]) === HUB_HOST);
+		expect(hubCalls).toHaveLength(1);
+		const url = new URL(String(hubCalls[0][0]));
+		expect(url.pathname).toBe("/events");
+
+		vi.unstubAllGlobals();
+	});
+
+	it("does not submit when score < hub_report_threshold", async () => {
+		const receiveCatchall = await freshState();
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		// Threshold 100 → a benign probe (score well under 100) never qualifies.
+		const { env, probeStub } = makeHubEnv({ hubReportThreshold: 100 });
+		await receiveCatchall(makeNormalized(), env, {} as ExecutionContext);
+
+		expect(probeStub.recordCatchallProbe).toHaveBeenCalledOnce();
+		const hubCalls = fetchMock.mock.calls.filter((c) => hostOf(c[0]) === HUB_HOST);
+		expect(hubCalls).toHaveLength(0);
+
+		vi.unstubAllGlobals();
+	});
+
+	it("catches a hub submission failure; the probe is still recorded and no error propagates", async () => {
+		const receiveCatchall = await freshState();
+		const fetchMock = vi.fn().mockRejectedValue(new Error("hub unreachable"));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const { env, probeStub } = makeHubEnv({ hubReportThreshold: 0 });
+		await expect(
+			receiveCatchall(makeNormalized(), env, {} as ExecutionContext),
+		).resolves.toBeUndefined();
+		expect(probeStub.recordCatchallProbe).toHaveBeenCalledOnce();
+
+		vi.unstubAllGlobals();
+	});
+
+	it("does not submit when the hub is not configured (no intel.hub)", async () => {
+		const receiveCatchall = await freshState();
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		const probeStub = { recordCatchallProbe: vi.fn().mockResolvedValue(undefined) };
+		const bucket = makeR2({
+			"domains/acme.example.json": JSON.stringify({
+				catchall_intel: { enabled: true, retention_days: 30, sample_limit: 50, hub_report_threshold: 0 },
+			}),
+			"org/settings.json": JSON.stringify({}),
+		});
+		const env = {
+			AI: new Proxy({}, { get() { throw new Error("env.AI must not be called"); } }),
+			BUCKET: bucket,
+			CATCHALL_INTEL: { idFromName: () => "stub-id", get: () => probeStub },
+			HUB_ALLOWED_HOSTS: HUB_HOST,
+		} as unknown as Parameters<typeof receiveCatchall>[1];
+
+		await receiveCatchall(makeNormalized(), env, {} as ExecutionContext);
+		expect(probeStub.recordCatchallProbe).toHaveBeenCalledOnce();
+		expect(fetchMock.mock.calls.filter((c) => hostOf(c[0]) === HUB_HOST)).toHaveLength(0);
+
+		vi.unstubAllGlobals();
+	});
+});

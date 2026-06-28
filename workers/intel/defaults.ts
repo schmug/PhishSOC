@@ -16,6 +16,14 @@
  * Consumers are free to add their own feeds via mailbox settings.
  */
 
+/**
+ * Default score threshold at or above which a catch-all probe is submitted to
+ * the community hub via the corroboration API (#437). Overridable per-domain
+ * via `catchall_intel.hub_report_threshold`. A probe scoring below this is
+ * considered too low-confidence to share.
+ */
+export const DEFAULT_CATCHALL_HUB_REPORT_THRESHOLD = 70;
+
 export interface FeedDefinition {
 	id: string;
 	url: string;
