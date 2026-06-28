@@ -13,6 +13,11 @@ export interface Env extends Cloudflare.Env {
 	//     origin, validated against the request origin on every verify.
 	//   - WEBAUTHN_DB        — D1 binding; credential + one-shot challenge store
 	//     (schema in migrations/webauthn).
+	//   - WEBAUTHN_AAGUID_ALLOWLIST — wrangler var (#506); optional
+	//     comma-separated authenticator AAGUID allowlist. Non-empty ⇒
+	//     register/verify rejects any authenticator whose AAGUID is not on the
+	//     list; empty/unset ⇒ allow all (no change from #376). Declared in
+	//     wrangler.jsonc so its type comes from the generated `Cloudflare.Env`.
 	/**
 	 * Optional CrowdSec CTI API key. When unset, deep-scan's CTI enrichment
 	 * stage no-ops — deploys without a key still work; they just don't get

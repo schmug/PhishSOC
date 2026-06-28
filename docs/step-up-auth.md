@@ -270,12 +270,42 @@ security alert as a first-key enrollment (`SECURITY_ALERT_WEBHOOK_URL`, §6):
 
 ---
 
+## 8. AAGUID authenticator allowlist (#506)
+
+By default (#376) enrollment accepts any platform passkey or roaming key —
+deliberate at bring-up, so the operator could enroll their own first
+authenticators. Once enrollment exists, an operator can pin enrollment to a set
+of approved authenticator models to harden against weak/unknown/consumer
+authenticators being registered as the high-risk-send step-up factor.
+
+### Configuration
+
+```jsonc
+// wrangler.jsonc → vars
+"WEBAUTHN_AAGUID_ALLOWLIST": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee, 11111111-..."
+```
+
+- Comma-separated authenticator **AAGUIDs** (case-insensitive).
+- **Empty/unset ⇒ allow all** — no behavior change from #376.
+- Operator-configured via env, **not** teammate-editable settings.
+
+### Enforcement
+
+`register/verify` checks the AAGUID that `@simplewebauthn/server` already parsed
+from the attestation (`registrationInfo.aaguid`) against the allowlist **before**
+the credential is stored. A non-allowlisted AAGUID is rejected with `403` and an
+audit line (`webauthn.aaguid_rejected`); nothing is persisted. There is no
+hand-rolled attestation parsing and no MDS / certificate-chain validation —
+AAGUID matching only.
+
+---
+
 ## Cross-References
 
 - **#376** — this work: app-layer WebAuthn step-up replacing the Access-JWT step-up.
 - **#364 / #287** — superseded same-hostname / separate-hostname Access approaches.
-- **#506** — AAGUID hardware-pinning (deferred).
-- **#507** — admin recovery tooling (§7, this work).
+- **#506** — AAGUID hardware-pinning (§8, this work).
+- **#507** — admin recovery tooling (§7).
 - `workers/routes/webauthn.ts` — authenticate + register endpoints.
 - `workers/lib/webauthn-store.ts` — D1 credential + challenge store.
 - `workers/lib/confirm-token.ts` — one-shot token contract (unchanged).

@@ -21,7 +21,13 @@
 		// the request origin on every verify — they MUST match the deployed
 		// hostname or every assertion is rejected.
 		"RP_ID": "inbox.cortech.online",
-		"RP_ORIGIN": "https://inbox.cortech.online"
+		"RP_ORIGIN": "https://inbox.cortech.online",
+		// Optional AAGUID authenticator allowlist for WebAuthn step-up enrollment
+		// (issue #506). Comma-separated authenticator AAGUIDs; with a non-empty
+		// list, register/verify rejects any authenticator whose AAGUID is not on
+		// it. Empty (the default here) ⇒ allow all (no change from #376).
+		// Operator-configured, not teammate-editable settings.
+		"WEBAUTHN_AAGUID_ALLOWLIST": ""
 		// Operator security-alert webhook for first-passkey (TOFU) enrollment
 		// (issue #376) is set as a SECRET, not a var here — a literal var would
 		// widen the generated `Cloudflare.Env` and break `Env extends Cloudflare.Env`
