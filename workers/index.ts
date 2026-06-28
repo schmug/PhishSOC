@@ -869,13 +869,15 @@ app.get("/api/v1/domains/:domain/ruf-records", async (c) => {
 // Catch-all probe intel (#427)
 // ---------------------------------------------------------------------------
 
-function emptyCatchallSummary(): CatchallSummary {
-	return { totals: { probe_count: 0, distinct_sources: 0, distinct_localparts: 0 }, topSources: [], recent: [] };
+function emptyCatchallSummary(enabled: boolean): { totals: { probe_count: number; distinct_sources: number; distinct_localparts: number }; topSources: never[]; recent: never[]; enabled: boolean } {
+	return { totals: { probe_count: 0, distinct_sources: 0, distinct_localparts: 0 }, topSources: [], recent: [], enabled };
 }
 
 /** Per-domain catch-all probe rollup (#427). Same CF-Access auth boundary as
  * all `/api/v1/` routes. Returns empty summary for domains with no probe data
- * or where CATCHALL_INTEL is not yet wired (#425/#426 deferred). */
+ * or where CATCHALL_INTEL is not yet wired (#425/#426 deferred).
+ * `enabled` reflects the resolved domain-tier `catchall_intel.enabled` setting
+ * (default false) so the card can distinguish disabled from enabled-but-empty. */
 app.get("/api/v1/domains/:domain/catchall-intel", async (c) => {
 	const raw = c.req.param("domain") ?? "";
 	const domain = decodeURIComponent(raw).toLowerCase();
@@ -883,16 +885,19 @@ app.get("/api/v1/domains/:domain/catchall-intel", async (c) => {
 
 	const limit = Math.min(parseInt(c.req.query("limit") ?? "20", 10) || 20, 100);
 
+	const domainSettings = await getDomainSettings(c.env, domain);
+	const enabled = domainSettings.catchall_intel?.enabled ?? false;
+
 	try {
 		const doId = c.env.CATCHALL_INTEL.idFromName(domain);
 		const stub = c.env.CATCHALL_INTEL.get(doId) as unknown as {
 			getCatchallSummary(opts: { limit: number }): Promise<CatchallSummary>;
 		};
 		const summary = await stub.getCatchallSummary({ limit });
-		return c.json(summary);
+		return c.json({ ...summary, enabled });
 	} catch (e) {
 		console.error("catchall-intel: DO fetch failed:", (e as Error).message);
-		return c.json(emptyCatchallSummary());
+		return c.json(emptyCatchallSummary(enabled));
 	}
 });
 

@@ -438,6 +438,8 @@ export interface CatchallRecentSample {
 
 /** Shape returned by `GET /api/v1/domains/:domain/catchall-intel` (#427). */
 export interface CatchallSummary {
+	/** Resolved domain-tier `catchall_intel.enabled`; false when unset. */
+	enabled: boolean;
 	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
 	topSources: CatchallSourceRollup[];
 	recent: CatchallRecentSample[];

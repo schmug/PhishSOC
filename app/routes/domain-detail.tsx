@@ -693,14 +693,13 @@ function CatchallProbesCard({
 		);
 	}
 
-	const empty = !data || data.totals.probe_count === 0;
 	return (
 		<div className="pp-card p-5">
 			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
 				<EyeIcon size={12} />
 				Catch-all probes
 			</div>
-			{empty ? (
+			{!data || !data.enabled ? (
 				<p className="text-[12.5px] text-ink-3">
 					No catch-all probe activity recorded.{" "}
 					<RouterLink
@@ -710,6 +709,10 @@ function CatchallProbesCard({
 						Enable catch-all intel in domain settings
 					</RouterLink>{" "}
 					to start collecting directory-harvest data.
+				</p>
+			) : data.totals.probe_count === 0 ? (
+				<p className="text-[12.5px] text-ink-3">
+					Catch-all probe capture is enabled — no probes captured yet.
 				</p>
 			) : (
 				<div className="space-y-5">

@@ -316,7 +316,9 @@ describe("DomainDetailRoute", () => {
 		expect(within(dmarcCard).getByText("97%")).toBeInTheDocument();
 	});
 
-	it("renders the catch-all probes empty-state when no probe data is available (#427)", () => {
+	it("renders the catch-all probes disabled state when no data or not enabled (#427)", () => {
+		// useCatchallIntel returns { data: undefined } from shellDomainsMock by default,
+		// matching the case where the endpoint returns enabled: false (or is unreachable).
 		queryState = { data: populated, isLoading: false, isError: false };
 		renderDomainDetail("acme.com");
 		const card = screen
@@ -325,11 +327,47 @@ describe("DomainDetailRoute", () => {
 		expect(
 			within(card).getByText(/no catch-all probe activity recorded/i),
 		).toBeInTheDocument();
+		expect(
+			within(card).getByRole("link", { name: /enable catch-all intel/i }),
+		).toBeInTheDocument();
+	});
+
+	it("renders 'enabled — no probes yet' state when enabled with zero probes (#548)", async () => {
+		const domainsModule = await import("~/queries/domains");
+		const awaitingData: CatchallSummary = {
+			enabled: true,
+			totals: { probe_count: 0, distinct_sources: 0, distinct_localparts: 0 },
+			topSources: [],
+			recent: [],
+		};
+		vi.spyOn(domainsModule, "useCatchallIntel").mockReturnValue({
+			data: awaitingData,
+			isLoading: false,
+			isError: false,
+		} as ReturnType<typeof domainsModule.useCatchallIntel>);
+
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderDomainDetail("acme.com");
+
+		const card = screen
+			.getByText(/catch-all probes/i)
+			.closest(".pp-card") as HTMLElement;
+
+		expect(
+			within(card).getByText(/capture is enabled — no probes captured yet/i),
+		).toBeInTheDocument();
+		// Must NOT show the "go enable it" link.
+		expect(
+			within(card).queryByRole("link", { name: /enable catch-all intel/i }),
+		).not.toBeInTheDocument();
+
+		vi.restoreAllMocks();
 	});
 
 	it("renders catch-all probes populated card when useCatchallIntel returns data (#427)", async () => {
 		const domainsModule = await import("~/queries/domains");
 		const catchallData: CatchallSummary = {
+			enabled: true,
 			totals: { probe_count: 42, distinct_sources: 3, distinct_localparts: 17 },
 			topSources: [
 				{
