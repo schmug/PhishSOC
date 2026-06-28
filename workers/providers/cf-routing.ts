@@ -205,7 +205,7 @@ export async function normalizeInbound(
 	}
 }
 
-async function getOwnedDomains(env: Env): Promise<string[]> {
+export async function getOwnedDomains(env: Env): Promise<string[]> {
 	const seed = ((env.DOMAINS ?? "") as string).split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
 	try {
 		const org = await getOrgSettings(env);

@@ -65,6 +65,7 @@ import { emptyDnssecPosture, fetchDnssecPosture } from "./dnssec/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
+import { getOwnedDomains } from "./providers/cf-routing";
 import {
 	aggregateOrgSearch,
 	mailboxesForOrgSearch,
@@ -276,7 +277,20 @@ app.get("/api/v1/mailboxes", async (c) => {
 	const jwtToken = c.req.header("cf-access-jwt-assertion");
 	const callerEmail = callerEmailFromJwt(jwtToken);
 	const callerGroups = callerGroupsFromJwt(jwtToken);
-	const allMailboxes = await listMailboxes(c.env.BUCKET);
+	const rawMailboxes = await listMailboxes(c.env.BUCKET);
+
+	// Exclude honeypot mailboxes (#24) — they are IOC sensors and must never
+	// surface in the user UI, regardless of ACL. Settings reads are cached.
+	const honeypotFlags = await Promise.all(
+		rawMailboxes.map(async (m) => {
+			try {
+				return !!(await resolveMailboxSettings(c.env, m.id)).raw?.honeypot?.enabled;
+			} catch {
+				return false;
+			}
+		}),
+	);
+	const allMailboxes = rawMailboxes.filter((_, i) => !honeypotFlags[i]);
 
 	// Read ACLs for all mailboxes — needed for acl_status (#241) in both branches.
 	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
@@ -938,6 +952,72 @@ app.post("/api/v1/mailboxes", async (c) => {
 	return c.json({ id: email, email, name, settings: finalSettings }, 201);
 });
 
+// -- Honeypots (#24) ------------------------------------------------
+
+/** Default per-honeypot inbound cap; auto-disabled once exceeded. */
+const HONEYPOT_DEFAULT_MAX_INBOUND = 1000;
+
+const CreateHoneypotsBody = z.object({
+	count: z.number().int().positive().max(50).optional().default(1),
+	ttl_days: z.number().int().positive().max(365).optional().default(7),
+	/** Owned domain to host the honeypots on. Defaults to the first owned domain. */
+	domain: z.string().optional(),
+	/** Per-honeypot inbound cap before auto-disable. */
+	max_inbound: z.number().int().positive().optional(),
+});
+
+/** Random, opaque local-part for a honeypot address. */
+function randomHoneypotLocalpart(): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(8));
+	return "hp-" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Spin up N ephemeral honeypot mailboxes (#24). Each is a real `mailboxes/<id>.json`
+ * blob (so Email Routing delivers to it) flagged as a honeypot with an N-day TTL.
+ * Honeypots get NO ACL — they are operator infrastructure, never surfaced in the
+ * user UI (the GET /mailboxes filter hides them regardless). The hourly cron
+ * reaps them once `expires_at` passes.
+ */
+app.post("/api/v1/honeypots", async (c) => {
+	const parsed = CreateHoneypotsBody.safeParse(await c.req.json().catch(() => ({})));
+	if (!parsed.success) return c.json({ error: "invalid request body" }, 400);
+	const { count, ttl_days, domain: requestedDomain, max_inbound } = parsed.data;
+
+	const owned = await getOwnedDomains(c.env);
+	if (owned.length === 0) return c.json({ error: "no owned domains configured" }, 400);
+	const domain = (requestedDomain ?? owned[0]).toLowerCase();
+	if (!owned.includes(domain)) {
+		return c.json({ error: `domain ${domain} is not an owned domain` }, 400);
+	}
+
+	const expiresAt = new Date(Date.now() + ttl_days * 86_400_000).toISOString();
+	const created: string[] = [];
+	for (let i = 0; i < count; i++) {
+		// Pick a free local-part (collisions on 8 random bytes are vanishingly
+		// unlikely, but never silently overwrite an existing mailbox).
+		let email = `${randomHoneypotLocalpart()}@${domain}`;
+		for (let attempt = 0; attempt < 5 && (await c.env.BUCKET.head(`mailboxes/${email}.json`)); attempt++) {
+			email = `${randomHoneypotLocalpart()}@${domain}`;
+		}
+		if (await c.env.BUCKET.head(`mailboxes/${email}.json`)) continue;
+
+		const settings = stripDefaultEqual({
+			honeypot: {
+				enabled: true,
+				expires_at: expiresAt,
+				max_inbound: max_inbound ?? HONEYPOT_DEFAULT_MAX_INBOUND,
+			},
+		} as MailboxSettings);
+		await c.env.BUCKET.put(`mailboxes/${email}.json`, JSON.stringify(settings));
+		// Provision the DO (creates the folder schema) so inbound mail lands cleanly.
+		await c.env.MAILBOX.get(c.env.MAILBOX.idFromName(email)).getFolders();
+		created.push(email);
+	}
+
+	return c.json({ created, domain, expires_at: expiresAt, count: created.length }, 201);
+});
+
 app.get("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const obj = await c.env.BUCKET.get(`mailboxes/${mailboxId}.json`);
@@ -1109,6 +1189,100 @@ async function reapMailbox(env: Env, mailboxId: string): Promise<void> {
 	await deleteMailboxAcl(env, mailboxId).catch(
 		(e: Error) => console.error(`reapMailbox(${mailboxId}): ACL delete failed:`, e.message),
 	);
+}
+
+// -- Honeypot inbound + cron reap (#24) -----------------------------
+
+type HoneypotConfig = NonNullable<MailboxSettings["honeypot"]>;
+
+/**
+ * Persist `honeypot.disabled = true` on a honeypot's settings blob (the rate-cap
+ * auto-disable). Routes through `stripDefaultEqual` like every settings-tier
+ * write; the enabled honeypot block survives the strip.
+ */
+async function disableHoneypot(env: Env, mailboxId: string, honeypot: HoneypotConfig): Promise<void> {
+	const key = `mailboxes/${mailboxId}.json`;
+	const obj = await env.BUCKET.get(key);
+	if (!obj) return;
+	const raw = (await obj.json().catch(() => null)) as Record<string, unknown> | null;
+	if (!raw) return;
+	const updated = stripDefaultEqual({
+		...raw,
+		honeypot: { ...honeypot, disabled: true },
+	} as MailboxSettings);
+	await env.BUCKET.put(key, JSON.stringify(updated));
+}
+
+/**
+ * Handle an inbound message to a honeypot mailbox (#24): enforce the per-honeypot
+ * inbound rate-cap (auto-disable on overflow) and, when still live, auto-publish
+ * the message's IOCs to the hub with elevated trust. Best-effort throughout —
+ * callers dispatch this via `ctx.waitUntil`.
+ */
+async function handleHoneypotInbound(
+	env: Env,
+	mailboxId: string,
+	honeypot: HoneypotConfig,
+	parsedEmail: import("postal-mime").Email,
+	stub: { countEmails(): Promise<number> },
+): Promise<void> {
+	// Already auto-disabled → stop publishing (storage still bounded by TTL reap).
+	if (honeypot.disabled) return;
+
+	// Rate-cap: once the honeypot has taken more than its cap, flag it disabled
+	// so an attacker who discovers the pattern can't drive unbounded hub posts.
+	const maxInbound = honeypot.max_inbound ?? HONEYPOT_DEFAULT_MAX_INBOUND;
+	const count = await stub.countEmails().catch(() => 0);
+	if (count > maxInbound) {
+		await disableHoneypot(env, mailboxId, honeypot).catch(
+			(e) => console.error(`honeypot disable failed for ${mailboxId}:`, (e as Error).message),
+		);
+		return;
+	}
+
+	// Never publish a sender on an owned domain — a misdirected internal message
+	// is not threat intel. (A fuller cross-mailbox allowlist-overlap check is a
+	// follow-up; this is the cheap, high-value guard.)
+	const senderDomain = (parsedEmail.from?.address?.split("@")[1] ?? "").toLowerCase();
+	if (senderDomain && (await getOwnedDomains(env)).includes(senderDomain)) return;
+
+	const creds = await loadHubCredentials(
+		env as unknown as Record<string, unknown> & { BUCKET: R2Bucket },
+		mailboxId,
+	);
+	if (!creds) return;
+	const { reportHoneypotInbound } = await import("./intel/honeypot-report");
+	await reportHoneypotInbound({ hubConfig: creds.cfg, apiKey: creds.apiKey, mailboxId, parsedEmail });
+}
+
+/**
+ * Reap every honeypot mailbox whose `expires_at` has passed (#24). Deletes the
+ * settings blob then reuses `reapMailbox` to wipe the DO, R2 attachment blobs,
+ * and any ACL. Called hourly from the cron handler. Returns the reaped count.
+ */
+export async function reapExpiredHoneypots(env: Env): Promise<{ reaped: number }> {
+	const now = Date.now();
+	const mailboxes = await listMailboxes(env.BUCKET);
+	let reaped = 0;
+	for (const { id } of mailboxes) {
+		let honeypot: HoneypotConfig | undefined;
+		try {
+			honeypot = (await resolveMailboxSettings(env, id)).raw?.honeypot;
+		} catch {
+			continue;
+		}
+		if (!honeypot?.enabled || !honeypot.expires_at) continue;
+		const expiresAt = Date.parse(honeypot.expires_at);
+		if (Number.isNaN(expiresAt) || expiresAt > now) continue;
+		try {
+			await env.BUCKET.delete(`mailboxes/${id}.json`);
+			await reapMailbox(env, id);
+			reaped++;
+		} catch (e) {
+			console.error(`reapExpiredHoneypots(${id}) failed:`, (e as Error).message);
+		}
+	}
+	return { reaped };
 }
 
 // -- Emails ---------------------------------------------------------
@@ -1379,6 +1553,21 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 		in_reply_to: inReplyTo, email_references: emailReferences.length > 0 ? JSON.stringify(emailReferences) : null,
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
 	}, attachmentData);
+
+	// Honeypot mailboxes (#24) are IOC sensors, not real inboxes. The message is
+	// stored (for the rate-cap count + forensic record), its IOCs are harvested
+	// to the hub with elevated trust, and we STOP here: no security pipeline, no
+	// deep-scan, no UI notification, and — critically — no agent/auto-draft, so a
+	// honeypot can never auto-reply and reveal itself.
+	const honeypotCfg = (await resolveMailboxSettings(env, mailboxId).catch(() => null))?.raw?.honeypot;
+	if (honeypotCfg?.enabled) {
+		ctx.waitUntil(
+			handleHoneypotInbound(env, mailboxId, honeypotCfg, parsedEmail, stub as unknown as { countEmails(): Promise<number> }).catch(
+				(e) => console.error(`honeypot inbound handling failed for ${mailboxId}:`, (e as Error).message),
+			),
+		);
+		return;
+	}
 
 	// DMARC aggregate reports arrive as email. Detect and divert to the
 	// dashboard rather than running the content classifier against what is

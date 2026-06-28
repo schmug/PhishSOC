@@ -6,7 +6,7 @@ import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
-import { app as apiApp, receiveEmail, receiveCatchall } from "./index";
+import { app as apiApp, receiveEmail, receiveCatchall, reapExpiredHoneypots } from "./index";
 import { normalizeInbound } from "./providers/cf-routing";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
@@ -212,5 +212,17 @@ export default {
 				),
 			);
 		}
+
+		// Reap expired honeypot mailboxes (#24): delete their settings blob and
+		// wipe the DO + R2 attachment blobs once their TTL passes. Separate
+		// waitUntil so a reap failure never breaks the other cron jobs.
+		ctx.waitUntil(
+			reapExpiredHoneypots(env).then(
+				(r) => {
+					if (r.reaped > 0) console.log(`honeypots: reaped ${r.reaped} expired`);
+				},
+				(e) => console.error("honeypot reap failed:", (e as Error).message),
+			),
+		);
 	},
 };
