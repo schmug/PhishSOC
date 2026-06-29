@@ -122,6 +122,65 @@ describe("POST /api/v1/honeypots", () => {
 	});
 });
 
+describe("mailbox PUT — honeypot client guard", () => {
+	it("rejects a client attempt to self-assign honeypot settings", async () => {
+		const mailboxId = "alice@acme.example.com";
+		const bucket = makeR2({
+			"org/settings.json": JSON.stringify({}),
+			[`mailboxes/${mailboxId}.json`]: JSON.stringify({ fromName: "Alice" }),
+		});
+		const { ns } = makeMailboxNs();
+		const env = {
+			BUCKET: bucket,
+			MAILBOX: ns,
+		} as unknown as Parameters<typeof app.request>[2];
+
+		const res = await app.request(
+			`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}`,
+			{
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ settings: { honeypot: { enabled: true } } }),
+			},
+			env,
+		);
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toContain("honeypots");
+	});
+
+	it("preserves an existing honeypot block when saving unrelated settings", async () => {
+		const mailboxId = "hp@acme.example.com";
+		const honeypot = { enabled: true, expires_at: "2099-01-01T00:00:00Z", max_inbound: 100 };
+		const bucket = makeR2({
+			"org/settings.json": JSON.stringify({}),
+			[`mailboxes/${mailboxId}.json`]: JSON.stringify({ honeypot }),
+		});
+		const { ns } = makeMailboxNs();
+		const env = {
+			BUCKET: bucket,
+			MAILBOX: ns,
+		} as unknown as Parameters<typeof app.request>[2];
+
+		const res = await app.request(
+			`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}`,
+			{
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ settings: { agentModel: "@cf/test/model" } }),
+			},
+			env,
+		);
+		expect(res.status).toBe(200);
+		const blob = JSON.parse(bucket.store.get(`mailboxes/${mailboxId}.json`)!) as {
+			agentModel?: string;
+			honeypot?: typeof honeypot;
+		};
+		expect(blob.agentModel).toBe("@cf/test/model");
+		expect(blob.honeypot).toEqual(honeypot);
+	});
+});
+
 describe("reapExpiredHoneypots", () => {
 	it("reaps expired honeypots only, reusing the mailbox-reap path", async () => {
 		const past = new Date(Date.now() - 60_000).toISOString();
