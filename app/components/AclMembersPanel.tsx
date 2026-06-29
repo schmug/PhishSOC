@@ -3,7 +3,15 @@
 import { Button, Input, Loader } from "@cloudflare/kumo";
 import { LockIcon, UserIcon, XIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import { useLockDownMailbox, useMailboxAcl, useAddAclMember, useRemoveAclMember, useTransferAclOwnership, useAddAclGroup, useRemoveAclGroup } from "~/queries/mailboxes";
+import {
+	useAddAclGroup,
+	useAddAclMember,
+	useLockDownMailbox,
+	useMailboxAcl,
+	useRemoveAclGroup,
+	useRemoveAclMember,
+	useTransferAclOwnership,
+} from "~/queries/mailboxes";
 import { ApiError } from "~/services/api";
 
 interface AclMembersPanelProps {
@@ -57,7 +65,9 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 				</Button>
 				{lockDown.isError && (
 					<p className="mt-2 text-xs text-red-600">
-						{lockDown.error instanceof ApiError ? lockDown.error.message : "Lock down failed"}
+						{lockDown.error instanceof ApiError
+							? lockDown.error.message
+							: "Lock down failed"}
 					</p>
 				)}
 			</div>
@@ -72,7 +82,9 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 			await addMember.mutateAsync(email);
 			setNewEmail("");
 		} catch (err) {
-			setAddError(err instanceof ApiError ? err.message : "Failed to add member");
+			setAddError(
+				err instanceof ApiError ? err.message : "Failed to add member",
+			);
 		}
 	};
 
@@ -81,7 +93,9 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 		try {
 			await removeMember.mutateAsync(email);
 		} catch (err) {
-			setRemoveError(err instanceof ApiError ? err.message : "Failed to remove member");
+			setRemoveError(
+				err instanceof ApiError ? err.message : "Failed to remove member",
+			);
 		}
 	};
 
@@ -90,7 +104,9 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 		try {
 			await transferOwnership.mutateAsync(email);
 		} catch (err) {
-			setTransferError(err instanceof ApiError ? err.message : "Failed to transfer ownership");
+			setTransferError(
+				err instanceof ApiError ? err.message : "Failed to transfer ownership",
+			);
 		}
 	};
 
@@ -102,7 +118,9 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 			await addGroup.mutateAsync(group);
 			setNewGroup("");
 		} catch (err) {
-			setAddGroupError(err instanceof ApiError ? err.message : "Failed to add group");
+			setAddGroupError(
+				err instanceof ApiError ? err.message : "Failed to add group",
+			);
 		}
 	};
 
@@ -111,7 +129,9 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 		try {
 			await removeGroup.mutateAsync(group);
 		} catch (err) {
-			setRemoveGroupError(err instanceof ApiError ? err.message : "Failed to remove group");
+			setRemoveGroupError(
+				err instanceof ApiError ? err.message : "Failed to remove group",
+			);
 		}
 	};
 
@@ -120,7 +140,11 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 			<div>
 				<div className="text-xs text-ink-3 mb-1">Owner</div>
 				<div className="flex items-center gap-2 text-sm text-ink">
-					<UserIcon size={14} weight="duotone" className="text-ink-3 shrink-0" />
+					<UserIcon
+						size={14}
+						weight="duotone"
+						className="text-ink-3 shrink-0"
+					/>
 					<span data-testid="acl-owner">{acl.owner}</span>
 				</div>
 			</div>
@@ -129,7 +153,10 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 				<div className="text-xs text-ink-3 mb-2">Members</div>
 				<ul className="space-y-1" data-testid="acl-members-list">
 					{acl.members.map((member) => (
-						<li key={member} className="flex items-center justify-between gap-2">
+						<li
+							key={member}
+							className="flex items-center justify-between gap-2"
+						>
 							<span className="text-sm text-ink truncate">{member}</span>
 							{member !== acl.owner && (
 								<div className="flex items-center gap-1 shrink-0">
@@ -159,10 +186,14 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 					))}
 				</ul>
 				{removeError && (
-					<p className="mt-1 text-xs text-red-600" data-testid="remove-error">{removeError}</p>
+					<p className="mt-1 text-xs text-red-600" data-testid="remove-error">
+						{removeError}
+					</p>
 				)}
 				{transferError && (
-					<p className="mt-1 text-xs text-red-600" data-testid="transfer-error">{transferError}</p>
+					<p className="mt-1 text-xs text-red-600" data-testid="transfer-error">
+						{transferError}
+					</p>
 				)}
 			</div>
 
@@ -174,8 +205,11 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 						placeholder="teammate@example.com"
 						value={newEmail}
 						onChange={(e) => setNewEmail(e.target.value)}
-						onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") handleAdd();
+						}}
 						data-testid="add-member-input"
+						aria-label="New member email"
 					/>
 					<Button
 						variant="secondary"
@@ -188,7 +222,9 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 					</Button>
 				</div>
 				{addError && (
-					<p className="mt-1 text-xs text-red-600" data-testid="add-error">{addError}</p>
+					<p className="mt-1 text-xs text-red-600" data-testid="add-error">
+						{addError}
+					</p>
 				)}
 			</div>
 
@@ -212,7 +248,12 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 					))}
 				</ul>
 				{removeGroupError && (
-					<p className="mt-1 text-xs text-red-600" data-testid="remove-group-error">{removeGroupError}</p>
+					<p
+						className="mt-1 text-xs text-red-600"
+						data-testid="remove-group-error"
+					>
+						{removeGroupError}
+					</p>
 				)}
 				<div className="flex gap-2 mt-2">
 					<Input
@@ -220,8 +261,11 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 						placeholder="soc-analysts"
 						value={newGroup}
 						onChange={(e) => setNewGroup(e.target.value)}
-						onKeyDown={(e) => { if (e.key === "Enter") handleAddGroup(); }}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") handleAddGroup();
+						}}
 						data-testid="add-group-input"
+						aria-label="New group name"
 					/>
 					<Button
 						variant="secondary"
@@ -234,10 +278,16 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 					</Button>
 				</div>
 				{addGroupError && (
-					<p className="mt-1 text-xs text-red-600" data-testid="add-group-error">{addGroupError}</p>
+					<p
+						className="mt-1 text-xs text-red-600"
+						data-testid="add-group-error"
+					>
+						{addGroupError}
+					</p>
 				)}
 				<p className="mt-1 text-xs text-ink-3" data-testid="acl-groups-note">
-					Group names must match names defined in your Cloudflare Access dashboard
+					Group names must match names defined in your Cloudflare Access
+					dashboard
 				</p>
 			</div>
 		</div>
