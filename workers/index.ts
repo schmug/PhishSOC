@@ -917,6 +917,9 @@ app.get("/api/v1/domains/:domain/catchall-intel", async (c) => {
 
 app.post("/api/v1/mailboxes", async (c) => {
 	const { name, settings, email: rawEmail } = CreateMailboxBody.parse(await c.req.json());
+	if ((settings as MailboxSettings | undefined)?.honeypot !== undefined) {
+		return c.json({ error: HONEYPOT_CLIENT_ERROR }, 400);
+	}
 	const email = rawEmail.toLowerCase();
 	const allowedAddresses = (c.env.EMAIL_ADDRESSES ?? []) as string[];
 	if (allowedAddresses.length > 0 && !allowedAddresses.map((a) => a.toLowerCase()).includes(email)) {
@@ -1093,12 +1096,22 @@ app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	if (!parsed.success) {
 		return c.json({ error: "Invalid settings", issues: parsed.error.issues }, 400);
 	}
+	if (parsed.data.honeypot !== undefined) {
+		return c.json({ error: HONEYPOT_CLIENT_ERROR }, 400);
+	}
 	// #106 acceptance criterion 6: drop fields equal to the system default
 	// before persisting. A fresh mailbox PUT that just round-trips the UI's
 	// rendered defaults must NOT silently shadow every org-level value.
 	const settings = stripDefaultEqual(parsed.data);
 	const key = `mailboxes/${mailboxId}.json`;
-	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
+	const existingObj = await c.env.BUCKET.get(key);
+	if (!existingObj) return c.json({ error: "Not found" }, 404);
+	const existing = (await existingObj.json().catch(() => ({}))) as MailboxSettings;
+	// Preserve operator-managed honeypot state — this endpoint must never clear
+	// or rewrite it when a client saves unrelated mailbox settings.
+	if (existing.honeypot) {
+		settings.honeypot = existing.honeypot;
+	}
 	await c.env.BUCKET.put(key, JSON.stringify(settings));
 	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings });
 });
@@ -1194,6 +1207,13 @@ async function reapMailbox(env: Env, mailboxId: string): Promise<void> {
 // -- Honeypot inbound + cron reap (#24) -----------------------------
 
 type HoneypotConfig = NonNullable<MailboxSettings["honeypot"]>;
+
+const HONEYPOT_CLIENT_ERROR = "honeypot settings are managed via POST /api/v1/honeypots";
+
+/** Operator-provisioned honeypots always carry `expires_at` (POST /api/v1/honeypots). */
+function isProvisionedHoneypot(cfg: HoneypotConfig | undefined): cfg is HoneypotConfig {
+	return !!(cfg?.enabled && cfg.expires_at);
+}
 
 /**
  * Persist `honeypot.disabled = true` on a honeypot's settings blob (the rate-cap
@@ -1560,7 +1580,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	// deep-scan, no UI notification, and — critically — no agent/auto-draft, so a
 	// honeypot can never auto-reply and reveal itself.
 	const honeypotCfg = (await resolveMailboxSettings(env, mailboxId).catch(() => null))?.raw?.honeypot;
-	if (honeypotCfg?.enabled) {
+	if (isProvisionedHoneypot(honeypotCfg)) {
 		ctx.waitUntil(
 			handleHoneypotInbound(env, mailboxId, honeypotCfg, parsedEmail, stub as unknown as { countEmails(): Promise<number> }).catch(
 				(e) => console.error(`honeypot inbound handling failed for ${mailboxId}:`, (e as Error).message),
