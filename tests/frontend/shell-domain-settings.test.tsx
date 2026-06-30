@@ -16,6 +16,10 @@ vi.mock("~/queries/domain-settings", () => ({
 	useUpdateDomainSettings: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
+vi.mock("~/queries/org-settings", () => ({
+	useOrgSettings: () => ({ data: { settings: {} }, isLoading: false }),
+}));
+
 vi.mock("~/queries/text-models", () => ({
 	useTextModels: () => ({ models: ["@cf/meta/llama-3.3-70b-instruct-fp8-fast"] }),
 }));
