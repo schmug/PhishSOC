@@ -1211,7 +1211,7 @@ type HoneypotConfig = NonNullable<MailboxSettings["honeypot"]>;
 const HONEYPOT_CLIENT_ERROR = "honeypot settings are managed via POST /api/v1/honeypots";
 
 /** Operator-provisioned honeypots always carry `expires_at` (POST /api/v1/honeypots). */
-function isProvisionedHoneypot(cfg: HoneypotConfig | undefined): boolean {
+function isProvisionedHoneypot(cfg: HoneypotConfig | undefined): cfg is HoneypotConfig {
 	return !!(cfg?.enabled && cfg.expires_at);
 }
 
