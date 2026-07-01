@@ -88,8 +88,15 @@ export function makeTestDb(): TestDb {
 			const txn = raw.transaction(() => {
 				for (const stmt of statements) {
 					const s = stmt as PreparedLike & { _getBoundObj(): Record<string, unknown>; _getStmt(): ReturnType<Database.Database["prepare"]> };
-					const info = s._getStmt().run(s._getBoundObj());
-					results.push({ results: [{ changes: info.changes, last_row_id: Number(info.lastInsertRowid) }] });
+					const betterStmt = s._getStmt();
+					// If the statement is a SELECT, use .all(), otherwise use .run()
+					if (betterStmt.source.trim().toUpperCase().startsWith('SELECT')) {
+					    const rows = betterStmt.all(s._getBoundObj());
+					    results.push({ results: rows });
+					} else {
+					    const info = betterStmt.run(s._getBoundObj());
+					    results.push({ results: [{ changes: info.changes, last_row_id: Number(info.lastInsertRowid) }] });
+					}
 				}
 			});
 			txn();

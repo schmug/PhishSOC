@@ -60,45 +60,61 @@ adminStatsRoutes.get("/stats", async (c) => {
 	const db = c.env.DB;
 
 	// --- orgs -----------------------------------------------------------
-	const orgsTotal = (await db.prepare(`SELECT COUNT(*) AS n FROM orgs`).first<CountRow>())?.n ?? 0;
+	const orgsTotal =
+		(await db.prepare(`SELECT COUNT(*) AS n FROM orgs`).first<CountRow>())?.n ??
+		0;
 
 	// "active" = has ingested at least one event in the last 7d. Uses
 	// idx_events_created_at so a peer backfilling stale-dated events
 	// counts the contributing org as active.
-	const activeOrgs = (await db
-		.prepare(
-			`SELECT COUNT(DISTINCT orgc_uuid) AS n
+	const activeOrgs =
+		(
+			await db
+				.prepare(
+					`SELECT COUNT(DISTINCT orgc_uuid) AS n
 			 FROM events
 			 WHERE created_at >= datetime('now', '-7 days')`,
-		)
-		.first<CountRow>())?.n ?? 0;
+				)
+				.first<CountRow>()
+		)?.n ?? 0;
 
 	// --- events ---------------------------------------------------------
-	const eventsTotal = (await db.prepare(`SELECT COUNT(*) AS n FROM events`).first<CountRow>())?.n ?? 0;
+	const eventsTotal =
+		(await db.prepare(`SELECT COUNT(*) AS n FROM events`).first<CountRow>())
+			?.n ?? 0;
 	// 24h window keyed off local ingest time (idx_events_created_at) so
 	// that an event imported today with a stale upstream `date` still
 	// lands in today's bucket. Other event-time queries below stay on
 	// `events.date` — see file-level note.
-	const eventsLast24h = (await db
-		.prepare(
-			`SELECT COUNT(*) AS n FROM events WHERE created_at >= datetime('now', '-1 day')`,
-		)
-		.first<CountRow>())?.n ?? 0;
+	const eventsLast24h =
+		(
+			await db
+				.prepare(
+					`SELECT COUNT(*) AS n FROM events WHERE created_at >= datetime('now', '-1 day')`,
+				)
+				.first<CountRow>()
+		)?.n ?? 0;
 
 	// --- corroboration --------------------------------------------------
-	const corroborationRows = (await db
-		.prepare(`SELECT COUNT(*) AS n FROM corroboration`)
-		.first<CountRow>())?.n ?? 0;
+	const corroborationRows =
+		(
+			await db
+				.prepare(`SELECT COUNT(*) AS n FROM corroboration`)
+				.first<CountRow>()
+		)?.n ?? 0;
 	// Use the same predicate `aggregate.ts` uses for promotion. Imported
 	// rather than re-declared so a threshold change in one place can never
 	// drift from the other.
-	const corroborationPromoted = (await db
-		.prepare(
-			`SELECT COUNT(*) AS n FROM corroboration
+	const corroborationPromoted =
+		(
+			await db
+				.prepare(
+					`SELECT COUNT(*) AS n FROM corroboration
 			 WHERE score >= ?1 AND contributor_count >= ?2`,
-		)
-		.bind(PROMOTION_SCORE, PROMOTION_CONTRIBUTORS)
-		.first<CountRow>())?.n ?? 0;
+				)
+				.bind(PROMOTION_SCORE, PROMOTION_CONTRIBUTORS)
+				.first<CountRow>()
+		)?.n ?? 0;
 
 	// --- destroylist size per sharing group -----------------------------
 	const destroyRows = await db
@@ -132,25 +148,36 @@ adminStatsRoutes.get("/stats", async (c) => {
 			 FROM inbound_peers ib JOIN peers p ON p.uuid = ib.peer_uuid
 			 ORDER BY p.name`,
 		)
-		.all<{ inbound_uuid: string; name: string; last_pulled_at: string | null; last_error: string | null }>();
-	const peers = await Promise.all(
-		(peerRows.results ?? []).map(async (peer) => {
-			const pulled = (await db
-				.prepare(
-					`SELECT COUNT(*) AS n FROM events
-					 WHERE source_peer_uuid = ?1
-					   AND date >= date('now', '-1 day')`,
-				)
-				.bind(peer.inbound_uuid)
-				.first<CountRow>())?.n ?? 0;
-			return {
-				name: peer.name,
-				last_pulled_at: peer.last_pulled_at,
-				last_error: peer.last_error,
-				events_pulled_24h: pulled,
-			};
-		}),
+		.all<{
+			inbound_uuid: string;
+			name: string;
+			last_pulled_at: string | null;
+			last_error: string | null;
+		}>();
+	// ⚡ Bolt: Batch D1 queries for per-peer events_pulled_24h into a single
+	// network request to eliminate N+1 query latency on the dashboard.
+	const peersResult = peerRows.results ?? [];
+	const peerQueries = peersResult.map((peer) =>
+		db
+			.prepare(
+				`SELECT COUNT(*) AS n FROM events
+				 WHERE source_peer_uuid = ?1
+				   AND date >= date('now', '-1 day')`,
+			)
+			.bind(peer.inbound_uuid),
 	);
+
+	const batchResults =
+		peerQueries.length > 0 ? await db.batch<CountRow>(peerQueries) : [];
+
+	// db.batch<CountRow>() resolves to D1Result<CountRow>[] — each element's
+	// single COUNT(*) row is at .results[0]. Missing/empty rows fall back to 0.
+	const peers = peersResult.map((peer, i) => ({
+		name: peer.name,
+		last_pulled_at: peer.last_pulled_at,
+		last_error: peer.last_error,
+		events_pulled_24h: batchResults[i]?.results?.[0]?.n ?? 0,
+	}));
 
 	// --- triage health --------------------------------------------------
 	// pct of last-24h events with at least one tag attached. The 24h slice
@@ -175,16 +202,19 @@ adminStatsRoutes.get("/stats", async (c) => {
 	// to the last-24h slice via the indexed `date` column FIRST so the
 	// non-indexed `created_at < now-15m` predicate only scans a day's
 	// worth of rows in the worst case.
-	const untaggedOlderThan15m = (await db
-		.prepare(
-			`SELECT COUNT(*) AS n FROM events e
+	const untaggedOlderThan15m =
+		(
+			await db
+				.prepare(
+					`SELECT COUNT(*) AS n FROM events e
 			 WHERE date >= date('now', '-1 day')
 			   AND created_at < datetime('now', '-15 minutes')
 			   AND NOT EXISTS (
 			     SELECT 1 FROM event_tags et WHERE et.event_uuid = e.uuid
 			   )`,
-		)
-		.first<CountRow>())?.n ?? 0;
+				)
+				.first<CountRow>()
+		)?.n ?? 0;
 
 	// --- cron -----------------------------------------------------------
 	// Direct read from cron_runs (stamped at the START of each iteration by
