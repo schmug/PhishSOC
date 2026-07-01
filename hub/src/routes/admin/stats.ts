@@ -170,30 +170,14 @@ adminStatsRoutes.get("/stats", async (c) => {
 	const batchResults =
 		peerQueries.length > 0 ? await db.batch<CountRow>(peerQueries) : [];
 
-	const peers = peersResult.map((peer, i) => {
-		const resultGroup = batchResults[i];
-		const pulledResult = resultGroup?.results?.[0];
-
-		let pulled = 0;
-		if (pulledResult && typeof pulledResult.n === "number") {
-			pulled = pulledResult.n;
-		} else if (
-			Array.isArray(resultGroup) &&
-			resultGroup[0] &&
-			typeof resultGroup[0].n === "number"
-		) {
-			pulled = resultGroup[0].n;
-		} else if (resultGroup && typeof resultGroup.n === "number") {
-			pulled = resultGroup.n;
-		}
-
-		return {
-			name: peer.name,
-			last_pulled_at: peer.last_pulled_at,
-			last_error: peer.last_error,
-			events_pulled_24h: pulled,
-		};
-	});
+	// db.batch<CountRow>() resolves to D1Result<CountRow>[] — each element's
+	// single COUNT(*) row is at .results[0]. Missing/empty rows fall back to 0.
+	const peers = peersResult.map((peer, i) => ({
+		name: peer.name,
+		last_pulled_at: peer.last_pulled_at,
+		last_error: peer.last_error,
+		events_pulled_24h: batchResults[i]?.results?.[0]?.n ?? 0,
+	}));
 
 	// --- triage health --------------------------------------------------
 	// pct of last-24h events with at least one tag attached. The 24h slice
