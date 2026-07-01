@@ -7,13 +7,7 @@ import { cors } from "hono/cors";
 import { z } from "zod";
 import type { MailboxInbound, CatchallInbound } from "./providers/types";
 import { attachmentObjectKey, MAX_ATTACHMENTS_PER_EMAIL, type StoredAttachment } from "./lib/attachments";
-import {
-	validateSender,
-	SenderValidationError,
-	generateMessageId,
-	buildThreadingHeaders,
-	listMailboxes,
-} from "./lib/email-helpers";
+import { listMailboxes } from "./lib/email-helpers";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";

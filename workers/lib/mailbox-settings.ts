@@ -8,7 +8,6 @@ import {
 	DEFAULT_INJECTION_SCANNER_MODEL,
 	MailboxSettings,
 	parseSettingsLenient,
-	YaraMailScannerSettings,
 } from "../../shared/mailbox-settings";
 
 export { YaraMailScannerSettings } from "../../shared/mailbox-settings";
