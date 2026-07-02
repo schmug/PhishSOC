@@ -245,6 +245,7 @@ async function resolveCatchall(
 			kind: "catchall",
 			rawEmail: rawEmail.buffer as ArrayBuffer,
 			parsedEmail,
+			recipient: addr,
 			domain,
 			retentionDays: ci.retention_days ?? 30,
 			sampleLimit: ci.sample_limit ?? 50,

@@ -489,8 +489,28 @@ describe("normalizeInbound — catch-all path", () => {
 		expect(result?.kind).toBe("catchall");
 		if (result?.kind === "catchall") {
 			expect(result.domain).toBe("acme.example");
+			expect(result.recipient).toBe("catchall@acme.example");
 			expect(result.retentionDays).toBe(14);
 			expect(result.sampleLimit).toBe(25);
+		}
+	});
+
+	it("sets recipient from the envelope address, not the forged To: header", async () => {
+		const result = await runNormalize(
+			["admin@acme.example"],
+			{
+				emailAddresses: [],
+				mailboxes: [],
+				domains: "acme.example",
+				envelopeTo: "probe1@acme.example",
+				domainSettings: {
+					"acme.example": { catchall_intel: { enabled: true, retention_days: 30, sample_limit: 50 } },
+				},
+			},
+		);
+		expect(result?.kind).toBe("catchall");
+		if (result?.kind === "catchall") {
+			expect(result.recipient).toBe("probe1@acme.example");
 		}
 	});
 
@@ -620,6 +640,7 @@ describe("receiveCatchall — best-effort dispatch", () => {
 			kind: "catchall" as const,
 			rawEmail: bytes.buffer as ArrayBuffer,
 			parsedEmail: parsedEmail as unknown as import("postal-mime").Email,
+			recipient: "probe@acme.example",
 			domain: "acme.example",
 			retentionDays: 30,
 			sampleLimit: 50,
@@ -657,6 +678,7 @@ describe("receiveCatchall — best-effort dispatch", () => {
 			kind: "catchall" as const,
 			rawEmail: new ArrayBuffer(0),
 			parsedEmail: parsedEmail as unknown as import("postal-mime").Email,
+			recipient: "probe@acme.example",
 			domain: "acme.example",
 			retentionDays: 30,
 			sampleLimit: 50,
@@ -665,6 +687,46 @@ describe("receiveCatchall — best-effort dispatch", () => {
 		await expect(
 			receiveCatchall(normalized, env, {} as ExecutionContext),
 		).resolves.toBeUndefined();
+	});
+
+	it("records probe localpart from the envelope recipient, not the forged To: header", async () => {
+		const { receiveCatchall } = await import("../../workers/index");
+		const { clearDomainSettingsCache } = await import("../../workers/lib/domain-settings");
+		clearDomainSettingsCache();
+
+		const probeStub = { recordCatchallProbe: vi.fn().mockResolvedValue("sample-id") };
+		const env = {
+			AI: new Proxy({}, { get() { throw new Error("env.AI must not be called"); } }),
+			CATCHALL_INTEL: { idFromName: () => "stub-id", get: () => probeStub },
+			BUCKET: { head: vi.fn().mockResolvedValue(null) },
+		} as unknown as Parameters<typeof receiveCatchall>[1];
+
+		const parsedEmail = {
+			to: [{ address: "admin@acme.example", name: "" }],
+			from: { address: "attacker@evil.example", name: "" },
+			subject: "harvest probe",
+			text: "body",
+			html: null,
+			headers: [],
+			attachments: [],
+		};
+
+		await receiveCatchall(
+			{
+				kind: "catchall",
+				rawEmail: new ArrayBuffer(0),
+				parsedEmail: parsedEmail as unknown as import("postal-mime").Email,
+				recipient: "probe1@acme.example",
+				domain: "acme.example",
+				retentionDays: 30,
+				sampleLimit: 50,
+			},
+			env,
+			{ waitUntil: vi.fn() } as unknown as ExecutionContext,
+		);
+
+		expect(probeStub.recordCatchallProbe).toHaveBeenCalledOnce();
+		expect(probeStub.recordCatchallProbe.mock.calls[0][0].localpart).toBe("probe1");
 	});
 });
 
@@ -731,6 +793,7 @@ describe("receiveCatchall — hub corroboration (#437)", () => {
 			kind: "catchall" as const,
 			rawEmail: new ArrayBuffer(0),
 			parsedEmail: parsedEmail as unknown as import("postal-mime").Email,
+			recipient: "probe@acme.example",
 			domain: "acme.example",
 			retentionDays: 30,
 			sampleLimit: 50,
@@ -871,6 +934,7 @@ describe("receiveCatchall — deep-scan dispatch (#438)", () => {
 			kind: "catchall" as const,
 			rawEmail: new ArrayBuffer(0),
 			parsedEmail: parsedEmail as unknown as import("postal-mime").Email,
+			recipient: "probe@acme.example",
 			domain: "acme.example",
 			retentionDays: 30,
 			sampleLimit: 50,
