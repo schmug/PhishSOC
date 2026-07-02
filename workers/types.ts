@@ -48,6 +48,21 @@ export interface Env extends Cloudflare.Env {
 	 */
 	SECURITY_ALERT_WEBHOOK_URL?: string;
 	/**
+	 * Optional operator webhook for ops-visibility "new mail" notifications
+	 * (issue #563). When set, every non-honeypot, non-report-ingested inbound
+	 * email POSTs a `{"text": "..."}` chat message here — the shape Google
+	 * Chat and Slack incoming webhooks both accept — with sender, subject,
+	 * landing folder, verdict action, and a deep link into the app. This is a
+	 * separate, higher-volume channel from `SECURITY_ALERT_WEBHOOK_URL` (that
+	 * one is a low-volume security pager; see #511's alert-fatigue note).
+	 * Dispatch is fire-and-forget — a failed send never blocks or fails email
+	 * receipt. When unset, the dispatch no-ops. Set with
+	 * `wrangler secret put NEW_EMAIL_WEBHOOK_URL` (kept out of `wrangler.jsonc`
+	 * vars — the URL embeds credentials — so it doesn't widen the generated
+	 * `Cloudflare.Env`).
+	 */
+	NEW_EMAIL_WEBHOOK_URL?: string;
+	/**
 	 * Comma-separated hostname allowlist for the community-hub URL
 	 * (GHSA-jfj6-w954-96vg f29). A `HUB_SECRET_*` API key is only resolved
 	 * and sent when `intel.hub.url` is https AND its hostname is on this
