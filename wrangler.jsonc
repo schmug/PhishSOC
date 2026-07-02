@@ -34,6 +34,11 @@
 		// (see workers/types.ts). Configure with:
 		//   wrangler secret put SECURITY_ALERT_WEBHOOK_URL
 		// When unset, the first-key alert dispatch no-ops (the audit log still fires).
+		//
+		// Ops-visibility "new mail" webhook (issue #563) is also a SECRET, not a
+		// var here, for the same reason. Configure with:
+		//   wrangler secret put NEW_EMAIL_WEBHOOK_URL
+		// When unset, no new-mail chat notification is sent.
 	},
 	"send_email": [
 		{

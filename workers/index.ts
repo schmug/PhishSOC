@@ -22,6 +22,7 @@ import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline } from "./security";
+import { dispatchNewEmailNotification } from "./lib/new-email-notify";
 import { parseAuthResults } from "./security/auth";
 import { runDeepScan } from "./intel/deep-scan";
 import { isDmarcReport, ingestDmarcReport, isDmarcRuf, ingestDmarcRuf } from "./dmarc/ingest";
@@ -1743,6 +1744,23 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	} catch (e) {
 		console.error("notifyNewEmail failed:", (e as Error).message);
 	}
+
+	// Ops-visibility webhook (issue #563) — a separate, higher-volume channel
+	// from `SECURITY_ALERT_WEBHOOK_URL` (that one is a low-volume security
+	// pager; see #511's alert-fatigue note). Fire-and-forget; never blocks or
+	// fails email receipt. No-ops when NEW_EMAIL_WEBHOOK_URL is unset.
+	// Quarantined mail DOES notify here (labeled with its folder/verdict) —
+	// an operator watching the deployment wants to see quarantine events,
+	// unlike the desktop-notification suppression above.
+	dispatchNewEmailNotification(env, ctx, {
+		mailboxId,
+		messageId,
+		folder: finalFolder,
+		sender: parsedEmail.from?.address || "",
+		subject: parsedEmail.subject || "",
+		verdictAction: securityVerdict?.action ?? null,
+		verdictScore: securityVerdict?.score ?? null,
+	});
 
 	// Async deep-scan. Runs AFTER the sync pipeline decision and only ever
 	// tightens the verdict (never downgrades). Enqueued via ctx.waitUntil
