@@ -1,0 +1,382 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "deep-security-scan",
+          "informationUri": "https://github.com/schmug/shipofclaudius",
+          "rules": [
+            {
+              "id": "missing-authz",
+              "name": "missing-authz",
+              "shortDescription": {
+                "text": "missing-authz"
+              }
+            },
+            {
+              "id": "dos",
+              "name": "dos",
+              "shortDescription": {
+                "text": "dos"
+              }
+            },
+            {
+              "id": "business-logic",
+              "name": "business-logic",
+              "shortDescription": {
+                "text": "business-logic"
+              }
+            },
+            {
+              "id": "race-condition",
+              "name": "race-condition",
+              "shortDescription": {
+                "text": "race-condition"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "missing-authz",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "OrgAgent cross-mailbox search bypasses per-mailbox ACL (tenant-isolation break / info disclosure)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/agent/org-tools.ts"
+                },
+                "region": {
+                  "startLine": 80
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:0a144e80204a1f78"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "missing-authz",
+            "source": "CF Access JWT (any admitted caller) via /agents/org-agent/default WebSocket/HTTP"
+          }
+        },
+        {
+          "ruleId": "missing-authz",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "Org/domain settings writes have no authorization beyond CF Access admittance"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/index.ts"
+                },
+                "region": {
+                  "startLine": 820
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:dc27e4e433d52b2c"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "missing-authz",
+            "source": "CF Access JWT (any admitted caller, incl. one scoped out of all mailboxes) → request body"
+          }
+        },
+        {
+          "ruleId": "dos",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "Crafted HTML entity in email body crashes the security pipeline, delivering the email completely unscanned"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/security/classification.ts"
+                },
+                "region": {
+                  "startLine": 152
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:aebfe6c1e99c90a9"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "dos",
+            "source": "inbound email HTML body (parsedEmail.html → bodyHtml → classifyEmail input.bodyHtml)"
+          }
+        },
+        {
+          "ruleId": "dos",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "TLS-RPT gzip decompression bomb OOMs the Worker (5MB cap checked only after full materialization)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/tlsrpt/parser.ts"
+                },
+                "region": {
+                  "startLine": 49
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:72ab5d6e50605c56"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "dos",
+            "source": "inbound email attachment with mimeType application/tlsrpt+gzip or *.tlsrpt.gz"
+          }
+        },
+        {
+          "ruleId": "dos",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "Root cause: decodeEntities does not range-check the code point before String.fromCodePoint"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "shared/html-text.ts"
+                },
+                "region": {
+                  "startLine": 48
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:5ac39340400c85f8"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "dos",
+            "source": "any HTML passed to htmlToPlainText (email bodies, classifier inputs, outbound plain-text alternative)"
+          }
+        },
+        {
+          "ruleId": "dos",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "Intel feed refresh reads network response body with no size cap (OOM via teammate-editable feed URL)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/intel/feeds.ts"
+                },
+                "region": {
+                  "startLine": 332
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:0c64854b1e888c73"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "dos",
+            "source": "teammate/operator-configurable feed URL in mailbox/domain intel settings"
+          }
+        },
+        {
+          "ruleId": "dos",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "DMARC RUA XML tag-extractor is O(n^2) on malformed input → CPU-exhaustion DoS (empirically confirmed)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/dmarc/parser.ts"
+                },
+                "region": {
+                  "startLine": 126
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:cc31378661dde09e"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "dos",
+            "source": "inbound DMARC-report email XML (gzipped ≤5MB, or uncapped plain .xml) reaching parseDmarcXml via ingestDmarcReport"
+          }
+        },
+        {
+          "ruleId": "business-logic",
+          "ruleIndex": 2,
+          "level": "error",
+          "message": {
+            "text": "Sybil self-invite defeats hub 'contributors≥2' resistance → arbitrary destroylist feed poisoning (DoS blocklisting)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "hub/src/routes/orgs.ts"
+                },
+                "region": {
+                  "startLine": 100
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:7d36a4a82cec50b0"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "business-logic",
+            "source": "authenticated org POST /orgs/invite → public POST /orgs/accept (self-minted sybil orgs)"
+          }
+        },
+        {
+          "ruleId": "missing-authz",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "OrgAgent search_cases_across_mailboxes returns per-email data across ALL mailboxes with no ACL filtering"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/agent/org-tools.ts"
+                },
+                "region": {
+                  "startLine": 93
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:107d341e18e9e4a6"
+          },
+          "properties": {
+            "severity": "high",
+            "vuln_class": "missing-authz",
+            "source": "any CF-Access-admitted user via /agents/org-agent/<name> chat WebSocket -> search_cases_across_mailboxes tool"
+          }
+        },
+        {
+          "ruleId": "dos",
+          "ruleIndex": 1,
+          "level": "warning",
+          "message": {
+            "text": "Deep-scan URL resolver buffers full attacker-controlled response body (HTTP Content-Encoding decompression bomb) before truncating"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/intel/url-resolver.ts"
+                },
+                "region": {
+                  "startLine": 231
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:efb540276f96694f"
+          },
+          "properties": {
+            "severity": "medium",
+            "vuln_class": "dos",
+            "source": "URL extracted from inbound email body -> deep-scan scanUrls -> resolveUrl final GET"
+          }
+        },
+        {
+          "ruleId": "race-condition",
+          "ruleIndex": 3,
+          "level": "note",
+          "message": {
+            "text": "DMARC RUF per-minute rate limit is a non-atomic count-then-insert (TOCTOU)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/dmarc/ingest.ts"
+                },
+                "region": {
+                  "startLine": 154
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:5ea3ac6e04528f36"
+          },
+          "properties": {
+            "severity": "low",
+            "vuln_class": "race-condition",
+            "source": "concurrent inbound RUF report emails to one mailbox"
+          }
+        },
+        {
+          "ruleId": "race-condition",
+          "ruleIndex": 3,
+          "level": "note",
+          "message": {
+            "text": "Outbound send rate limit check-then-act gap allows exceeding 20/hr–100/day quota"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "workers/durableObject/index.ts"
+                },
+                "region": {
+                  "startLine": 855
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shipFingerprint/v1": "scf1:b61e394f5fff5b07"
+          },
+          "properties": {
+            "severity": "low",
+            "vuln_class": "race-condition",
+            "source": "concurrent POST /emails, /reply, /forward for the same mailbox"
+          }
+        }
+      ]
+    }
+  ]
+}
