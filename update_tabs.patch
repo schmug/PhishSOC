@@ -1,0 +1,91 @@
+<<<<<<< SEARCH
+		<div className="flex flex-col h-full">
+			{/* Tab bar */}
+			<div className="flex items-center border-b border-line shrink-0" role="tablist" aria-label="Agent tools">
+				<button
+					type="button"
+					role="tab"
+					aria-selected={activeTab === "agent"}
+					aria-controls="agent-tab-panel"
+					id="agent-tab"
+					onClick={() => setActiveTab("agent")}
+					className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 bg-transparent cursor-pointer ${
+						activeTab === "agent"
+							? "border-accent text-ink"
+							: "border-transparent text-ink-3 hover:text-ink"
+					}`}
+				>
+					<RobotIcon size={14} weight={activeTab === "agent" ? "fill" : "regular"} />
+					Agent
+				</button>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={activeTab === "mcp"}
+					aria-controls="mcp-tab-panel"
+					id="mcp-tab"
+					onClick={() => setActiveTab("mcp")}
+					className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 bg-transparent cursor-pointer ${
+						activeTab === "mcp"
+							? "border-accent text-ink"
+							: "border-transparent text-ink-3 hover:text-ink"
+					}`}
+				>
+					<PlugsIcon size={14} weight={activeTab === "mcp" ? "fill" : "regular"} />
+					MCP
+				</button>
+			</div>
+=======
+		<div className="flex flex-col h-full">
+			{/* Tab bar */}
+			<div
+				className="flex items-center border-b border-line shrink-0"
+				role="tablist"
+				aria-label="Agent tools"
+				onKeyDown={(e) => {
+					if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+						e.preventDefault();
+						const tabs = ["agent", "mcp"] as const;
+						const idx = tabs.indexOf(activeTab);
+						const nextIdx = e.key === "ArrowRight" ? (idx + 1) % 2 : (idx - 1 + 2) % 2;
+						setActiveTab(tabs[nextIdx]);
+						document.getElementById(`${tabs[nextIdx]}-tab`)?.focus();
+					}
+				}}
+			>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={activeTab === "agent"}
+					aria-controls="agent-tab-panel"
+					id="agent-tab"
+					tabIndex={activeTab === "agent" ? 0 : -1}
+					onClick={() => setActiveTab("agent")}
+					className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 bg-transparent cursor-pointer ${
+						activeTab === "agent"
+							? "border-accent text-ink"
+							: "border-transparent text-ink-3 hover:text-ink"
+					}`}
+				>
+					<RobotIcon size={14} weight={activeTab === "agent" ? "fill" : "regular"} />
+					Agent
+				</button>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={activeTab === "mcp"}
+					aria-controls="mcp-tab-panel"
+					id="mcp-tab"
+					tabIndex={activeTab === "mcp" ? 0 : -1}
+					onClick={() => setActiveTab("mcp")}
+					className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 bg-transparent cursor-pointer ${
+						activeTab === "mcp"
+							? "border-accent text-ink"
+							: "border-transparent text-ink-3 hover:text-ink"
+					}`}
+				>
+					<PlugsIcon size={14} weight={activeTab === "mcp" ? "fill" : "regular"} />
+					MCP
+				</button>
+			</div>
+>>>>>>> REPLACE
