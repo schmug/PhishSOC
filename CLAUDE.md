@@ -44,6 +44,39 @@ seed, not a comprehensive style guide.
 
 ## Conventions
 
+### Security-scan findings go to a private GHSA, never a public PR or issue
+
+**This repo is PUBLIC.** A security-audit report — the `file:line` + source→sink +
+CVSS + one-line-fix output of `security-scan` / `deep-security-scan` /
+`security-diff-scan`, or any hand-written finding — is an exploitation-ready
+targeting package for whatever it documents. It must **never** land as:
+
+- a committed `.security-scans/**` report on a branch that gets pushed (the
+  branch diff is publicly viewable the moment it is pushed, PR or not),
+- a public GitHub issue (this repo's `issues.opened` routine auto-implements
+  **and merges** fixes from public issues within minutes — an uncoordinated
+  partial fix that also advertises the bug), or
+- a public PR body/title/test that spells out the attack.
+
+Route every finding through the **`/ghsa` skill** into a private GitHub Security
+Advisory draft (dedupe against existing advisories first — this repo already has
+a substantial GHSA history). Develop the fix on a GHSA temporary private fork, or
+via a fix PR whose title/body does **not** describe exploitation; link the fixing
+PR + patched version on the advisory; publish (and request a CVE) only after the
+fix is deployed — and only with explicit human confirmation.
+
+This applies to **your own cloud/scheduled scan routines too**, not just bots:
+if a routine produces findings, its sink must be a private GHSA, not a committed
+report or a public PR. The `security-scan` family already writes its HTML+md
+report locally — do not commit that report to this repo.
+
+Origin: 2026-07-03. PR #565 (a cloud `deep-security-scan` run) published a
+12-finding report — 9 High, unpatched, against `main @281456c` — as a public PR,
+partly re-leaking findings already tracked in private GHSA drafts
+(`GHSA-g3v6-6xph-3vx6`, `GHSA-vpmq-j44v-vjr6`). Bot PRs #562/#568 did the same
+with a forged-`To:`-header harvest-alert bypass. Closed + branches deleted;
+findings re-triaged into private advisories.
+
 ### URL host checks in test mocks must parse, not substring
 
 When a test routes mock `fetch` responses by URL, do **not** match with
