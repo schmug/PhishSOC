@@ -60,7 +60,11 @@ export interface CatchallProbeEvent {
 
 /** Public API shape for `GET /api/v1/domains/:domain/catchall-intel` (#427). */
 export interface CatchallSummary {
-	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
+	totals: {
+		probe_count: number;
+		distinct_sources: number;
+		distinct_localparts: number;
+	};
 	topSources: Array<{
 		source_ip: string;
 		sender_domain: string;
@@ -86,7 +90,10 @@ export interface CatchallSummary {
 
 /** Minimal sql interface — matches the subset of DO `SqlStorage` we use. */
 export interface SqlLike {
-	exec<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Iterable<T>;
+	exec<T = Record<string, unknown>>(
+		sql: string,
+		...params: unknown[]
+	): Iterable<T>;
 }
 
 /** Deep-scan results written back to a probe sample (#438). RDAP + redirect
@@ -97,13 +104,27 @@ export interface CatchallDeepScanResult {
 	redirect_chain_length: number | null;
 }
 
-export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): string {
+export function _recordProbeImpl(
+	sql: SqlLike,
+	event: CatchallProbeEvent,
+): string {
 	const {
-		ts, sourceIp, senderDomain, sender, localpart,
-		subjectSnippet, score, band, signals, retentionDays, sampleLimit,
+		ts,
+		sourceIp,
+		senderDomain,
+		sender,
+		localpart,
+		subjectSnippet,
+		score,
+		band,
+		signals,
+		retentionDays,
+		sampleLimit,
 	} = event;
 
-	const cutoff = new Date(new Date(ts).getTime() - retentionDays * 86_400_000).toISOString();
+	const cutoff = new Date(
+		Date.parse(ts) - retentionDays * 86_400_000,
+	).toISOString();
 
 	// Lazy GC
 	sql.exec(`DELETE FROM probe_rollup WHERE last_seen < ?`, cutoff);
@@ -119,28 +140,40 @@ export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): strin
            count = count + 1,
            max_score = MAX(max_score, excluded.max_score),
            last_seen = excluded.last_seen`,
-		sourceIp, senderDomain, score, ts, ts,
+		sourceIp,
+		senderDomain,
+		score,
+		ts,
+		ts,
 	);
 
 	// Upsert localpart; update distinct_localparts on new entry
-	const lpRows = [...sql.exec<{ cnt: number }>(
-		`SELECT COUNT(*) as cnt FROM probe_localparts WHERE source_ip=? AND sender_domain=? AND localpart=?`,
-		sourceIp, senderDomain, localpart,
-	)];
+	const lpRows = [
+		...sql.exec<{ cnt: number }>(
+			`SELECT COUNT(*) as cnt FROM probe_localparts WHERE source_ip=? AND sender_domain=? AND localpart=?`,
+			sourceIp,
+			senderDomain,
+			localpart,
+		),
+	];
 	const isNewLocalpart = (lpRows[0]?.cnt ?? 0) === 0;
 
 	sql.exec(
 		`INSERT INTO probe_localparts (source_ip, sender_domain, localpart, last_seen)
          VALUES (?, ?, ?, ?)
          ON CONFLICT(source_ip, sender_domain, localpart) DO UPDATE SET last_seen=excluded.last_seen`,
-		sourceIp, senderDomain, localpart, ts,
+		sourceIp,
+		senderDomain,
+		localpart,
+		ts,
 	);
 
 	if (isNewLocalpart) {
 		sql.exec(
 			`UPDATE probe_rollup SET distinct_localparts = distinct_localparts + 1
              WHERE source_ip=? AND sender_domain=?`,
-			sourceIp, senderDomain,
+			sourceIp,
+			senderDomain,
 		);
 	}
 
@@ -149,12 +182,22 @@ export function _recordProbeImpl(sql: SqlLike, event: CatchallProbeEvent): strin
 	sql.exec(
 		`INSERT INTO probe_recent (id, ts, source_ip, sender_domain, sender, localpart, subject_snippet, score, band, signals_json)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, ts, sourceIp, senderDomain, sender, localpart,
-		subjectSnippet.slice(0, 200), score, band, JSON.stringify(signals),
+		id,
+		ts,
+		sourceIp,
+		senderDomain,
+		sender,
+		localpart,
+		subjectSnippet.slice(0, 200),
+		score,
+		band,
+		JSON.stringify(signals),
 	);
 
 	// Evict oldest rows that exceed sampleLimit
-	const countRows = [...sql.exec<{ cnt: number }>(`SELECT COUNT(*) as cnt FROM probe_recent`)];
+	const countRows = [
+		...sql.exec<{ cnt: number }>(`SELECT COUNT(*) as cnt FROM probe_recent`),
+	];
 	const total = countRows[0]?.cnt ?? 0;
 	if (total > sampleLimit) {
 		sql.exec(
@@ -196,23 +239,35 @@ export function _updateProbeDeepScanImpl(
  * injected so the window cutoff is deterministic in tests without patching the
  * global clock.
  */
-export function _harvestAlertStore(sql: SqlLike, now: Date): AlertDebounceStore {
+export function _harvestAlertStore(
+	sql: SqlLike,
+	now: Date,
+): AlertDebounceStore {
 	return {
 		async getLastAlertTime(sourceIp, senderDomain, windowMinutes) {
-			const cutoff = new Date(now.getTime() - windowMinutes * 60_000).toISOString();
-			const rows = [...sql.exec<{ alerted_at: string }>(
-				`SELECT alerted_at FROM harvest_alert_log
+			const cutoff = new Date(
+				now.getTime() - windowMinutes * 60_000,
+			).toISOString();
+			const rows = [
+				...sql.exec<{ alerted_at: string }>(
+					`SELECT alerted_at FROM harvest_alert_log
 				 WHERE source_ip = ? AND sender_domain = ? AND alerted_at > ?
 				 ORDER BY alerted_at DESC LIMIT 1`,
-				sourceIp, senderDomain, cutoff,
-			)];
+					sourceIp,
+					senderDomain,
+					cutoff,
+				),
+			];
 			return rows[0]?.alerted_at ?? null;
 		},
 		async recordAlertTime(sourceIp, senderDomain, alertedAt, distinctCount) {
 			sql.exec(
 				`INSERT INTO harvest_alert_log (source_ip, sender_domain, alerted_at, distinct_count)
 				 VALUES (?, ?, ?, ?)`,
-				sourceIp, senderDomain, alertedAt, distinctCount,
+				sourceIp,
+				senderDomain,
+				alertedAt,
+				distinctCount,
 			);
 		},
 	};
@@ -220,10 +275,15 @@ export function _harvestAlertStore(sql: SqlLike, now: Date): AlertDebounceStore 
 
 /** Resolve the harvest-alert config carried on the probe event (#436), filling
  *  in `DEFAULT_HARVEST_ALERT_CONFIG` for any field the caller omitted. */
-export function alertConfigFromEvent(event: CatchallProbeEvent): HarvestAlertConfig {
+export function alertConfigFromEvent(
+	event: CatchallProbeEvent,
+): HarvestAlertConfig {
 	return {
-		threshold: event.harvestAlertThreshold ?? DEFAULT_HARVEST_ALERT_CONFIG.threshold,
-		window_minutes: event.harvestAlertWindowMinutes ?? DEFAULT_HARVEST_ALERT_CONFIG.window_minutes,
+		threshold:
+			event.harvestAlertThreshold ?? DEFAULT_HARVEST_ALERT_CONFIG.threshold,
+		window_minutes:
+			event.harvestAlertWindowMinutes ??
+			DEFAULT_HARVEST_ALERT_CONFIG.window_minutes,
 	};
 }
 
@@ -240,12 +300,20 @@ export async function _checkHarvestAlertImpl(
 	config: HarvestAlertConfig,
 	now: Date = new Date(),
 ): Promise<HarvestAlert[]> {
-	const rollups = [...sql.exec<ProbeRollupEntry>(
-		`SELECT source_ip, sender_domain, count, distinct_localparts, max_score, first_seen, last_seen
+	const rollups = [
+		...sql.exec<ProbeRollupEntry>(
+			`SELECT source_ip, sender_domain, count, distinct_localparts, max_score, first_seen, last_seen
 		 FROM probe_rollup WHERE source_ip = ? AND sender_domain = ?`,
-		event.sourceIp, event.senderDomain,
-	)];
-	return computeHarvestAlerts(rollups, config, _harvestAlertStore(sql, now), now);
+			event.sourceIp,
+			event.senderDomain,
+		),
+	];
+	return computeHarvestAlerts(
+		rollups,
+		config,
+		_harvestAlertStore(sql, now),
+		now,
+	);
 }
 
 /**
@@ -257,11 +325,14 @@ export async function _checkHarvestAlertImpl(
 export function emitHarvestAlert(alert: HarvestAlert): void {
 	console.warn(
 		`[harvest-alert] directory-harvest pattern: ${alert.distinct_localpart_count} distinct local-parts ` +
-		`from ${alert.source_ip} via ${alert.sender_domain} (at ${alert.triggered_at})`,
+			`from ${alert.source_ip} via ${alert.sender_domain} (at ${alert.triggered_at})`,
 	);
 }
 
-export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): CatchallSummary {
+export function _getSummaryImpl(
+	sql: SqlLike,
+	opts: { limit: number },
+): CatchallSummary {
 	const limit = Math.max(1, Math.min(opts.limit, 100));
 
 	const totalRows = [
@@ -282,8 +353,13 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 
 	const topSources = [
 		...sql.exec<{
-			source_ip: string; sender_domain: string; count: number;
-			distinct_localparts: number; max_score: number; first_seen: string; last_seen: string;
+			source_ip: string;
+			sender_domain: string;
+			count: number;
+			distinct_localparts: number;
+			max_score: number;
+			first_seen: string;
+			last_seen: string;
 		}>(
 			`SELECT source_ip, sender_domain, count, distinct_localparts, max_score, first_seen, last_seen
              FROM probe_rollup ORDER BY count DESC LIMIT ?`,
@@ -301,9 +377,16 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 
 	const recent = [
 		...sql.exec<{
-			id: string; ts: string; source_ip: string; sender_domain: string;
-			sender: string; localpart: string; subject_snippet: string;
-			score: number; band: string; signals_json: string;
+			id: string;
+			ts: string;
+			source_ip: string;
+			sender_domain: string;
+			sender: string;
+			localpart: string;
+			subject_snippet: string;
+			score: number;
+			band: string;
+			signals_json: string;
 		}>(
 			`SELECT id, ts, source_ip, sender_domain, sender, localpart, subject_snippet, score, band, signals_json
              FROM probe_recent ORDER BY ts DESC LIMIT ?`,
@@ -328,7 +411,11 @@ export function _getSummaryImpl(sql: SqlLike, opts: { limit: number }): Catchall
 export class CatchallIntelDO extends DurableObject<Env> {
 	constructor(state: DurableObjectState, env: Env) {
 		super(state, env);
-		applyMigrations(this.ctx.storage.sql, catchallIntelMigrations, this.ctx.storage);
+		applyMigrations(
+			this.ctx.storage.sql,
+			catchallIntelMigrations,
+			this.ctx.storage,
+		);
 	}
 
 	async recordCatchallProbe(event: CatchallProbeEvent): Promise<string> {
@@ -338,16 +425,26 @@ export class CatchallIntelDO extends DurableObject<Env> {
 		// update inside _recordProbeImpl. Best-effort: an alert failure must not
 		// fail probe recording.
 		try {
-			const alerts = await _checkHarvestAlertImpl(sql, event, alertConfigFromEvent(event));
+			const alerts = await _checkHarvestAlertImpl(
+				sql,
+				event,
+				alertConfigFromEvent(event),
+			);
 			for (const alert of alerts) emitHarvestAlert(alert);
 		} catch (e) {
-			console.error("catchall harvest-alert check failed:", (e as Error).message);
+			console.error(
+				"catchall harvest-alert check failed:",
+				(e as Error).message,
+			);
 		}
 		return id;
 	}
 
 	/** Write async deep-scan results (#438) back to the probe sample row. */
-	async updateProbeDeepScan(sampleId: string, result: CatchallDeepScanResult): Promise<void> {
+	async updateProbeDeepScan(
+		sampleId: string,
+		result: CatchallDeepScanResult,
+	): Promise<void> {
 		_updateProbeDeepScanImpl(this.ctx.storage.sql as SqlLike, sampleId, result);
 	}
 
