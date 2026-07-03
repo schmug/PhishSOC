@@ -1847,7 +1847,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
  */
 export async function receiveCatchall(normalized: CatchallInbound, env: Env, ctx: ExecutionContext): Promise<void> {
 	const { analyzeCatchall } = await import("./security/catchall");
-	const { parsedEmail, domain, retentionDays, sampleLimit } = normalized;
+	const { parsedEmail, recipient, domain, retentionDays, sampleLimit } = normalized;
 
 	let verdict;
 	try {
@@ -1857,10 +1857,11 @@ export async function receiveCatchall(normalized: CatchallInbound, env: Env, ctx
 		return;
 	}
 
+	// Envelope recipient, not To[0] — harvest alerts key off distinct_localparts
+	// and a forged To: must not collapse or inflate the rollup (#436, GHSA-6jgg).
 	const localpart = (() => {
-		const addr = (parsedEmail.to?.[0] as { address?: string } | undefined)?.address ?? "";
-		const at = addr.indexOf("@");
-		return at >= 0 ? addr.slice(0, at) : addr;
+		const at = recipient.indexOf("@");
+		return (at >= 0 ? recipient.slice(0, at) : recipient).toLowerCase();
 	})();
 	const senderDomain = parsedEmail.from?.address?.split("@")[1] ?? "";
 
