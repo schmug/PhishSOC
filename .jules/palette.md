@@ -7,3 +7,6 @@
 ## 2026-06-25 - Add aria-controls for mobile menu toggle
 **Learning:** The mobile hamburger menu toggle inside `Shell.tsx` correctly used `aria-expanded` but lacked an `aria-controls` attribute linking it to the actual menu container, breaking the complete ARIA contract for collapsible menus.
 **Action:** Always verify that buttons toggling a panel/menu not only use `aria-expanded` but also have `aria-controls` pointing to a unique `id` on the container that is being toggled.
+## 2026-07-03 - Missing ARIA roles on custom tab interfaces
+**Learning:** Custom tab interfaces built with `<div>` and `<button>` elements require explicit ARIA roles to be correctly interpreted by screen readers. The `AgentSidebar` used standard buttons for tab navigation but lacked the semantic structure of a tablist.
+**Action:** When implementing custom tab UI patterns, always wrap the tab buttons in a container with `role="tablist"` and give each button `role="tab"`, `aria-selected`, and `aria-controls`. Wrap the corresponding content areas with `role="tabpanel"`, `aria-labelledby`, and ensure the active tabpanel is reachable via keyboard using `tabIndex={0}`.
