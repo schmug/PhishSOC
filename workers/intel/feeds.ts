@@ -38,16 +38,22 @@ import { getDomainSettings } from "../lib/domain-settings";
 
 const EXACT_KEY_CAP = 2000; // per-feed cap — exact blob stores at most this many entries
 
-function bloomKey(feedId: string) { return `intel:${feedId}:bloom`; }
+function bloomKey(feedId: string) {
+	return `intel:${feedId}:bloom`;
+}
 /** Single blob key holding a JSON array of up to EXACT_KEY_CAP exact-match values. */
-function exactBlobKey(feedId: string) { return `intel:${feedId}:exact-blob`; }
+function exactBlobKey(feedId: string) {
+	return `intel:${feedId}:exact-blob`;
+}
 /**
  * Storage key for `ip-cidr` feeds. Bloom filters don't fit CIDR membership
  * (an IP is checked against a *range*, not an exact string) so we materialise
  * the whole list as a JSON blob and linear-scan on lookup. DROP-class feeds
  * are a few thousand CIDRs — well under any KV size limit.
  */
-function cidrKey(feedId: string) { return `intel:${feedId}:cidrs`; }
+function cidrKey(feedId: string) {
+	return `intel:${feedId}:cidrs`;
+}
 
 export interface MailboxIntelSettings {
 	feeds?: Array<{
@@ -75,7 +81,10 @@ export interface MailboxIntelSettings {
  * (never deep-merged across tiers). Defaults from `DEFAULT_FEEDS` are
  * stitched in by `resolveFeeds` below.
  */
-async function loadMailboxIntelSettings(env: Env, mailboxId: string): Promise<MailboxIntelSettings> {
+async function loadMailboxIntelSettings(
+	env: Env,
+	mailboxId: string,
+): Promise<MailboxIntelSettings> {
 	try {
 		const resolved = await resolveMailboxSettings(env, mailboxId);
 		return resolved.intel as MailboxIntelSettings;
@@ -91,7 +100,10 @@ async function loadMailboxIntelSettings(env: Env, mailboxId: string): Promise<Ma
  * stitches in `DEFAULT_FEEDS` when no domain-level overrides exist. Any read
  * failure degrades to `{}` so the lookup falls back to the default feeds.
  */
-async function loadDomainIntelSettings(env: Env, domain: string): Promise<MailboxIntelSettings> {
+async function loadDomainIntelSettings(
+	env: Env,
+	domain: string,
+): Promise<MailboxIntelSettings> {
 	try {
 		const resolved = await getDomainSettings(env, domain);
 		return (resolved.intel ?? {}) as MailboxIntelSettings;
@@ -105,13 +117,19 @@ async function loadDomainIntelSettings(env: Env, domain: string): Promise<Mailbo
  * credential-destination allowlist below: a secret-bearing override of an
  * operator-trusted default feed keeps working with no extra config.
  */
-const DEFAULT_FEED_HOSTS: string[] = DEFAULT_FEEDS.map((f) => safeHostname(f.url)).filter(
-	(h): h is string => h !== null,
-);
+const DEFAULT_FEED_HOSTS: string[] = DEFAULT_FEEDS.map((f) =>
+	safeHostname(f.url),
+).filter((h): h is string => h !== null);
 
-function resolveFeeds(env: Env, settings: MailboxIntelSettings): FeedDefinition[] {
-	const defaults = settings.feeds && settings.feeds.length > 0 ? [] : DEFAULT_FEEDS;
-	const byId = new Map<string, FeedDefinition>(DEFAULT_FEEDS.map((f) => [f.id, f]));
+function resolveFeeds(
+	env: Env,
+	settings: MailboxIntelSettings,
+): FeedDefinition[] {
+	const defaults =
+		settings.feeds && settings.feeds.length > 0 ? [] : DEFAULT_FEEDS;
+	const byId = new Map<string, FeedDefinition>(
+		DEFAULT_FEEDS.map((f) => [f.id, f]),
+	);
 	const user: FeedDefinition[] = [];
 	for (const f of settings.feeds ?? []) {
 		const base = byId.get(f.id);
@@ -133,7 +151,9 @@ function resolveFeeds(env: Env, settings: MailboxIntelSettings): FeedDefinition[
 			f.auth_secret.startsWith("FEED_SECRET_") &&
 			hostAllowed(url, env.FEED_ALLOWED_HOSTS, DEFAULT_FEED_HOSTS)
 		) {
-			const secretValue = (env as unknown as Record<string, string>)[f.auth_secret];
+			const secretValue = (env as unknown as Record<string, string>)[
+				f.auth_secret
+			];
 			if (secretValue) headers["Authorization"] = secretValue;
 		}
 		user.push({
@@ -191,10 +211,7 @@ export function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
  * A malformed entry is logged and skipped — a single bad line shouldn't
  * poison the whole feed refresh.
  */
-export function parseCidrFeedBody(
-	body: string,
-	feedId: string,
-): Ipv4Cidr[] {
+export function parseCidrFeedBody(body: string, feedId: string): Ipv4Cidr[] {
 	const lines = body.split(/\r?\n/);
 	const out: Ipv4Cidr[] = [];
 	for (const raw of lines) {
@@ -209,7 +226,9 @@ export function parseCidrFeedBody(
 		if (!head) continue;
 		const cidr = parseCidr(head);
 		if (!cidr) {
-			console.warn(`feed ${feedId}: skipping malformed CIDR entry ${JSON.stringify(head)}`);
+			console.warn(
+				`feed ${feedId}: skipping malformed CIDR entry ${JSON.stringify(head)}`,
+			);
 			continue;
 		}
 		out.push(cidr);
@@ -218,17 +237,28 @@ export function parseCidrFeedBody(
 }
 
 function normalizeDomain(s: string): string {
-	return s.toLowerCase().replace(/^https?:\/\//, "").split(/[\/?#]/)[0];
+	return s
+		.toLowerCase()
+		.replace(/^https?:\/\//, "")
+		.split(/[/?#]/)[0];
 }
 
 function safeHostname(url: string): string | null {
-	try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+	try {
+		return new URL(url).hostname.toLowerCase();
+	} catch {
+		return null;
+	}
 }
 
 /** Refresh all feeds across all mailboxes. Called from the cron handler. */
-export async function refreshAllFeeds(env: Env): Promise<{ feeds: number; entries: number }> {
+export async function refreshAllFeeds(
+	env: Env,
+): Promise<{ feeds: number; entries: number }> {
 	if (!env.BLOOM_KV) {
-		console.warn("BLOOM_KV binding not configured — skipping intel feed refresh");
+		console.warn(
+			"BLOOM_KV binding not configured — skipping intel feed refresh",
+		);
 		return { feeds: 0, entries: 0 };
 	}
 	const mailboxes = await listMailboxes(env.BUCKET);
@@ -253,7 +283,8 @@ export async function refreshAllFeeds(env: Env): Promise<{ feeds: number; entrie
 				// its configured interval. A null/absent last_fetched_at is treated as
 				// a first run and always triggers a fetch.
 				if (state?.last_fetched_at) {
-					const elapsedMs = Date.now() - new Date(state.last_fetched_at).getTime();
+					// ⚡ Bolt: Use Date.parse instead of new Date().getTime() to prevent Date object allocation
+					const elapsedMs = Date.now() - Date.parse(state.last_fetched_at);
 					if (elapsedMs < feed.refreshHours * 3600 * 1000) continue;
 				}
 				const refreshed = await refreshFeed(env, mailboxId, feed, state);
@@ -267,7 +298,9 @@ export async function refreshAllFeeds(env: Env): Promise<{ feeds: number; entrie
 	return { feeds, entries };
 }
 
-type FeedState = Awaited<ReturnType<ReturnType<typeof getMailboxStub>["getIntelFeedState"]>>;
+type FeedState = Awaited<
+	ReturnType<ReturnType<typeof getMailboxStub>["getIntelFeedState"]>
+>;
 
 async function refreshFeed(
 	env: Env,
@@ -303,7 +336,10 @@ async function refreshFeed(
 	// 304 is only safe to trust if the data it vouches for hasn't expired.
 	if (state?.etag && blobsIntact) headers["If-None-Match"] = state.etag;
 
-	const res = await fetch(feed.url, { headers, signal: AbortSignal.timeout(15000) });
+	const res = await fetch(feed.url, {
+		headers,
+		signal: AbortSignal.timeout(15000),
+	});
 	const ttlSeconds = Math.max(feed.refreshHours * 3600 * 4, 86400);
 	if (res.status === 304) {
 		if (!blobsIntact) {
@@ -323,7 +359,8 @@ async function refreshFeed(
 			last_fetched_at: new Date().toISOString(),
 			etag: state?.etag ?? null,
 			entry_count: state?.entry_count ?? 0,
-			bloom_kv_key: feed.kind === "ip-cidr" ? cidrKey(feed.id) : bloomKey(feed.id),
+			bloom_kv_key:
+				feed.kind === "ip-cidr" ? cidrKey(feed.id) : bloomKey(feed.id),
 		});
 		return { entries: state?.entry_count ?? 0 };
 	}
@@ -469,8 +506,15 @@ async function matchUrlAgainstFeeds(
 			if (exactSet === undefined) exactSet = await loadExactSet(env, feed.id);
 			// No exact blob (missing or unparseable) → degrade to a bloom-only
 			// hit (`confirmed: false`) rather than throwing out of the lookup.
-			if (exactSet?.has(v)) return { matched: true, feedId: feed.id, value: v, confirmed: true };
-			if (!bloomOnly) bloomOnly = { matched: true, feedId: feed.id, value: v, confirmed: false };
+			if (exactSet?.has(v))
+				return { matched: true, feedId: feed.id, value: v, confirmed: true };
+			if (!bloomOnly)
+				bloomOnly = {
+					matched: true,
+					feedId: feed.id,
+					value: v,
+					confirmed: false,
+				};
 		}
 	}
 	return bloomOnly;
@@ -481,7 +525,10 @@ async function matchUrlAgainstFeeds(
  * unparseable — a bloom hit then degrades to `confirmed: false` (bloom-only)
  * instead of failing the whole lookup.
  */
-async function loadExactSet(env: Env, feedId: string): Promise<Set<string> | null> {
+async function loadExactSet(
+	env: Env,
+	feedId: string,
+): Promise<Set<string> | null> {
 	const raw = await env.BLOOM_KV.get(exactBlobKey(feedId), "text");
 	if (!raw) return null;
 	try {
@@ -501,7 +548,11 @@ export interface IpFeedMatch {
 	cidr: string;
 }
 
-interface SerializedCidrRow { n: number; m: number; p: number; }
+interface SerializedCidrRow {
+	n: number;
+	m: number;
+	p: number;
+}
 
 /**
  * Resolve and check an IPv4 address against every configured `ip-cidr` feed.
@@ -589,7 +640,14 @@ export async function checkIpAgainstDefaultFeeds(
 			prefix: r.p,
 		}));
 		const match = findCidrMatch(ipNum, cidrs);
-		if (match) return { matched: true, feedId: feed.id, feedDescription: feed.description, ip, cidr: formatCidr(match) };
+		if (match)
+			return {
+				matched: true,
+				feedId: feed.id,
+				feedDescription: feed.description,
+				ip,
+				cidr: formatCidr(match),
+			};
 	}
 	return null;
 }
