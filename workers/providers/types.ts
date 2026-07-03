@@ -45,6 +45,12 @@ export interface CatchallInbound {
 	kind: "catchall";
 	rawEmail: ArrayBuffer;
 	parsedEmail: Email;
+	/**
+	 * Authoritative SMTP envelope recipient (RCPT TO) for this delivery — the
+	 * catch-all address Cloudflare routed to, NOT the attacker-controlled To:
+	 * header. Used for probe localpart / harvest-alert distinct counts.
+	 */
+	recipient: string;
 	/** Domain the recipient address belongs to. */
 	domain: string;
 	/** From `catchall_intel.retention_days` on the domain settings. */
