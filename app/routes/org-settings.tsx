@@ -32,7 +32,9 @@ interface OrgSettingsShape {
 	draftVerifierModel?: string;
 	classifierModel?: string;
 	security?: SecuritySettings;
-	intel?: { hub?: HubConfigSettings };
+	intel?: { hub?: HubConfigSettings; feeds?: unknown[] };
+	/** Written via POST /api/v1/org/domains — not edited on this page. */
+	domains?: string[];
 }
 
 /**
@@ -119,19 +121,31 @@ export default function OrgSettingsRoute() {
 			return;
 		}
 
+		const existing = (data?.settings ?? {}) as OrgSettingsShape;
 		const normalizedHub = normalizeHubConfig(hub);
-		const intelToPersist = normalizedHub ? { hub: normalizedHub } : undefined;
+
+		// Org PUT is full-replace — spread the persisted blob and only touch
+		// fields this page edits. `domains` (POST /api/v1/org/domains) and
+		// `intel.feeds` (no org UI yet) must survive an unrelated save.
+		let nextIntel: OrgSettingsShape["intel"];
+		if (normalizedHub) {
+			nextIntel = { ...(existing.intel ?? {}), hub: normalizedHub };
+		} else {
+			const { hub: _hub, ...rest } = existing.intel ?? {};
+			nextIntel = Object.keys(rest).length > 0 ? rest : undefined;
+		}
 
 		// Build the org PUT payload. Fields the user left blank/default are
 		// sent as undefined so the worker's PUT validator + the resolver's
 		// "absent = inherit" semantics produce a clean inheritance chain
 		// for every mailbox's resolved view.
 		const settings: OrgSettingsShape = {
+			...existing,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
 			autoDraft: { enabled: autoDraftEnabled },
 			agentModel: resolvedModel || undefined,
 			security,
-			intel: intelToPersist,
+			intel: nextIntel,
 			injectionScannerModel: injectionScannerModel.trim() || undefined,
 			draftVerifierModel: draftVerifierModel.trim() || undefined,
 			classifierModel: classifierModel.trim() || undefined,
