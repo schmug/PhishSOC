@@ -21,7 +21,7 @@ import { OrgSettings } from "../shared/org-settings";
 import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
-import { runSecurityPipeline } from "./security";
+import { runSecurityPipeline, type FinalVerdict } from "./security";
 import { dispatchNewEmailNotification } from "./lib/new-email-notify";
 import { parseAuthResults } from "./security/auth";
 import { runDeepScan } from "./intel/deep-scan";
@@ -1481,6 +1481,18 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
 // -- Receive inbound email ------------------------------------------
 
 /**
+ * Result of a completed `receiveEmail` run. Returned so API-sidecar
+ * providers (e.g. the Workspace poller, issue #31) can apply the verdict
+ * back to the tenant's own inbox (labels, folder moves) without a second
+ * lookup. `verdict` is `null` when the security pipeline didn't run or
+ * produced no verdict (e.g. mailbox security disabled).
+ */
+export interface ReceiveEmailResult {
+	messageId: string;
+	verdict: FinalVerdict | null;
+}
+
+/**
  * Process a normalised inbound message through the full pipeline:
  * DO storage → security scoring → async deep-scan → agent auto-draft.
  *
@@ -1488,15 +1500,21 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
  * determination) is handled upstream by `workers/providers/cf-routing.ts`
  * before this function is called.  Other providers (Workspace, M365)
  * produce the same `MailboxInbound` shape.
+ *
+ * Returns `null` when the message was not processed by the pipeline
+ * (unknown mailbox, or diverted to honeypot/DMARC-RUA/TLS-RPT/DMARC-RUF
+ * handling); otherwise returns `{ messageId, verdict }` so callers that
+ * need to act on the outcome (e.g. sidecar providers applying Gmail
+ * labels) don't have to re-derive it.
  */
-async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: ExecutionContext) {
+async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: ExecutionContext): Promise<ReceiveEmailResult | null> {
 	const { parsedEmail, mailboxId } = normalized;
 	const allRecipients = (parsedEmail.to ?? []).map((t) => (t as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
 	const ccRecipients = (parsedEmail.cc ?? []).map((e) => (e as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
 	const bccRecipients = (parsedEmail.bcc ?? []).map((e) => (e as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
 
 	const messageId = crypto.randomUUID();
-	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return; }
+	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return null; }
 
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
 
@@ -1583,7 +1601,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 				(e) => console.error(`honeypot inbound handling failed for ${mailboxId}:`, (e as Error).message),
 			),
 		);
-		return;
+		return null;
 	}
 
 	// DMARC aggregate reports arrive as email. Detect and divert to the
@@ -1594,7 +1612,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 			const result = await ingestDmarcReport(env, mailboxId, messageId, parsedEmail);
 			if (result.ingested) {
 				await stub.moveEmail(messageId, Folders.ARCHIVE);
-				return;
+				return null;
 			}
 		} catch (e) {
 			console.error("dmarc ingest failed:", (e as Error).message);
@@ -1610,7 +1628,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 			const result = await ingestTlsRptReport(env, mailboxId, messageId, parsedEmail);
 			if (result.ingested) {
 				await stub.moveEmail(messageId, Folders.ARCHIVE);
-				return;
+				return null;
 			}
 		} catch (e) {
 			console.error("tlsrpt ingest failed:", (e as Error).message);
@@ -1628,7 +1646,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 				const result = await ingestDmarcRuf(env, mailboxId, messageId, parsedEmail, rufSettings);
 				if (result.ingested) {
 					await stub.moveEmail(messageId, Folders.ARCHIVE);
-					return;
+					return null;
 				}
 				console.log("dmarc ruf drop:", result.reason);
 			}
@@ -1815,13 +1833,19 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 		}
 	}
 
-	// Auto-draft dispatch is gated on resolved settings (mailbox > org >
-	// default). The security pipeline above always runs; only the agent's
-	// onNewEmail fetch is skipped when the operator has disabled auto-draft
-	// for this mailbox (or for the org as a whole).
+	const result: ReceiveEmailResult = { messageId, verdict: securityVerdict };
+
+	// Sidecar mailboxes (issue #31) never auto-draft: replies happen in the
+	// tenant's own inbox, and an agent draft in PhishSOC would be invisible
+	// there. This also keeps the read-only promise of observe mode.
+	//
+	// Auto-draft dispatch is otherwise gated on resolved settings (mailbox >
+	// org > default). The security pipeline above always runs; only the
+	// agent's onNewEmail fetch is skipped when the operator has disabled
+	// auto-draft for this mailbox (or for the org as a whole).
 	const mailboxSettings = await resolveMailboxSettings(env, mailboxId);
-	if (!mailboxSettings.autoDraft.enabled) {
-		return;
+	if (mailboxSettings.raw?.sidecar || !mailboxSettings.autoDraft.enabled) {
+		return result;
 	}
 
 	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
@@ -1838,6 +1862,8 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 				: null,
 		}),
 	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
+
+	return result;
 }
 
 /**

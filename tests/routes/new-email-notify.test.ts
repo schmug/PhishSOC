@@ -178,7 +178,7 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
 		const { ctx, settle } = makeCtx();
 		await expect(
 			receiveEmail(makeNormalized(makeEmail()), makeEnv(stub, { NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL }), ctx),
-		).resolves.toBeUndefined();
+		).resolves.not.toBeNull();
 		await settle();
 
 		expect(stub.createEmail).toHaveBeenCalledOnce();
@@ -191,7 +191,7 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
 		const { ctx, settle } = makeCtx();
 		await expect(
 			receiveEmail(makeNormalized(makeEmail()), makeEnv(stub, { NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL }), ctx),
-		).resolves.toBeUndefined();
+		).resolves.not.toBeNull();
 		await settle();
 
 		expect(stub.createEmail).toHaveBeenCalledOnce();

@@ -34,6 +34,12 @@ export interface MailboxInbound {
 	parsedEmail: Email;
 	/** The local-part@domain address that identifies the target mailbox. */
 	mailboxId: string;
+	/**
+	 * Provider-native message id (e.g. Gmail message id). Set by API-sidecar
+	 * providers so `applyVerdict` can address the source message; undefined
+	 * for CF Email Routing, which has no writable source inbox.
+	 */
+	providerMessageId?: string;
 }
 
 /**
