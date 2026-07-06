@@ -30,6 +30,8 @@ import {
 } from "./gmail-client";
 import { sidecarConfigOf, type SidecarConfig } from "../lib/sidecar-config";
 import { getMailboxSettings } from "../lib/mailbox-settings";
+import { listMailboxes } from "../lib/email-helpers";
+import { attachmentObjectKey } from "../lib/attachments";
 import { receiveEmail } from "../index";
 
 export const SIDECAR_LABEL_NAMES = [
@@ -262,4 +264,61 @@ export async function pollWorkspaceMailbox(
 		}).catch((pe) => console.error("sidecar state write failed:", (pe as Error).message));
 		return { processed, deduped, error: message };
 	}
+}
+
+// -- Cron fan-out + retention reap (Task 8, issue #31) ------------------
+
+/**
+ * Minutely cron entry: poll every sidecar-configured mailbox sequentially.
+ * Sequential (not Promise.all) keeps the subrequest burst bounded; per-
+ * mailbox failures are contained by pollWorkspaceMailbox and never abort
+ * the loop.
+ */
+export async function pollSidecarMailboxes(
+	env: Env, ctx: ExecutionContext,
+): Promise<{ polled: number; processed: number; failures: number }> {
+	const mailboxes = await listMailboxes(env.BUCKET);
+	let polled = 0, processed = 0, failures = 0;
+	for (const m of mailboxes) {
+		const raw = await getMailboxSettings(env, m.id).catch(() => null);
+		const cfg = sidecarConfigOf(raw);
+		if (!cfg) continue;
+		polled += 1;
+		const r = await pollWorkspaceMailbox(env, ctx, m.id, cfg);
+		processed += r.processed;
+		if (r.error) failures += 1;
+	}
+	return { polled, processed, failures };
+}
+
+/**
+ * Hourly cron entry: strip message bodies (and R2 attachments) from sidecar
+ * mailboxes past their retention window. Verdicts, headers, audit rows, and
+ * case links survive — see the design spec's Storage & retention section.
+ */
+export async function reapSidecarBodies(env: Env): Promise<{ mailboxes: number; reaped: number }> {
+	const mailboxes = await listMailboxes(env.BUCKET);
+	let touched = 0, reaped = 0;
+	for (const m of mailboxes) {
+		const raw = await getMailboxSettings(env, m.id).catch(() => null);
+		const cfg = sidecarConfigOf(raw);
+		if (!cfg || cfg.retention_days === 0) continue;
+		touched += 1;
+		const cutoffIso = new Date(Date.now() - cfg.retention_days * 86_400_000).toISOString();
+		const stub = env.MAILBOX.get(env.MAILBOX.idFromName(m.id)) as unknown as {
+			listReapableSidecarEmails(cutoff: string): Promise<Array<{ id: string; attachments: Array<{ id: string; filename: string }> }>>;
+			markBodiesReaped(ids: string[], ts: string): Promise<number>;
+		};
+		const rows = await stub.listReapableSidecarEmails(cutoffIso);
+		if (rows.length === 0) continue;
+		// Delete R2 attachment objects BEFORE marking, so a partial failure
+		// re-lists the email next hour instead of orphaning blobs.
+		for (const row of rows) {
+			for (const att of row.attachments) {
+				await env.BUCKET.delete(attachmentObjectKey(row.id, att.id, att.filename));
+			}
+		}
+		reaped += await stub.markBodiesReaped(rows.map((r) => r.id), new Date().toISOString());
+	}
+	return { mailboxes: touched, reaped };
 }
