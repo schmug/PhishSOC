@@ -35,6 +35,7 @@ interface OrgSettingsShape {
 	intel?: { hub?: HubConfigSettings; feeds?: unknown[] };
 	/** Written via POST /api/v1/org/domains — not edited on this page. */
 	domains?: string[];
+	gateway?: { arcSealerDomain?: string; arcSelector?: string };
 }
 
 /**
@@ -63,6 +64,8 @@ export default function OrgSettingsRoute() {
 	const [injectionScannerModel, setInjectionScannerModel] = useState("");
 	const [draftVerifierModel, setDraftVerifierModel] = useState("");
 	const [classifierModel, setClassifierModel] = useState("");
+	const [arcSealerDomain, setArcSealerDomain] = useState("");
+	const [arcSelector, setArcSelector] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
 
 	useEffect(() => {
@@ -86,6 +89,8 @@ export default function OrgSettingsRoute() {
 		setInjectionScannerModel(s.injectionScannerModel ?? "");
 		setDraftVerifierModel(s.draftVerifierModel ?? "");
 		setClassifierModel(s.classifierModel ?? "");
+		setArcSealerDomain(s.gateway?.arcSealerDomain ?? "");
+		setArcSelector(s.gateway?.arcSelector ?? "");
 		// availableModels intentionally omitted from deps — see settings.tsx
 		// for the rationale (re-running this effect would clobber edits).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -149,6 +154,12 @@ export default function OrgSettingsRoute() {
 			injectionScannerModel: injectionScannerModel.trim() || undefined,
 			draftVerifierModel: draftVerifierModel.trim() || undefined,
 			classifierModel: classifierModel.trim() || undefined,
+			gateway: (arcSealerDomain.trim() || arcSelector.trim())
+				? {
+						...(arcSealerDomain.trim() ? { arcSealerDomain: arcSealerDomain.trim() } : {}),
+						...(arcSelector.trim() ? { arcSelector: arcSelector.trim() } : {}),
+					}
+				: {},
 		};
 
 		setIsSaving(true);
@@ -323,6 +334,47 @@ export default function OrgSettingsRoute() {
 								placeholder={DEFAULT_CLASSIFIER_MODEL}
 								value={classifierModel}
 								onChange={(e) => setClassifierModel(e.target.value)}
+								className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+							/>
+						</div>
+					</div>
+				</div>
+
+				{/* Inline gateway ARC sealer identity */}
+				<div className="pp-card p-5">
+					<div className="text-sm font-medium text-ink mb-3">
+						Inline gateway ARC sealer
+					</div>
+					<p className="text-xs text-ink-3 mb-4 max-w-xl">
+						Publish the matching public key at{" "}
+						<code className="pp-mono">&lt;selector&gt;._domainkey.&lt;sealer domain&gt;</code>{" "}
+						and set the <code className="pp-mono">ARC_SEAL_PRIVATE_KEY</code> secret —
+						see <code className="pp-mono">docs/gateway-mode.md</code>.
+					</p>
+					<div className="space-y-4">
+						<div>
+							<label htmlFor="org-arc-sealer-domain" className="block text-xs text-ink mb-1">
+								ARC sealer domain
+							</label>
+							<input
+								id="org-arc-sealer-domain"
+								type="text"
+								placeholder="gw.example.com"
+								value={arcSealerDomain}
+								onChange={(e) => setArcSealerDomain(e.target.value)}
+								className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+							/>
+						</div>
+						<div>
+							<label htmlFor="org-arc-selector" className="block text-xs text-ink mb-1">
+								ARC selector
+							</label>
+							<input
+								id="org-arc-selector"
+								type="text"
+								placeholder="arc1"
+								value={arcSelector}
+								onChange={(e) => setArcSelector(e.target.value)}
 								className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
 							/>
 						</div>

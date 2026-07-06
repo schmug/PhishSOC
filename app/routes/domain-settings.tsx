@@ -31,6 +31,12 @@ interface DomainSettingsShape {
 	security?: SecuritySettings;
 	intel?: { hub?: HubConfigSettings; feeds?: unknown[] };
 	catchall_intel?: { enabled?: boolean; retention_days?: number; sample_limit?: number };
+	relay?: {
+		enabled?: boolean;
+		target?: { host?: string; port?: number; implicitTls?: boolean };
+		credentialsSecret?: string;
+		actions?: { quarantine?: "relay" | "hold" | "drop" };
+	};
 }
 
 function InheritanceBadge({ override, testId }: { override: boolean; testId?: string }) {
@@ -76,6 +82,12 @@ export default function DomainSettingsRoute() {
 	const [modelChoice, setModelChoice] = useState<string>(TEXT_MODELS[0]);
 	const [customModel, setCustomModel] = useState("");
 	const [catchallIntelEnabled, setCatchallIntelEnabled] = useState<boolean | undefined>(undefined);
+	const [relayEnabled, setRelayEnabled] = useState(false);
+	const [relayHost, setRelayHost] = useState("");
+	const [relayPort, setRelayPort] = useState("587");
+	const [relayImplicitTls, setRelayImplicitTls] = useState(false);
+	const [relayCredentialsSecret, setRelayCredentialsSecret] = useState("");
+	const [relayActionQuarantine, setRelayActionQuarantine] = useState<"relay" | "hold" | "drop">("hold");
 	const [isSaving, setIsSaving] = useState(false);
 
 	// Initialise once per domain (same useRef pattern as the per-mailbox
@@ -105,6 +117,12 @@ export default function DomainSettingsRoute() {
 		setHubErrors(undefined);
 		setAutoDraftEnabled(s.autoDraft?.enabled === undefined ? true : s.autoDraft.enabled);
 		setCatchallIntelEnabled(s.catchall_intel?.enabled);
+		setRelayEnabled(s.relay?.enabled ?? false);
+		setRelayHost(s.relay?.target?.host ?? "");
+		setRelayPort(String(s.relay?.target?.port ?? 587));
+		setRelayImplicitTls(s.relay?.target?.implicitTls ?? false);
+		setRelayCredentialsSecret(s.relay?.credentialsSecret ?? "");
+		setRelayActionQuarantine(s.relay?.actions?.quarantine ?? "hold");
 
 		const m = s.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
 		if (availableModels.includes(m)) {
@@ -177,6 +195,18 @@ export default function DomainSettingsRoute() {
 			catchall_intel: catchallIntelEnabled !== undefined
 				? { ...(existing.catchall_intel ?? {}), enabled: catchallIntelEnabled }
 				: undefined,
+			relay: relayEnabled
+				? {
+						enabled: true,
+						target: {
+							host: relayHost.trim(),
+							port: Number.parseInt(relayPort, 10) || 587,
+							implicitTls: relayImplicitTls,
+						},
+						...(relayCredentialsSecret.trim() ? { credentialsSecret: relayCredentialsSecret.trim() } : {}),
+						...(relayActionQuarantine !== "hold" ? { actions: { quarantine: relayActionQuarantine } } : {}),
+					}
+				: { enabled: false },
 		};
 
 		setIsSaving(true);
@@ -388,6 +418,109 @@ export default function DomainSettingsRoute() {
 							aria-label="Enable catch-all probe capture"
 						/>
 					</label>
+				</div>
+
+				{/* Inline gateway relay */}
+				<div className="pp-card p-5">
+					<label className="flex items-start justify-between gap-3 mb-4">
+						<span className="flex flex-col">
+							<span className="text-sm font-medium text-ink">Inline gateway relay</span>
+							<span className="text-xs text-ink-3 mt-1 max-w-md">
+								Relay scored inbound mail for this domain to a backend over SMTP
+								submission (port 587/465 — port 25 is not possible from Workers).
+							</span>
+						</span>
+						<input
+							type="checkbox"
+							checked={relayEnabled}
+							onChange={(e) => setRelayEnabled(e.target.checked)}
+							className="mt-1 h-4 w-4 accent-accent shrink-0"
+							aria-label="Inline gateway relay"
+						/>
+					</label>
+
+					{relayEnabled && (
+						<div className="space-y-4">
+							<div>
+								<label htmlFor="relay-host" className="block text-xs text-ink mb-1">
+									Relay target host
+								</label>
+								<input
+									id="relay-host"
+									type="text"
+									placeholder="smtp-relay.gmail.com"
+									value={relayHost}
+									onChange={(e) => setRelayHost(e.target.value)}
+									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+								/>
+							</div>
+
+							<div className="flex gap-4">
+								<div className="flex-1">
+									<label htmlFor="relay-port" className="block text-xs text-ink mb-1">
+										Port
+									</label>
+									<input
+										id="relay-port"
+										type="text"
+										inputMode="numeric"
+										placeholder="587"
+										value={relayPort}
+										onChange={(e) => setRelayPort(e.target.value)}
+										className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+									/>
+								</div>
+								<label className="flex items-center gap-2 mt-6">
+									<input
+										type="checkbox"
+										checked={relayImplicitTls}
+										onChange={(e) => setRelayImplicitTls(e.target.checked)}
+										className="h-4 w-4 accent-accent shrink-0"
+										aria-label="Implicit TLS (port 465)"
+									/>
+									<span className="text-sm text-ink">Implicit TLS (port 465)</span>
+								</label>
+							</div>
+
+							<div>
+								<label htmlFor="relay-credentials-secret" className="block text-xs text-ink mb-1">
+									Credentials secret name
+								</label>
+								<input
+									id="relay-credentials-secret"
+									type="text"
+									placeholder="RELAY_CREDS_EXAMPLE_COM"
+									value={relayCredentialsSecret}
+									onChange={(e) => setRelayCredentialsSecret(e.target.value)}
+									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+								/>
+								<p className="text-xs text-ink-3 mt-2">
+									Worker Secret containing <code className="pp-mono">{`{"user":"...","pass":"..."}`}</code> JSON
+									— set with <code className="pp-mono">wrangler secret put</code>.
+								</p>
+							</div>
+
+							<div>
+								<label htmlFor="relay-action-quarantine" className="block text-xs text-ink mb-1">
+									Quarantine verdict
+								</label>
+								<select
+									id="relay-action-quarantine"
+									value={relayActionQuarantine}
+									onChange={(e) => setRelayActionQuarantine(e.target.value as "relay" | "hold" | "drop")}
+									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+								>
+									<option value="hold">hold (default — keep in PhishSOC quarantine)</option>
+									<option value="relay">relay (deliver tagged; backend rules quarantine)</option>
+									<option value="drop">drop</option>
+								</select>
+								<p className="text-xs text-ink-3 mt-2">
+									Only the quarantine verdict is surfaced here in v1. Allow/tag/block
+									action mappings stay JSON-editable.
+								</p>
+							</div>
+						</div>
+					)}
 				</div>
 
 				<div className="flex justify-end">

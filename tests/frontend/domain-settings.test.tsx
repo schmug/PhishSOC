@@ -248,3 +248,92 @@ describe("DomainSettings · Catch-all intel toggle (#521)", () => {
 		expect(intel.feeds).toHaveLength(1);
 	});
 });
+
+describe("DomainSettings · Inline gateway relay card (#32 task 13)", () => {
+	beforeEach(() => {
+		mutateAsync.mockReset();
+		mutateAsync.mockResolvedValue(undefined);
+		domainSettingsFixture = { domain: "acme.com", settings: {} };
+		orgSettingsFixture = { settings: {} };
+	});
+
+	it("renders the relay toggle unchecked and hides fields when relay is absent", async () => {
+		domainSettingsFixture = { domain: "acme.com", settings: {} };
+		renderDomainSettings();
+		const toggle = await screen.findByRole("checkbox", { name: /inline gateway relay/i });
+		expect(toggle).not.toBeChecked();
+		expect(screen.queryByLabelText(/relay target host/i)).not.toBeInTheDocument();
+	});
+
+	it("loads existing relay settings and shows the fields populated", async () => {
+		domainSettingsFixture = {
+			domain: "acme.com",
+			settings: {
+				relay: {
+					enabled: true,
+					target: { host: "smtp-relay.gmail.com", port: 465, implicitTls: true },
+					credentialsSecret: "RELAY_CREDS_ACME_COM",
+					actions: { quarantine: "relay" },
+				},
+			},
+		};
+		renderDomainSettings();
+
+		const toggle = await screen.findByRole("checkbox", { name: /inline gateway relay/i });
+		expect(toggle).toBeChecked();
+		expect(screen.getByLabelText(/relay target host/i)).toHaveValue("smtp-relay.gmail.com");
+		expect(screen.getByLabelText(/^port$/i)).toHaveValue("465");
+		expect(screen.getByLabelText(/implicit tls/i)).toBeChecked();
+		expect(screen.getByLabelText(/credentials secret name/i)).toHaveValue("RELAY_CREDS_ACME_COM");
+		expect(screen.getByLabelText(/quarantine verdict/i)).toHaveValue("relay");
+	});
+
+	it("saves a full relay target after toggling on and filling fields", async () => {
+		const user = userEvent.setup();
+		domainSettingsFixture = { domain: "acme.com", settings: {} };
+		renderDomainSettings();
+
+		await user.click(await screen.findByRole("checkbox", { name: /inline gateway relay/i }));
+		await user.type(screen.getByLabelText(/relay target host/i), "smtp-relay.gmail.com");
+
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		expect(payload.relay).toEqual({
+			enabled: true,
+			target: { host: "smtp-relay.gmail.com", port: 587, implicitTls: false },
+		});
+	});
+
+	it("saves { enabled: false } when the toggle is left off (server strips it)", async () => {
+		const user = userEvent.setup();
+		domainSettingsFixture = { domain: "acme.com", settings: {} };
+		renderDomainSettings();
+
+		await screen.findByRole("checkbox", { name: /inline gateway relay/i });
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		expect(payload.relay).toEqual({ enabled: false });
+	});
+
+	it("omits credentialsSecret and actions when left at defaults", async () => {
+		const user = userEvent.setup();
+		domainSettingsFixture = {
+			domain: "acme.com",
+			settings: { relay: { enabled: true, target: { host: "relay.example.com" } } },
+		};
+		renderDomainSettings();
+
+		await screen.findByRole("checkbox", { name: /inline gateway relay/i });
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		const relay = payload.relay as Record<string, unknown>;
+		expect(relay.credentialsSecret).toBeUndefined();
+		expect(relay.actions).toBeUndefined();
+	});
+});

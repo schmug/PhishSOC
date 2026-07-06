@@ -112,3 +112,48 @@ describe("OrgSettings · full-replace save preserves unrelated fields", () => {
 		expect((payload.intel as { feeds: unknown[] }).feeds).toHaveLength(1);
 	});
 });
+
+describe("OrgSettings · Inline gateway ARC sealer fields (#32 task 13)", () => {
+	beforeEach(() => {
+		mutateAsync.mockReset();
+		mutateAsync.mockResolvedValue(undefined);
+		orgSettingsFixture = { settings: {} };
+	});
+
+	it("loads existing gateway ARC fields into the inputs", async () => {
+		orgSettingsFixture = {
+			settings: { gateway: { arcSealerDomain: "gw.acme.com", arcSelector: "arc1" } },
+		};
+		renderOrgSettings();
+
+		expect(await screen.findByLabelText(/arc sealer domain/i)).toHaveValue("gw.acme.com");
+		expect(screen.getByLabelText(/arc selector/i)).toHaveValue("arc1");
+	});
+
+	it("saves gateway fields after filling them in", async () => {
+		const user = userEvent.setup();
+		orgSettingsFixture = { settings: {} };
+		renderOrgSettings();
+
+		await user.type(await screen.findByLabelText(/arc sealer domain/i), "gw.example.com");
+		await user.type(screen.getByLabelText(/arc selector/i), "arc1");
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		expect(payload.gateway).toEqual({ arcSealerDomain: "gw.example.com", arcSelector: "arc1" });
+	});
+
+	it("sends an empty gateway object when both fields are left blank (server strips it)", async () => {
+		const user = userEvent.setup();
+		orgSettingsFixture = { settings: {} };
+		renderOrgSettings();
+
+		await screen.findByRole("button", { name: /save changes/i });
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		expect(payload.gateway).toEqual({});
+	});
+});
