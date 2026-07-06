@@ -73,6 +73,13 @@ export interface RunPipelineInput {
 	messageId: string;
 	/** Folder the message was delivered into. Drives the folder-bypass triage tier. */
 	targetFolder: string;
+	/**
+	 * Gateway-passthrough mode (issue #32): score without touching the
+	 * MailboxDO. No DKIM-observation write, reputation = null, sender-graph
+	 * detector skipped, no persistence. Settings resolution is unchanged —
+	 * an unregistered mailboxId falls through to domain/org/default tiers.
+	 */
+	stateless?: boolean;
 	parsedEmail: {
 		subject?: string;
 		from?: { address?: string; name?: string };
@@ -128,7 +135,7 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	// DO write must NOT delay the verdict path. Trusted-id gating already
 	// happened inside `parseAuthResults`, so anything in `auth.dkimObservations`
 	// is safe to persist; the DO method de-dupes and runs the lazy 30d GC.
-	if (auth.dkimObservations.length > 0) {
+	if (!input.stateless && auth.dkimObservations.length > 0) {
 		const stub = getMailboxStub(env, mailboxId);
 		void stub
 			.recordDkimSelectorsObserved(auth.dkimObservations)
@@ -163,9 +170,12 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		: null;
 
 	// ── Stage 4: reputation (incl. CTI prior) ──────────────────────
-	const stub = getMailboxStub(env, mailboxId);
+	// Stateless (gateway-passthrough, issue #32): never construct a MailboxDO
+	// stub for an unregistered recipient — reputation stays null and the
+	// sender-graph detector below is skipped entirely.
+	const stub = input.stateless ? null : getMailboxStub(env, mailboxId);
 	const reputation = await tracer.measureAsync("reputation", async () =>
-		sender ? await stub.getSenderReputation(sender) : null,
+		input.stateless ? null : sender && stub ? await stub.getSenderReputation(sender) : null,
 	);
 
 	// First-time-sender CTI prior (issue #79). Only fired when the sender has
@@ -196,7 +206,7 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	// in the verdict stage, bounded at +30.
 	let detectorBoost = 0;
 	let detectorReason: string | undefined;
-	if (settings.detectors?.sender_graph?.enabled !== false && senderName) {
+	if (!input.stateless && stub && settings.detectors?.sender_graph?.enabled !== false && senderName) {
 		await tracer.extend("reputation", async () => {
 			const detector = new SenderGraphDetector();
 			const result = await detector.score({ senderAddress: sender, senderName }, stub).catch(() => ({ score: 0, reason: undefined }));
@@ -245,7 +255,9 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 			);
 		}
 		tracer.completeVerdict(verdict.score);
-		await persistAll(env, mailboxId, messageId, sender, senderName, verdict, urls, tracer.snapshot());
+		if (!input.stateless) {
+			await persistAll(env, mailboxId, messageId, sender, senderName, verdict, urls, tracer.snapshot());
+		}
 		return { verdict, skipped: false, stageTrace: tracer.snapshot() };
 	}
 
@@ -337,7 +349,9 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	tracer.completeVerdict(verdict.score);
 
 	const stageTrace = tracer.snapshot();
-	await persistAll(env, mailboxId, messageId, sender, senderName, verdict, urls, stageTrace);
+	if (!input.stateless) {
+		await persistAll(env, mailboxId, messageId, sender, senderName, verdict, urls, stageTrace);
+	}
 	return { verdict, skipped: false, stageTrace };
 }
 
