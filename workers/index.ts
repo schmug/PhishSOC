@@ -16,7 +16,7 @@ import {
 	resolveMailboxSettings,
 	stripDefaultEqual,
 } from "./lib/mailbox-settings";
-import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey } from "./lib/org-settings";
+import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, mergeOrgSettingsPut } from "./lib/org-settings";
 import { OrgSettings } from "../shared/org-settings";
 import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
@@ -801,7 +801,9 @@ app.put("/api/v1/org/settings", async (c) => {
 	// rendered defaults doesn't pin them as explicit org-tier overrides that
 	// shadow a future default change for every inheriting domain/mailbox.
 	const stripped = stripDefaultEqual(parsed.data);
-	const written = await putOrgSettings(c.env, stripped);
+	const current = await getOrgSettings(c.env);
+	const merged = mergeOrgSettingsPut(current, stripped);
+	const written = await putOrgSettings(c.env, merged);
 	return c.json({ settings: written });
 });
 

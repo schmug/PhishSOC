@@ -91,6 +91,41 @@ export async function getOrgSettings(env: { BUCKET: R2Bucket }): Promise<OrgSett
 }
 
 /**
+ * Merge an org settings PUT with the persisted blob, preserving keys that
+ * are managed exclusively outside the `/settings` form:
+ *   - `domains` — written via POST/DELETE `/api/v1/org/domains`
+ *   - `intel.feeds` — no org UI yet; only API callers write feeds
+ *
+ * A stale React Query cache (or any partial PUT) can still carry an older
+ * `domains` snapshot even after #570's UI spread fix — the server must not
+ * let a settings-form save clobber a domain added on `/domains`.
+ */
+export function mergeOrgSettingsPut(
+	current: OrgSettings,
+	incoming: OrgSettings,
+): OrgSettings {
+	const merged: OrgSettings = { ...incoming };
+
+	// Domains are authoritative from POST/DELETE — never trust a PUT payload.
+	if (current.domains !== undefined) {
+		merged.domains = current.domains;
+	} else {
+		delete merged.domains;
+	}
+
+	// intel.feeds has no org UI — preserve from R2 when the PUT omits them.
+	const currentFeeds = current.intel?.feeds;
+	if (currentFeeds && currentFeeds.length > 0) {
+		const incomingIntel = incoming.intel ?? {};
+		if (!incomingIntel.feeds?.length) {
+			merged.intel = { ...incomingIntel, feeds: currentFeeds };
+		}
+	}
+
+	return merged;
+}
+
+/**
  * Persist org-level settings. Validates the input through the OrgSettings
  * schema so a malformed PUT can't write a blob that getOrgSettings would
  * reject on the next read. Invalidates the cache so subsequent reads see

@@ -36,6 +36,9 @@ export function useAddDomain() {
 		onSuccess: () => {
 			// Invalidate config so the New Mailbox dropdown picks up the new domain.
 			qc.invalidateQueries({ queryKey: queryKeys.config });
+			// Org settings cache must reflect domains added via POST /org/domains
+			// so a later save from /settings does not wipe them (full-replace PUT).
+			qc.invalidateQueries({ queryKey: queryKeys.org.settings });
 		},
 	});
 }
@@ -46,6 +49,7 @@ export function useRemoveDomain() {
 		mutationFn: (domain: string) => api.removeDomain(domain),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: queryKeys.config });
+			qc.invalidateQueries({ queryKey: queryKeys.org.settings });
 		},
 	});
 }
