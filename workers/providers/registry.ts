@@ -19,6 +19,7 @@
 
 import { ResendProvider } from "./resend";
 import type { MailProvider } from "./types";
+import { smtpRelayProvider, type SmtpRelayProvider } from "./smtp-relay";
 
 const _default = new ResendProvider();
 
@@ -29,4 +30,13 @@ const _default = new ResendProvider();
 export function getProvider(_mailboxId?: string): MailProvider {
 	// Future: look up per-mailbox provider config from DO settings.
 	return _default;
+}
+
+/**
+ * Relay provider for inline-gateway mode (issue #32). Selected by
+ * relay-policy presence on the recipient domain, not per-mailbox config —
+ * see `resolveRelayPolicy` in workers/lib/relay-policy.ts.
+ */
+export function getRelayProvider(): SmtpRelayProvider {
+	return smtpRelayProvider;
 }
