@@ -829,6 +829,17 @@ app.put("/api/v1/domains/:domain/settings", async (c) => {
 	if (!parsed.success) {
 		return c.json({ error: "Invalid domain settings", issues: parsed.error.issues }, 400);
 	}
+	// The relay target host + credentials-secret name in this tier are
+	// operator-trusted primitives (an inline gateway relays live SMTP
+	// credentials to whatever host is configured here), so writing them is
+	// restricted to domains this org actually owns — parity with the
+	// ownership gate on catch-all routing and on gateway routing
+	// (workers/providers/cf-routing.ts). Reading settings for an unowned
+	// domain is left unrestricted above: it harmlessly returns {}.
+	const owned = await getOwnedDomains(c.env);
+	if (!owned.includes(domain)) {
+		return c.json({ error: "Domain is not in this org's domains; add it via POST /api/v1/org/domains first." }, 403);
+	}
 	// Symmetry with #106's mailbox PUT/POST: drop fields equal to the
 	// system default before persisting so a fresh form save with rendered
 	// defaults doesn't silently shadow the org tier for every mailbox

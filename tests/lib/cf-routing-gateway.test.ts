@@ -70,4 +70,17 @@ describe("normalizeInbound gateway routing", () => {
 		const normalized = await normalizeInbound(event("ghost@example.com"), env);
 		expect(normalized?.kind).toBe("gateway");
 	});
+
+	it("relay-enabled domain NOT in owned domains does not route to gateway", async () => {
+		// example.com has a relay policy configured, but DOMAINS/org.domains do
+		// not include it — the operator does not own this domain, so a relay
+		// target + AUTH PLAIN credentials must not be reachable via this path.
+		const env = fakeEnv({
+			relay: { enabled: true, target: { host: "smtp-relay.gmail.com" } },
+		});
+		(env as unknown as { DOMAINS: string }).DOMAINS = ""; // no owned domains
+		const normalized = await normalizeInbound(event("ghost@example.com"), env);
+		// Falls through to catch-all/drop — no catchall_intel configured either.
+		expect(normalized).toBeNull();
+	});
 });

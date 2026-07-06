@@ -244,10 +244,18 @@ async function resolveUnregistered(
 	env: Env,
 	envelopeFrom: string,
 ): Promise<CatchallInbound | GatewayInbound | null> {
+	// Gateway mode hands the relay target host an AUTH PLAIN credential, so an
+	// operator-set relay policy is only honoured on domains the operator
+	// actually owns (DOMAINS env + org.domains) — parity with the ownership
+	// gate resolveCatchall already enforces below. Without this, any relay
+	// policy present on a domain's settings blob (even one the operator never
+	// claimed) would make this Worker relay live SMTP credentials to it.
+	const ownedDomains = await getOwnedDomains(env);
 	for (const addr of recipients) {
 		const at = addr.lastIndexOf("@");
 		if (at < 0) continue;
 		const domain = addr.slice(at + 1).toLowerCase();
+		if (!ownedDomains.includes(domain)) continue;
 		let settings: DomainSettings;
 		try {
 			settings = await getDomainSettings(env, domain);
