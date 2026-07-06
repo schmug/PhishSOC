@@ -541,6 +541,14 @@ export const mailboxMigrations: Migration[] = [
             );
         `,
 	},
+	{
+		// Inline-gateway relay outcome tracking (issue #32). NULL when the
+		// domain has no relay policy (or ingest predates this migration);
+		// "relayed" | "held" | "failed" once a relay decision is made in
+		// `receiveEmail`. See workers/lib/gateway-relay.ts.
+		name: "26_relay_status",
+		sql: `ALTER TABLE emails ADD COLUMN relay_status TEXT;`,
+	},
 ];
 
 /**

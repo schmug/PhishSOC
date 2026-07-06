@@ -18,10 +18,12 @@ import {
 } from "./lib/mailbox-settings";
 import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, mergeOrgSettingsPut } from "./lib/org-settings";
 import { OrgSettings } from "../shared/org-settings";
-import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
+import { getDomainSettings, putDomainSettings, domainFromMailboxId } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline } from "./security";
+import { resolveRelayPolicy } from "./lib/relay-policy";
+import { relayAfterVerdict } from "./lib/gateway-relay";
 import { dispatchNewEmailNotification } from "./lib/new-email-notify";
 import { parseAuthResults } from "./security/auth";
 import { runDeepScan } from "./intel/deep-scan";
@@ -1728,6 +1730,32 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 						(err as Error).message,
 					);
 				});
+		}
+	}
+
+	// Inline gateway relay (issue #32). When this mailbox's domain has an
+	// enabled relay policy, the verdict decides whether the message ALSO
+	// relays to the backend MX. Storage above is untouched — relay is
+	// additive for registered mailboxes. Transient SMTP failures throw out
+	// of receiveEmail so CF Email Routing defers and the origin retries
+	// (may re-store a duplicate; accepted, see spec); permanent failures
+	// keep the mirror copy, alert, and mark relay_status=failed.
+	const relayDomain = domainFromMailboxId(mailboxId);
+	const relayPolicy = relayDomain ? resolveRelayPolicy(await getDomainSettings(env, relayDomain)) : null;
+	if (relayPolicy) {
+		const outcome = await relayAfterVerdict({
+			env,
+			ctx,
+			raw: new Uint8Array(normalized.rawEmail),
+			verdict: securityVerdict,
+			policy: relayPolicy,
+			envelopeFrom: normalized.envelopeFrom ?? "",
+			rcptTo: mailboxId,
+		});
+		const status =
+			outcome === "relayed" ? "relayed" : outcome === "failed_permanent" ? "failed" : outcome === "held" ? "held" : null;
+		if (status) {
+			await stub.setRelayStatus(messageId, status).catch((e) => console.error("setRelayStatus failed:", (e as Error).message));
 		}
 	}
 

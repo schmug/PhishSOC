@@ -1205,6 +1205,19 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 	}
 
+	/**
+	 * Record the inline-gateway relay outcome for an email (issue #32).
+	 * Called from `receiveEmail` after `relayAfterVerdict` resolves; NULL
+	 * (column default) means the domain has no relay policy.
+	 */
+	async setRelayStatus(emailId: string, status: "relayed" | "held" | "failed"): Promise<void> {
+		this.db
+			.update(schema.emails)
+			.set({ relay_status: status })
+			.where(eq(schema.emails.id, emailId))
+			.run();
+	}
+
 	async getStoredVerdict(emailId: string) {
 		const row = this.db
 			.select({
