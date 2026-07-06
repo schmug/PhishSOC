@@ -13,14 +13,30 @@
  * guard.
  */
 
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import PostalMime, { type Email } from "postal-mime";
 
 import { runSecurityPipeline } from "../../workers/security/index";
 import { __setClassifier } from "../../workers/security/classification";
 import { createFakeMailboxStub, makeFakeEnv } from "./fakes";
 import type { FakeMailboxStub } from "./fakes";
+import type { MailboxSecuritySettings } from "../../workers/security/settings";
 
 const MAILBOX = "nobody@example.com";
+const FIXTURE_DIR = join(__dirname, "..", "fixtures", "security");
+
+async function loadFixture(name: string): Promise<Email> {
+	const raw = await readFile(join(FIXTURE_DIR, name), "utf8");
+	return new PostalMime().parse(raw);
+}
+
+function settings(
+	overrides: Partial<MailboxSecuritySettings> = {},
+): Partial<MailboxSecuritySettings> {
+	return { enabled: true, ...overrides };
+}
 
 /** Wrap a fake stub so every method invocation is recorded by name. */
 function recordingStub(inner: FakeMailboxStub): { stub: FakeMailboxStub; calls: string[] } {
@@ -69,6 +85,7 @@ describe("runSecurityPipeline stateless mode", () => {
 
 		expect(result.skipped).toBe(false);
 		expect(result.verdict).not.toBeNull();
+		expect(result.verdict?.triage).toBeUndefined();
 		expect(calls).toEqual([]); // no DO method was invoked
 	});
 
@@ -129,9 +146,12 @@ describe("runSecurityPipeline stateless mode", () => {
 	});
 
 	it("stateless mode still short-circuits triage without touching the DO", async () => {
-		// hard_block short-circuit persists via a separate `persistAll` call
-		// site (line 248) distinct from the full-path call (line 340) — both
+		// hard_allow short-circuit persists via a separate `persistAll` call
+		// site (line 259) distinct from the full-path call (line 353) — both
 		// must be guarded, so exercise the short-circuit branch explicitly.
+		// evaluateHardAllow (triage.ts:189-198) requires DMARC pass AND trusted
+		// authserv-id, so mirror the fixture + settings from run-pipeline.test.ts
+		// "hard_allow: allowlisted DMARC-pass sender" test.
 		__setClassifier(async () => {
 			throw new Error("classifier must not be called");
 		});
@@ -140,23 +160,28 @@ describe("runSecurityPipeline stateless mode", () => {
 		const env = makeFakeEnv({
 			mailboxId: MAILBOX,
 			stub,
-			settings: {
-				enabled: true,
-				allowlist_senders: ["sender@origin.test"],
+			settings: settings({
+				allowlist_senders: ["newsletter@acme-example.com"],
 				trusted_auto_allow: true,
-			},
+				// Hard-allow requires a DMARC pass from a TRUSTED authserv-id
+				// (F-004). The benign-newsletter fixture's Authentication-Results
+				// authserv-id is mx.example.com; trust it so the verdict is marked
+				// trusted and the short-circuit fires.
+				trusted_authserv_ids: ["mx.example.com"],
+			}),
 		});
 
+		const parsed = await loadFixture("benign-newsletter.eml");
 		const result = await runSecurityPipeline({
 			env,
 			mailboxId: MAILBOX,
 			messageId: "m5",
 			targetFolder: "inbox",
 			stateless: true,
-			parsedEmail: parsedEmail(),
+			parsedEmail: parsed,
 		});
 
-		expect(result.verdict).not.toBeNull();
+		expect(result.verdict?.triage).toBe("hard_allow");
 		expect(calls).toEqual([]);
 	});
 });
