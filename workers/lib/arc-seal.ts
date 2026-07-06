@@ -95,3 +95,118 @@ export function canonicalizeBodyRelaxed(body: Uint8Array): Uint8Array {
 	if (lines.length === 0) return new Uint8Array(0);
 	return latin1Encode(lines.join("\r\n") + "\r\n");
 }
+
+const ARC_HEADER_NAMES = new Set(["arc-seal", "arc-message-signature", "arc-authentication-results"]);
+
+/** Headers AMS signs when present, in this fixed order. Never ARC-* (RFC 8617 §4.1.2). */
+const AMS_SIGNED_HEADERS = [
+	"from",
+	"to",
+	"cc",
+	"subject",
+	"date",
+	"message-id",
+	"mime-version",
+	"content-type",
+	"x-phishpilot-verdict",
+	"x-phishpilot-score",
+];
+
+export function hasExistingArcChain(raw: Uint8Array): boolean {
+	const { headerBlock } = splitRawMessage(raw);
+	return parseRawHeaders(headerBlock).some((h) => ARC_HEADER_NAMES.has(h.name));
+}
+
+function toBase64(bytes: Uint8Array): string {
+	let bin = "";
+	const CHUNK = 0x8000;
+	for (let i = 0; i < bytes.length; i += CHUNK) {
+		bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+	}
+	return btoa(bin);
+}
+
+function fromBase64(b64: string): Uint8Array {
+	const bin = atob(b64);
+	return latin1Encode(bin);
+}
+
+async function importPkcs8(pem: string): Promise<CryptoKey> {
+	const b64 = pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+	return crypto.subtle.importKey(
+		"pkcs8",
+		fromBase64(b64).buffer as ArrayBuffer,
+		{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+}
+
+async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
+	return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.buffer as ArrayBuffer));
+}
+
+async function rsaSign(key: CryptoKey, data: string): Promise<string> {
+	const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, latin1Encode(data).buffer as ArrayBuffer);
+	return toBase64(new Uint8Array(sig));
+}
+
+export interface ArcSealOptions {
+	auth: { spf: string; dkim: string; dmarc: string };
+	sealerDomain: string;
+	selector: string;
+	privateKeyPem: string;
+	/** Unix seconds; injectable so tests are deterministic. */
+	now?: number;
+}
+
+/**
+ * Build the i=1 ARC set for a message with no prior chain. Returns the
+ * three headers (AS, AMS, AAR — newest-first, ready to prepend) ending in
+ * CRLF, or null when a prior chain exists.
+ */
+export async function sealMessage(raw: Uint8Array, opts: ArcSealOptions): Promise<string | null> {
+	if (hasExistingArcChain(raw)) return null;
+
+	const { headerBlock, body } = splitRawMessage(raw);
+	const headers = parseRawHeaders(headerBlock);
+	const key = await importPkcs8(opts.privateKeyPem);
+	const t = opts.now ?? Math.floor(Date.now() / 1000);
+	const d = opts.sealerDomain;
+	const s = opts.selector;
+
+	// ── AAR ──────────────────────────────────────────────────────────
+	const aar =
+		`ARC-Authentication-Results: i=1; ${d}; ` +
+		`spf=${opts.auth.spf || "none"}; dkim=${opts.auth.dkim || "none"}; dmarc=${opts.auth.dmarc || "none"}`;
+
+	// ── AMS ──────────────────────────────────────────────────────────
+	// h= lists each signed name once, matching the LAST occurrence of that
+	// header in the message (DKIM verifiers select bottom-up).
+	const present = AMS_SIGNED_HEADERS.filter((n) => headers.some((h) => h.name === n));
+	const bh = toBase64(await sha256(canonicalizeBodyRelaxed(body)));
+	const amsUnsigned =
+		`ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; ` +
+		`d=${d}; s=${s}; t=${t}; h=${present.join(":")}; bh=${bh}; b=`;
+	let amsInput = "";
+	for (const name of present) {
+		const matches = headers.filter((h) => h.name === name);
+		const last = matches[matches.length - 1];
+		amsInput += canonicalizeHeaderRelaxed(last.raw) + "\r\n";
+	}
+	amsInput += canonicalizeHeaderRelaxed(amsUnsigned); // own header, b= empty, no CRLF
+	const ams = amsUnsigned + (await rsaSign(key, amsInput));
+
+	// ── AS ───────────────────────────────────────────────────────────
+	// Signs the ARC set in instance order: AAR, AMS, AS(b=) (RFC 8617 §5.1.1).
+	const asUnsigned = `ARC-Seal: i=1; a=rsa-sha256; cv=none; d=${d}; s=${s}; t=${t}; b=`;
+	const asInput =
+		canonicalizeHeaderRelaxed(aar) +
+		"\r\n" +
+		canonicalizeHeaderRelaxed(ams) +
+		"\r\n" +
+		canonicalizeHeaderRelaxed(asUnsigned);
+	const arcSeal = asUnsigned + (await rsaSign(key, asInput));
+
+	return `${arcSeal}\r\n${ams}\r\n${aar}\r\n`;
+}
