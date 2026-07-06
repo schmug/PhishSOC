@@ -18,10 +18,9 @@
 
 import type { Env } from "../types";
 import type { MailProvider, MailboxInbound, NormalizedOutbound } from "./types";
-import { ensureLabels, modifyMessage } from "./gmail-client";
+import { ensureLabels, modifyMessage, mintAccessToken, parseServiceAccountJson } from "./gmail-client";
 import { sidecarConfigOf, type SidecarConfig } from "../lib/sidecar-config";
 import { getMailboxSettings } from "../lib/mailbox-settings";
-import { mintAccessToken, parseServiceAccountJson } from "./gmail-client";
 
 export const SIDECAR_LABEL_NAMES = [
 	"PhishPilot/Quarantine",
