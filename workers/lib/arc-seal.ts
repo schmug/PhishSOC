@@ -11,6 +11,10 @@
  * produces is cross-verified by mailauth's independent validator in
  * `tests/lib/arc-seal.test.ts`.
  *
+ * Byte fidelity: Encoding/decoding uses manual 1:1 byte↔code-point conversion
+ * (latin1Encode/latin1Decode) everywhere. TextDecoder("latin1") is actually
+ * windows-1252, which corrupts 0x80–0x9F on round-trip; we avoid it entirely.
+ *
  * v1 seals only when the message carries no prior ARC chain (we are i=1,
  * cv=none). Messages with an existing chain relay unsealed — validating a
  * prior chain is out of scope (spec), and asserting cv= without validating
@@ -24,7 +28,16 @@ export function latin1Encode(s: string): Uint8Array {
 	return out;
 }
 
-const latin1Decoder = new TextDecoder("latin1");
+/** Decode raw bytes to a string 1:1 (byte N → code point N). TextDecoder("latin1")
+ *  is windows-1252 and corrupts 0x80–0x9F on round-trip — do not use it here. */
+export function latin1Decode(bytes: Uint8Array): string {
+	let out = "";
+	const CHUNK = 0x8000;
+	for (let i = 0; i < bytes.length; i += CHUNK) {
+		out += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+	}
+	return out;
+}
 
 /**
  * Split raw RFC-5322 bytes into the header block (latin1 string, 1:1 with
@@ -35,13 +48,13 @@ export function splitRawMessage(raw: Uint8Array): { headerBlock: string; body: U
 	for (let i = 0; i + 3 < raw.length; i++) {
 		if (raw[i] === 13 && raw[i + 1] === 10 && raw[i + 2] === 13 && raw[i + 3] === 10) {
 			return {
-				headerBlock: latin1Decoder.decode(raw.subarray(0, i + 2)),
+				headerBlock: latin1Decode(raw.subarray(0, i + 2)),
 				body: raw.subarray(i + 4),
 			};
 		}
 	}
 	// No body separator: the whole message is headers.
-	return { headerBlock: latin1Decoder.decode(raw), body: new Uint8Array(0) };
+	return { headerBlock: latin1Decode(raw), body: new Uint8Array(0) };
 }
 
 /**
@@ -76,7 +89,7 @@ export function canonicalizeHeaderRelaxed(rawHeader: string): string {
 /** RFC 6376 §3.4.4 relaxed body canonicalization. */
 export function canonicalizeBodyRelaxed(body: Uint8Array): Uint8Array {
 	if (body.length === 0) return body;
-	const text = latin1Decoder.decode(body);
+	const text = latin1Decode(body);
 	const lines = text.split("\r\n").map((l) => l.replace(/[ \t]+/g, " ").replace(/[ \t]+$/, ""));
 	while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 	if (lines.length === 0) return new Uint8Array(0);

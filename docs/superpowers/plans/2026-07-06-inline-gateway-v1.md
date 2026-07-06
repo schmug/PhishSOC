@@ -1232,9 +1232,13 @@ function classify(res: SmtpResponse, context: string): never {
 
 /** Dot-stuff the payload and guarantee a trailing CRLF (RFC 5321 §4.5.2). */
 export function dotStuff(raw: Uint8Array): Uint8Array {
+	// Manual 1:1 decode — TextDecoder("latin1") is windows-1252 and corrupts
+	// bytes 0x80–0x9F on round-trip (see latin1Decode in arc-seal.ts).
 	let text = "";
-	const dec = new TextDecoder("latin1");
-	text = dec.decode(raw);
+	const CHUNK = 0x8000;
+	for (let i = 0; i < raw.length; i += CHUNK) {
+		text += String.fromCharCode(...raw.subarray(i, i + CHUNK));
+	}
 	text = text.replace(/(^|\r\n)\./g, "$1..");
 	if (!text.endsWith("\r\n")) text += "\r\n";
 	const out = new Uint8Array(text.length);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	canonicalizeBodyRelaxed,
 	canonicalizeHeaderRelaxed,
+	latin1Decode,
 	latin1Encode,
 	parseRawHeaders,
 	splitRawMessage,
@@ -50,5 +51,28 @@ describe("relaxed canonicalization (RFC 6376 §3.4.5 vectors)", () => {
 	it("empty body canonicalizes to empty; non-empty gains trailing CRLF", () => {
 		expect(canonicalizeBodyRelaxed(enc("")).length).toBe(0);
 		expect(dec(canonicalizeBodyRelaxed(enc("x")))).toBe("x\r\n");
+	});
+});
+
+describe("byte fidelity (0x80–0x9F must round-trip)", () => {
+	it("latin1Decode/latin1Encode round-trip every byte value", () => {
+		const all = new Uint8Array(256);
+		for (let i = 0; i < 256; i++) all[i] = i;
+		expect(latin1Encode(latin1Decode(all))).toEqual(all);
+	});
+
+	it("canonicalizeBodyRelaxed preserves high bytes", () => {
+		// body: 0x80 0x81 ... 0x9F CRLF — no WSP, so canonicalization must not alter it
+		const line = new Uint8Array(34);
+		for (let i = 0; i < 32; i++) line[i] = 0x80 + i;
+		line[32] = 0x0d;
+		line[33] = 0x0a;
+		expect(canonicalizeBodyRelaxed(line)).toEqual(line);
+	});
+
+	it("splitRawMessage headerBlock survives re-encoding byte-exactly", () => {
+		const raw = latin1Encode("X-Weird: café\r\n\r\nbody\r\n");
+		const { headerBlock } = splitRawMessage(raw);
+		expect(latin1Encode(headerBlock)).toEqual(raw.subarray(0, headerBlock.length));
 	});
 });
