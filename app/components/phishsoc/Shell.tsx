@@ -424,6 +424,8 @@ function NavContents({
 			    org root. The new card opens a base-ui Menu listing every
 			    mailbox the user has access to; selecting one navigates to the
 			    per-mailbox dashboard. */}
+			{/* `mailboxes` prop here is the inbox-navigable (non-sidecar) subset —
+			    see the `inboxMailboxes` filter at the Shell call site below. */}
 			<MailboxSwitcher
 				activeMailboxId={mailboxId}
 				mailbox={mailbox}
@@ -599,6 +601,9 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 	const { data: mailbox } = useMailbox(mailboxId);
 	const { data: mailboxes } = useMailboxes();
 	const mailboxCount = mailboxes?.length ?? 0;
+	// Sidecar mailboxes (#31) don't have an inbox view — they're managed from
+	// settings only — so the switcher (inbox navigation) excludes them.
+	const inboxMailboxes = mailboxes?.filter((m) => !m.sidecar);
 	// Authenticated identity for the sidebar account menu (#204). Hoisted
 	// to Shell so the same hook covers both the desktop sidebar render and
 	// the mobile drawer render — only one fetch per page, not two.
@@ -675,7 +680,7 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 		<NavContents
 			mailboxId={mailboxId}
 			mailbox={mailbox}
-			mailboxes={mailboxes}
+			mailboxes={inboxMailboxes}
 			mailboxCount={mailboxCount}
 			pipelineState={pipelineState}
 			theme={theme}
