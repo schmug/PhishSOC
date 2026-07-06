@@ -15,9 +15,11 @@
 
 import PostalMime from "postal-mime";
 import type { Env } from "../types";
-import type { MailboxInbound, CatchallInbound } from "./types";
+import type { MailboxInbound, CatchallInbound, GatewayInbound } from "./types";
+import type { DomainSettings } from "../../shared/domain-settings";
 import { getDomainSettings } from "../lib/domain-settings";
 import { getOrgSettings } from "../lib/org-settings";
+import { resolveRelayPolicy } from "../lib/relay-policy";
 
 const MAX_EMAIL_SIZE = 25 * 1024 * 1024;
 
@@ -85,8 +87,12 @@ export function topReceivedForAddress(headers: unknown): string | undefined {
  * Normalise a CF Email Routing event into a discriminated-union inbound value.
  *
  * - `MailboxInbound`  — recipient matched a registered mailbox.
- * - `CatchallInbound` — no registered mailbox, but recipient is on an owned
- *                       domain with `catchall_intel.enabled`.
+ * - `GatewayInbound`  — no registered mailbox, but the recipient's domain has
+ *                       an inline-gateway relay policy configured (issue #32).
+ *                       Takes precedence over `CatchallInbound`.
+ * - `CatchallInbound` — no registered mailbox and no gateway relay policy,
+ *                       but recipient is on an owned domain with
+ *                       `catchall_intel.enabled`.
  * - `null`            — silently drop (unowned domain, disabled catch-all, or
  *                       an envelope recipient whose mailbox JSON is missing).
  *
@@ -114,11 +120,15 @@ export function topReceivedForAddress(headers: unknown): string | undefined {
  * Any parse/stream failure throws so CF Email Routing can retry or bounce.
  */
 export async function normalizeInbound(
-	event: { raw: ReadableStream; rawSize: number; to?: string },
+	event: { raw: ReadableStream; rawSize: number; to?: string; from?: string },
 	env: Env,
-): Promise<MailboxInbound | CatchallInbound | null> {
+): Promise<MailboxInbound | CatchallInbound | GatewayInbound | null> {
 	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
 	const parsedEmail = await new PostalMime().parse(rawEmail);
+
+	// SMTP envelope sender (MAIL FROM); "" for bounces. Threaded through to
+	// MailboxInbound/GatewayInbound for the gateway relay (issue #32).
+	const envelopeFrom = event.from?.trim() ?? "";
 
 	// Authoritative envelope recipient (RCPT TO) for this per-copy delivery:
 	// the Cloudflare-stamped top `Received: ... for <addr>` wins over event.to.
@@ -146,6 +156,7 @@ export async function normalizeInbound(
 		rawEmail: rawEmail.buffer as ArrayBuffer,
 		parsedEmail,
 		mailboxId,
+		envelopeFrom,
 	});
 
 	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[]).map((a) => a.toLowerCase());
@@ -163,8 +174,8 @@ export async function normalizeInbound(
 				console.log("Ignoring email: envelope recipient is registered but has no mailbox.");
 				return null;
 			}
-			// Envelope recipient is not allow-listed — try catch-all for ITS domain.
-			return resolveCatchall([envelopeRecipient], rawEmail, parsedEmail, env);
+			// Envelope recipient is not allow-listed — try gateway, then catch-all, for ITS domain.
+			return resolveUnregistered([envelopeRecipient], rawEmail, parsedEmail, env, envelopeFrom);
 		}
 		// No authoritative envelope recipient (single-recipient / no-Received
 		// legacy path): fall back to scanning header addresses.
@@ -179,8 +190,8 @@ export async function normalizeInbound(
 			console.log("Ignoring email: registered address has no mailbox.");
 			return null;
 		}
-		// No address matched EMAIL_ADDRESSES — try catch-all for all recipients.
-		return resolveCatchall(allRecipients, rawEmail, parsedEmail, env);
+		// No address matched EMAIL_ADDRESSES — try gateway, then catch-all, for all recipients.
+		return resolveUnregistered(allRecipients, rawEmail, parsedEmail, env, envelopeFrom);
 	} else {
 		// No EMAIL_ADDRESSES configured: any recipient with a provisioned mailbox
 		// is deliverable.
@@ -192,7 +203,7 @@ export async function normalizeInbound(
 			if (await env.BUCKET.head(`mailboxes/${envelopeRecipient}.json`)) {
 				return mkMailbox(envelopeRecipient);
 			}
-			return resolveCatchall([envelopeRecipient], rawEmail, parsedEmail, env);
+			return resolveUnregistered([envelopeRecipient], rawEmail, parsedEmail, env, envelopeFrom);
 		}
 		// No authoritative envelope recipient: single-recipient / no-Received
 		// legacy path — resolve from the first header address, then catch-all.
@@ -201,7 +212,7 @@ export async function normalizeInbound(
 		if (await env.BUCKET.head(`mailboxes/${mailboxId}.json`)) {
 			return mkMailbox(mailboxId);
 		}
-		return resolveCatchall(allRecipients, rawEmail, parsedEmail, env);
+		return resolveUnregistered(allRecipients, rawEmail, parsedEmail, env, envelopeFrom);
 	}
 }
 
@@ -219,6 +230,42 @@ export async function getOwnedDomains(env: Env): Promise<string[]> {
 	} catch {
 		return seed;
 	}
+}
+
+/**
+ * Resolve an unregistered recipient: inline-gateway passthrough first
+ * (issue #32 — relay policy presence implies the operator fronts this
+ * domain), then catch-all intel, then drop.
+ */
+async function resolveUnregistered(
+	recipients: string[],
+	rawEmail: Uint8Array,
+	parsedEmail: Awaited<ReturnType<PostalMime["parse"]>>,
+	env: Env,
+	envelopeFrom: string,
+): Promise<CatchallInbound | GatewayInbound | null> {
+	for (const addr of recipients) {
+		const at = addr.lastIndexOf("@");
+		if (at < 0) continue;
+		const domain = addr.slice(at + 1).toLowerCase();
+		let settings: DomainSettings;
+		try {
+			settings = await getDomainSettings(env, domain);
+		} catch {
+			continue;
+		}
+		if (resolveRelayPolicy(settings)) {
+			return {
+				kind: "gateway",
+				rawEmail: rawEmail.buffer as ArrayBuffer,
+				parsedEmail,
+				recipient: addr,
+				domain,
+				envelopeFrom,
+			};
+		}
+	}
+	return resolveCatchall(recipients, rawEmail, parsedEmail, env);
 }
 
 async function resolveCatchall(

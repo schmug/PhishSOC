@@ -34,6 +34,11 @@ export interface MailboxInbound {
 	parsedEmail: Email;
 	/** The local-part@domain address that identifies the target mailbox. */
 	mailboxId: string;
+	/**
+	 * SMTP envelope sender (MAIL FROM) when the inbound provider exposes it;
+	 * used by gateway relay.
+	 */
+	envelopeFrom?: string;
 }
 
 /**
@@ -57,6 +62,25 @@ export interface CatchallInbound {
 	retentionDays: number;
 	/** From `catchall_intel.sample_limit` on the domain settings. */
 	sampleLimit: number;
+}
+
+/**
+ * Inbound message for an unregistered recipient on a domain the operator
+ * fronts as an inline gateway (issue #32). `resolveRelayPolicy` returning
+ * non-null on the recipient's domain settings is what selects this kind —
+ * it takes precedence over `CatchallInbound` (see `resolveUnregistered` in
+ * `workers/providers/cf-routing.ts`). Task 12 implements the scan → relay
+ * pipeline that consumes this value; today it's dispatched to a stub.
+ */
+export interface GatewayInbound {
+	kind: "gateway";
+	rawEmail: ArrayBuffer;
+	parsedEmail: Email;
+	/** Authoritative envelope recipient (RCPT TO). */
+	recipient: string;
+	domain: string;
+	/** SMTP envelope sender (MAIL FROM); "" for bounces. */
+	envelopeFrom: string;
 }
 
 /**
