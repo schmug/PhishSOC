@@ -65,4 +65,14 @@ describe("behaviorFor", () => {
 		expect(behaviorFor("quarantine", p, { passthrough: true })).toBe("relay");
 		expect(behaviorFor("block", p, { passthrough: true })).toBe("drop");
 	});
+
+	it("fails closed when an action is missing from the policy map", () => {
+		// Construct a policy with quarantine missing from actions.
+		const incompletePolicyMap = {
+			target: { host: "smtp-relay.gmail.com", port: 587, implicitTls: false },
+			actions: { allow: "relay", tag: "relay", block: "drop" } as any, // quarantine absent
+		};
+		// Should fall back to DEFAULT_RELAY_ACTIONS["quarantine"] = "hold", not undefined.
+		expect(behaviorFor("quarantine", incompletePolicyMap)).toBe("hold");
+	});
 });

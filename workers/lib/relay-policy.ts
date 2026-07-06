@@ -61,7 +61,7 @@ export function behaviorFor(
 	opts?: { passthrough?: boolean },
 ): RelayActionBehavior {
 	if (action === null) return "relay";
-	let behavior = policy.actions[action];
+	let behavior = policy.actions[action] ?? DEFAULT_RELAY_ACTIONS[action];
 	if (opts?.passthrough && behavior === "hold") behavior = "relay";
 	return behavior;
 }

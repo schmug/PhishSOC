@@ -144,4 +144,36 @@ describe("submitRaw", () => {
 		const { connectFn } = fakeSmtp(script);
 		await submitRaw({ ...BASE, implicitTls: true, port: 465, mailFrom: "", connectFn });
 	});
+
+	it("rejects mailFrom containing CRLF (SMTP command injection defense)", async () => {
+		const connectCalled = { value: false };
+		const connectFn: SmtpConnectFn = () => {
+			connectCalled.value = true;
+			throw new Error("Should not be called");
+		};
+		await expect(
+			submitRaw({
+				...BASE,
+				mailFrom: "sender@origin.test\r\nRCPT TO:<victim@evil.test>",
+				connectFn,
+			}),
+		).rejects.toBeInstanceOf(SmtpPermanentError);
+		expect(connectCalled.value).toBe(false);
+	});
+
+	it("rejects rcptTo containing CRLF (SMTP command injection defense)", async () => {
+		const connectCalled = { value: false };
+		const connectFn: SmtpConnectFn = () => {
+			connectCalled.value = true;
+			throw new Error("Should not be called");
+		};
+		await expect(
+			submitRaw({
+				...BASE,
+				rcptTo: "user@example.com\r\nBCC:<attacker@evil.test>",
+				connectFn,
+			}),
+		).rejects.toBeInstanceOf(SmtpPermanentError);
+		expect(connectCalled.value).toBe(false);
+	});
 });

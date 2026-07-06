@@ -129,6 +129,11 @@ export function dotStuff(raw: Uint8Array): Uint8Array {
 }
 
 export async function submitRaw(opts: SmtpSubmitOptions): Promise<void> {
+	// Reject CRLF/control chars in envelope addresses to prevent SMTP command injection.
+	if (/[\r\n]/.test(opts.mailFrom) || /[\r\n]/.test(opts.rcptTo)) {
+		throw new SmtpPermanentError("SMTP envelope address contains control characters");
+	}
+
 	const timeoutMs = opts.timeoutMs ?? 30_000;
 	const heloHost = opts.heloHost ?? "phishsoc-gateway.invalid";
 	const connectFn =
