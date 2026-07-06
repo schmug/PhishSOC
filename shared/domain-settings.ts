@@ -41,6 +41,47 @@ export const CatchallIntelSettings = z
 export type CatchallIntelSettings = z.infer<typeof CatchallIntelSettings>;
 
 /**
+ * Per-domain inline-gateway relay policy (issue #32).
+ *
+ * When `enabled` with a `target.host`, inbound mail for this domain is
+ * relayed to the backend over SMTP submission after the security pipeline
+ * runs; the verdict action maps through `actions` to decide relay/hold/drop.
+ *
+ * All fields optional so absent-key-inherits semantics are preserved.
+ * Defaults (port 587, STARTTLS, the fail-closed action map) live in
+ * `workers/lib/relay-policy.ts`, not on this schema.
+ */
+export const RelayActionBehavior = z.enum(["relay", "hold", "drop"]);
+export type RelayActionBehavior = z.infer<typeof RelayActionBehavior>;
+
+export const RelaySettings = z
+	.object({
+		enabled: z.boolean().optional(),
+		target: z
+			.object({
+				host: z.string().min(1).optional(),
+				port: z.number().int().min(1).max(65535).optional(),
+				implicitTls: z.boolean().optional(),
+			})
+			.passthrough()
+			.optional(),
+		/** Name of the Worker Secret holding `{"user":"...","pass":"..."}` JSON. */
+		credentialsSecret: z.string().optional(),
+		actions: z
+			.object({
+				allow: RelayActionBehavior.optional(),
+				tag: RelayActionBehavior.optional(),
+				quarantine: RelayActionBehavior.optional(),
+				block: RelayActionBehavior.optional(),
+			})
+			.passthrough()
+			.optional(),
+	})
+	.passthrough();
+
+export type RelaySettings = z.infer<typeof RelaySettings>;
+
+/**
  * Per-domain settings stored at R2 key `domains/<domain>.json` (#142).
  *
  * Sits between mailbox and org in the inheritance hierarchy:
@@ -75,6 +116,7 @@ export const DomainSettings = z
 		security: SecuritySettings.optional(),
 		intel: IntelSettings.optional(),
 		catchall_intel: CatchallIntelSettings.optional(),
+		relay: RelaySettings.optional(),
 	})
 	.passthrough();
 

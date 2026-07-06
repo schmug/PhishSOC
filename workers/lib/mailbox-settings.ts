@@ -486,6 +486,10 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 			return deepEqual(value, { enabled: false, retention_days: 30, sample_limit: 50 })
 				|| deepEqual(value, { enabled: false })
 				|| deepEqual(value, {});
+		case "relay":
+			// Off by default — strip the disabled/empty default so absent-key
+			// semantics are preserved; an enabled relay policy survives.
+			return deepEqual(value, { enabled: false }) || deepEqual(value, {});
 		default:
 			return false;
 	}
