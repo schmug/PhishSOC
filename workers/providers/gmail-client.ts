@@ -115,3 +115,122 @@ export async function mintAccessToken(
 		expiresAt: Date.now() + (data.expires_in - 60) * 1000,
 	};
 }
+
+async function gmailFetch(token: string, pathAndQuery: string, init?: RequestInit): Promise<Response> {
+	const res = await fetch(`${API_BASE}${pathAndQuery}`, {
+		...init,
+		headers: {
+			Authorization: `Bearer ${token}`,
+			...(init?.body ? { "Content-Type": "application/json" } : {}),
+			...(init?.headers ?? {}),
+		},
+	});
+	return res;
+}
+
+async function gmailJson<T>(token: string, pathAndQuery: string, init?: RequestInit): Promise<T> {
+	const res = await gmailFetch(token, pathAndQuery, init);
+	if (!res.ok) throw new GmailApiError(res.status, await res.text());
+	return (await res.json()) as T;
+}
+
+export async function getProfile(token: string): Promise<{ emailAddress: string; historyId: string }> {
+	const p = await gmailJson<{ emailAddress: string; historyId: string | number }>(token, "/profile");
+	return { emailAddress: p.emailAddress, historyId: String(p.historyId) };
+}
+
+export type HistoryResult =
+	| { ok: true; messageIds: string[]; historyId: string }
+	| { ok: false; expired: true };
+
+/** Gmail-internal labels that mark non-inbound messages we must never score. */
+const SKIP_LABELS = new Set(["DRAFT", "SENT", "CHAT"]);
+const MAX_HISTORY_PAGES = 3;
+
+/**
+ * List message ids added to INBOX since `startHistoryId`. A 404 means the
+ * cursor is older than Gmail's history retention — the caller must
+ * re-initialize from getProfile() and accept the gap.
+ */
+export async function listNewMessageIds(token: string, startHistoryId: string): Promise<HistoryResult> {
+	const ids: string[] = [];
+	const seen = new Set<string>();
+	let latestHistoryId = startHistoryId;
+	let pageToken: string | undefined;
+	for (let page = 0; page < MAX_HISTORY_PAGES; page++) {
+		const qs = new URLSearchParams({
+			startHistoryId,
+			historyTypes: "messageAdded",
+			labelId: "INBOX",
+		});
+		if (pageToken) qs.set("pageToken", pageToken);
+		const res = await gmailFetch(token, `/history?${qs.toString()}`);
+		if (res.status === 404) return { ok: false, expired: true };
+		if (!res.ok) throw new GmailApiError(res.status, await res.text());
+		const data = (await res.json()) as {
+			historyId?: string | number;
+			nextPageToken?: string;
+			history?: Array<{ messagesAdded?: Array<{ message?: { id?: string; labelIds?: string[] } }> }>;
+		};
+		if (data.historyId !== undefined) latestHistoryId = String(data.historyId);
+		for (const h of data.history ?? []) {
+			for (const added of h.messagesAdded ?? []) {
+				const m = added.message;
+				if (!m?.id || seen.has(m.id)) continue;
+				if ((m.labelIds ?? []).some((l) => SKIP_LABELS.has(l))) continue;
+				seen.add(m.id);
+				ids.push(m.id);
+			}
+		}
+		if (!data.nextPageToken) break;
+		pageToken = data.nextPageToken;
+	}
+	return { ok: true, messageIds: ids, historyId: latestHistoryId };
+}
+
+export async function getRawMessage(token: string, id: string): Promise<Uint8Array> {
+	const data = await gmailJson<{ raw: string }>(token, `/messages/${encodeURIComponent(id)}?format=raw`);
+	const b64 = data.raw.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(data.raw.length / 4) * 4, "=");
+	return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+/**
+ * Resolve label names → ids, creating any that don't exist yet. `cached`
+ * short-circuits everything when it already covers all names (the poller
+ * persists the map in sidecar_state.label_ids).
+ */
+export async function ensureLabels(
+	token: string,
+	names: string[],
+	cached: Record<string, string> | null,
+): Promise<Record<string, string>> {
+	if (cached && names.every((n) => typeof cached[n] === "string" && cached[n])) return cached;
+	const listed = await gmailJson<{ labels?: Array<{ id: string; name: string }> }>(token, "/labels");
+	const map: Record<string, string> = {};
+	for (const l of listed.labels ?? []) map[l.name] = l.id;
+	const out: Record<string, string> = {};
+	for (const name of names) {
+		if (map[name]) {
+			out[name] = map[name];
+			continue;
+		}
+		const created = await gmailJson<{ id: string }>(token, "/labels", {
+			method: "POST",
+			body: JSON.stringify({ name, labelListVisibility: "labelShow", messageListVisibility: "show" }),
+		});
+		out[name] = created.id;
+	}
+	return out;
+}
+
+export async function modifyMessage(
+	token: string,
+	id: string,
+	addLabelIds: string[],
+	removeLabelIds: string[],
+): Promise<void> {
+	await gmailJson(token, `/messages/${encodeURIComponent(id)}/modify`, {
+		method: "POST",
+		body: JSON.stringify({ addLabelIds, removeLabelIds }),
+	});
+}

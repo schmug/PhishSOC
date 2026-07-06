@@ -90,3 +90,143 @@ describe("mintAccessToken", () => {
 		await expect(mintAccessToken(sa, "user@tenant.example")).rejects.toMatchObject({ status: 401 });
 	});
 });
+
+function gmailDispatcher(routes: Record<string, (u: URL, init?: RequestInit) => Response | Promise<Response>>) {
+	return vi.fn(async (url: string | URL, init?: RequestInit) => {
+		const u = new URL(String(url));
+		if (u.hostname !== "gmail.googleapis.com") throw new Error(`unexpected host: ${u.hostname}`);
+		for (const [prefix, handler] of Object.entries(routes)) {
+			if (u.pathname.startsWith(`/gmail/v1/users/me${prefix}`)) return handler(u, init);
+		}
+		throw new Error(`unexpected path: ${u.pathname}`);
+	});
+}
+
+describe("getProfile", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	it("returns emailAddress and historyId", async () => {
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/profile": () => new Response(JSON.stringify({ emailAddress: "u@t.example", historyId: "4711", messagesTotal: 9 }), { status: 200 }),
+		}));
+		const { getProfile } = await import("../../workers/providers/gmail-client");
+		expect(await getProfile("tok")).toEqual({ emailAddress: "u@t.example", historyId: "4711" });
+	});
+});
+
+describe("listNewMessageIds", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("collects messagesAdded across pages, skipping DRAFT/SENT/CHAT, deduped", async () => {
+		let page = 0;
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/history": (u) => {
+				expect(u.searchParams.get("startHistoryId")).toBe("100");
+				expect(u.searchParams.get("historyTypes")).toBe("messageAdded");
+				expect(u.searchParams.get("labelId")).toBe("INBOX");
+				page += 1;
+				if (page === 1) {
+					return new Response(JSON.stringify({
+						historyId: "200",
+						nextPageToken: "p2",
+						history: [{ messagesAdded: [
+							{ message: { id: "m1", labelIds: ["INBOX"] } },
+							{ message: { id: "m2", labelIds: ["SENT"] } },
+						] }],
+					}), { status: 200 });
+				}
+				return new Response(JSON.stringify({
+					historyId: "200",
+					history: [{ messagesAdded: [
+						{ message: { id: "m1", labelIds: ["INBOX"] } }, // dupe
+						{ message: { id: "m3", labelIds: ["INBOX", "UNREAD"] } },
+					] }],
+				}), { status: 200 });
+			},
+		}));
+		const { listNewMessageIds } = await import("../../workers/providers/gmail-client");
+		const r = await listNewMessageIds("tok", "100");
+		expect(r).toEqual({ ok: true, messageIds: ["m1", "m3"], historyId: "200" });
+	});
+
+	it("returns { ok: false, expired: true } on a 404 (cursor too old)", async () => {
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/history": () => new Response("Not Found", { status: 404 }),
+		}));
+		const { listNewMessageIds } = await import("../../workers/providers/gmail-client");
+		expect(await listNewMessageIds("tok", "1")).toEqual({ ok: false, expired: true });
+	});
+
+	it("returns an empty list when the history response has no history key", async () => {
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/history": () => new Response(JSON.stringify({ historyId: "150" }), { status: 200 }),
+		}));
+		const { listNewMessageIds } = await import("../../workers/providers/gmail-client");
+		expect(await listNewMessageIds("tok", "100")).toEqual({ ok: true, messageIds: [], historyId: "150" });
+	});
+});
+
+describe("getRawMessage", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	it("decodes the base64url raw payload to bytes", async () => {
+		const raw = "Subject: hi\r\n\r\nbody";
+		const b64 = btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/messages/m1": (u) => {
+				expect(u.searchParams.get("format")).toBe("raw");
+				return new Response(JSON.stringify({ id: "m1", raw: b64 }), { status: 200 });
+			},
+		}));
+		const { getRawMessage } = await import("../../workers/providers/gmail-client");
+		const bytes = await getRawMessage("tok", "m1");
+		expect(new TextDecoder().decode(bytes)).toBe(raw);
+	});
+});
+
+describe("ensureLabels", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	it("returns the cache when it already covers every name (no fetch)", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("must not fetch"); }));
+		const { ensureLabels } = await import("../../workers/providers/gmail-client");
+		const cached = { "PhishPilot/Allow": "L1", "PhishPilot/Suspicious": "L2", "PhishPilot/Quarantine": "L3" };
+		expect(await ensureLabels("tok", Object.keys(cached), cached)).toEqual(cached);
+	});
+	it("lists existing labels and creates only the missing ones", async () => {
+		const created: string[] = [];
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/labels": async (u, init) => {
+				if (init?.method === "POST") {
+					const body = JSON.parse(String(init.body)) as { name: string };
+					created.push(body.name);
+					return new Response(JSON.stringify({ id: `NEW-${body.name}`, name: body.name }), { status: 200 });
+				}
+				return new Response(JSON.stringify({ labels: [{ id: "L1", name: "PhishPilot/Allow" }, { id: "X", name: "INBOX" }] }), { status: 200 });
+			},
+		}));
+		const { ensureLabels } = await import("../../workers/providers/gmail-client");
+		const map = await ensureLabels("tok", ["PhishPilot/Allow", "PhishPilot/Quarantine"], null);
+		expect(map["PhishPilot/Allow"]).toBe("L1");
+		expect(map["PhishPilot/Quarantine"]).toBe("NEW-PhishPilot/Quarantine");
+		expect(created).toEqual(["PhishPilot/Quarantine"]);
+	});
+});
+
+describe("modifyMessage", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	it("POSTs addLabelIds/removeLabelIds and throws GmailApiError on failure", async () => {
+		let body: unknown;
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/messages/m1/modify": async (_u, init) => {
+				body = JSON.parse(String(init?.body));
+				return new Response("{}", { status: 200 });
+			},
+		}));
+		const { modifyMessage } = await import("../../workers/providers/gmail-client");
+		await modifyMessage("tok", "m1", ["L3"], ["INBOX"]);
+		expect(body).toEqual({ addLabelIds: ["L3"], removeLabelIds: ["INBOX"] });
+
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/messages/m1/modify": () => new Response("denied", { status: 403 }),
+		}));
+		await expect(modifyMessage("tok", "m1", ["L3"], [])).rejects.toMatchObject({ status: 403 });
+	});
+});
