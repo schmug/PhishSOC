@@ -10,3 +10,6 @@
 ## 2026-07-03 - Missing ARIA roles on custom tab interfaces
 **Learning:** Custom tab interfaces built with `<div>` and `<button>` elements require explicit ARIA roles to be correctly interpreted by screen readers. The `AgentSidebar` used standard buttons for tab navigation but lacked the semantic structure of a tablist.
 **Action:** When implementing custom tab UI patterns, always wrap the tab buttons in a container with `role="tablist"` and give each button `role="tab"`, `aria-selected`, and `aria-controls`. Wrap the corresponding content areas with `role="tabpanel"`, `aria-labelledby`, and ensure the active tabpanel is reachable via keyboard using `tabIndex={0}`.
+## 2026-07-06 - Missing aria-label on icon-only interactive elements
+**Learning:** Icon-only buttons (such as the "Star" action in email lists) must include descriptive `aria-label` attributes for screen readers, as the icon components (`<StarIcon>`) do not provide meaningful semantic text content by default.
+**Action:** Always provide an `aria-label` on `<button>` elements that only contain an icon or visual indicator without visible textual description to ensure accessibility.
