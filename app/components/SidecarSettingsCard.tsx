@@ -94,7 +94,7 @@ export function SidecarSettingsCard(props: {
 					Workspace sidecar
 					{health && (
 						<span data-testid="sidecar-health-badge">
-							<Badge variant={health.healthy ? "secondary" : "primary"}>
+							<Badge variant={health.healthy ? "secondary" : "destructive"}>
 								{health.healthy ? "Healthy" : "Attention needed"}
 							</Badge>
 						</span>
