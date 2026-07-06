@@ -409,6 +409,7 @@ export default function EmailListRoute() {
 										<button
 											type="button"
 											className="shrink-0 p-0.5 bg-transparent border-0 cursor-pointer"
+											aria-label={email.starred ? "Unstar message" : "Star message"}
 											onClick={(e) => {
 												e.stopPropagation();
 												toggleStar(e, email);
