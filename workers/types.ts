@@ -31,6 +31,12 @@ export interface Env extends Cloudflare.Env {
 	 */
 	CONFIRMATION_TOKEN_SECRET?: string;
 	/**
+	 * PKCS8 PEM private key for ARC sealing on gateway relay (issue #32).
+	 * Set with `wrangler secret put ARC_SEAL_PRIVATE_KEY`. Absent → relay
+	 * proceeds unsealed.
+	 */
+	ARC_SEAL_PRIVATE_KEY?: string;
+	/**
 	 * HMAC-SHA256 shared secret for authenticating yaramail sidecar callbacks.
 	 * Set with `wrangler secret put YARAMAIL_CALLBACK_SECRET`.
 	 * When absent, the yaramail callback route returns 503.

@@ -490,6 +490,9 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 			// Off by default — strip the disabled/empty default so absent-key
 			// semantics are preserved; an enabled relay policy survives.
 			return deepEqual(value, { enabled: false }) || deepEqual(value, {});
+		case "gateway":
+			// Org-tier ARC sealer identity — strip only the empty object.
+			return deepEqual(value, {});
 		default:
 			return false;
 	}
