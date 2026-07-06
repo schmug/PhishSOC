@@ -32,6 +32,8 @@ import { tlsrptRoutes } from "./routes/tlsrpt";
 import { caseRoutes } from "./routes/cases";
 import { sendEmailRoutes } from "./routes/send-email";
 import { hubUiRoutes } from "./routes/hub-ui";
+import { sidecarRoutes } from "./routes/sidecar";
+import { sidecarConfigOf, sidecarHealthOf } from "./lib/sidecar-config";
 import {
 	aggregateDomainStats,
 	aggregateDomainsList,
@@ -159,6 +161,7 @@ app.route("/api/v1/mailboxes/:mailboxId/dmarc", dmarcRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/tlsrpt", tlsrptRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/hub", hubUiRoutes);
+app.route("/api/v1/mailboxes/:mailboxId/sidecar", sidecarRoutes);
 app.route("/api/v1/mailboxes/:mailboxId", sendEmailRoutes);
 
 // Rejects strings that aren't registrable domains (no protocol, path, @, single label).
@@ -276,16 +279,35 @@ app.get("/api/v1/mailboxes", async (c) => {
 
 	// Exclude honeypot mailboxes (#24) — they are IOC sensors and must never
 	// surface in the user UI, regardless of ACL. Settings reads are cached.
-	const honeypotFlags = await Promise.all(
+	// Widened (#31) to also capture the sidecar flag in the same pass.
+	const flags = await Promise.all(
 		rawMailboxes.map(async (m) => {
 			try {
-				return !!(await resolveMailboxSettings(c.env, m.id)).raw?.honeypot?.enabled;
+				const raw = (await resolveMailboxSettings(c.env, m.id)).raw;
+				return { honeypot: !!raw?.honeypot?.enabled, sidecar: !!sidecarConfigOf(raw) };
 			} catch {
-				return false;
+				return { honeypot: false, sidecar: false };
 			}
 		}),
 	);
-	const allMailboxes = rawMailboxes.filter((_, i) => !honeypotFlags[i]);
+	// Sidecar mailboxes also carry poll health so the list can render a
+	// warning badge (spec: "renewal/poll failure raises a Settings warning
+	// within one cycle"). One extra DO call per SIDECAR mailbox only.
+	const healths = await Promise.all(
+		rawMailboxes.map(async (m, i) => {
+			if (!flags[i].sidecar) return null;
+			try {
+				const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(m.id));
+				const state = await stub.getSidecarState();
+				return sidecarHealthOf(state);
+			} catch {
+				return { healthy: false, last_poll_at: null, last_error: "state unavailable" };
+			}
+		}),
+	);
+	const allMailboxes = rawMailboxes
+		.map((m, i) => ({ ...m, sidecar: flags[i].sidecar, sidecar_health: healths[i] }))
+		.filter((_, i) => !flags[i].honeypot);
 
 	// Read ACLs for all mailboxes — needed for acl_status (#241) in both branches.
 	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
@@ -1018,11 +1040,22 @@ app.post("/api/v1/honeypots", async (c) => {
 	return c.json({ created, domain, expires_at: expiresAt, count: created.length }, 201);
 });
 
-app.get("/api/v1/mailboxes/:mailboxId", async (c) => {
+app.get("/api/v1/mailboxes/:mailboxId", async (c: AppContext) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const obj = await c.env.BUCKET.get(`mailboxes/${mailboxId}.json`);
 	if (!obj) return c.json({ error: "Not found" }, 404);
-	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings: await obj.json() });
+	const settings = await obj.json();
+
+	// Sidecar poll health (#31) — null when this mailbox has no sidecar
+	// config, so the Settings UI only renders the health badge when relevant.
+	const sidecarCfg = sidecarConfigOf(settings);
+	let sidecar_health: ReturnType<typeof sidecarHealthOf> | null = null;
+	if (sidecarCfg) {
+		const state = await c.var.mailboxStub.getSidecarState().catch(() => null);
+		sidecar_health = sidecarHealthOf(state);
+	}
+
+	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings, sidecar_health });
 });
 
 app.get("/api/v1/mailboxes/:mailboxId/dashboard", async (c: AppContext) => {

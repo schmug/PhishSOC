@@ -40,3 +40,38 @@ export function sidecarConfigOf(raw: unknown): SidecarConfig | null {
 		retention_days: parsed.data.retention_days ?? SIDECAR_DEFAULT_RETENTION_DAYS,
 	};
 }
+
+/** Poll-health fields the DO's `getSidecarState()` RPC returns — only the
+ * subset `sidecarHealthOf` needs. */
+export interface SidecarHealthState {
+	consecutive_failures: number;
+	last_poll_at: number | null;
+	last_error: string | null;
+}
+
+export interface SidecarHealth {
+	healthy: boolean;
+	last_poll_at: number | null;
+	last_error: string | null;
+}
+
+/** Staleness threshold: a poll cursor older than this counts as unhealthy
+ * even with zero consecutive failures (stuck cron, revoked grant, etc). */
+export const SIDECAR_HEALTH_STALE_MS = 15 * 60 * 1000;
+
+/**
+ * Compute the poll-health surfaced to operators (mailbox list badge + the
+ * single-mailbox GET). `healthy` = fewer than 3 consecutive failures AND
+ * either never polled yet, or the last poll is within the staleness
+ * window. `state` is null when the DO has no sidecar_state row yet (before
+ * the first poll) — that still resolves to healthy (never-polled counts
+ * as healthy, not stale).
+ */
+export function sidecarHealthOf(state: SidecarHealthState | null): SidecarHealth {
+	const stale = state?.last_poll_at != null && Date.now() - state.last_poll_at > SIDECAR_HEALTH_STALE_MS;
+	return {
+		healthy: (state?.consecutive_failures ?? 0) < 3 && !stale,
+		last_poll_at: state?.last_poll_at ?? null,
+		last_error: state?.last_error ?? null,
+	};
+}
