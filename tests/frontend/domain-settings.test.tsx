@@ -319,6 +319,27 @@ describe("DomainSettings · Inline gateway relay card (#32 task 13)", () => {
 		expect(payload.relay).toEqual({ enabled: false });
 	});
 
+	it("saves a typed port of 0 as 0, not the 587 fallback", async () => {
+		const user = userEvent.setup();
+		domainSettingsFixture = {
+			domain: "acme.com",
+			settings: { relay: { enabled: true, target: { host: "relay.example.com", port: 587 } } },
+		};
+		renderDomainSettings();
+
+		await screen.findByRole("checkbox", { name: /inline gateway relay/i });
+		const portInput = screen.getByLabelText(/^port$/i);
+		await user.clear(portInput);
+		await user.type(portInput, "0");
+
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+		const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+		const relay = payload.relay as { target: { port: number } };
+		expect(relay.target.port).toBe(0);
+	});
+
 	it("omits credentialsSecret and actions when left at defaults", async () => {
 		const user = userEvent.setup();
 		domainSettingsFixture = {

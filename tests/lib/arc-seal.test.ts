@@ -1,7 +1,13 @@
 import { describe, expect, it, beforeAll } from "vitest";
 // mailauth is Node-only — fine here (tests run in the Node pool), forbidden in workers/.
 import { authenticate } from "mailauth";
-import { hasExistingArcChain, latin1Encode, sealMessage } from "../../workers/lib/arc-seal";
+import {
+	canonicalizeBodyRelaxed,
+	hasExistingArcChain,
+	latin1Decode,
+	latin1Encode,
+	sealMessage,
+} from "../../workers/lib/arc-seal";
 
 const SEALER = "gw.example.com";
 const SELECTOR = "arc1";
@@ -102,5 +108,38 @@ describe("sealMessage", () => {
 		const raw = latin1Encode(withChain);
 		expect(hasExistingArcChain(raw)).toBe(true);
 		expect(await sealMessage(raw, OPTS())).toBeNull();
+	});
+});
+
+describe("latin1Decode", () => {
+	it("round-trips every byte 0x80-0xFF 1:1 (not windows-1252)", () => {
+		const bytes = new Uint8Array(0x80);
+		for (let i = 0; i < bytes.length; i++) bytes[i] = 0x80 + i;
+		const decoded = latin1Decode(bytes);
+		expect(decoded.length).toBe(bytes.length);
+		for (let i = 0; i < bytes.length; i++) {
+			expect(decoded.charCodeAt(i)).toBe(bytes[i]);
+		}
+		expect(latin1Encode(decoded)).toEqual(bytes);
+	});
+
+	it("round-trips high bytes across the >64KB chunk boundary", () => {
+		const size = 0x8000 * 2 + 10; // spans multiple 0x8000-byte chunks
+		const bytes = new Uint8Array(size);
+		for (let i = 0; i < size; i++) bytes[i] = 0x80 + (i % 0x80);
+		const decoded = latin1Decode(bytes);
+		expect(decoded.length).toBe(size);
+		expect(latin1Encode(decoded)).toEqual(bytes);
+	});
+});
+
+describe("canonicalizeBodyRelaxed", () => {
+	it("round-trips high bytes 0x80-0xFF through canonicalization", () => {
+		const line = latin1Encode(
+			Array.from({ length: 0x80 }, (_, i) => String.fromCharCode(0x80 + i)).join(""),
+		);
+		const body = new Uint8Array([...line, 13, 10]); // trailing CRLF, no trailing blank lines
+		const result = canonicalizeBodyRelaxed(body);
+		expect(latin1Decode(result)).toBe(latin1Decode(line) + "\r\n");
 	});
 });
