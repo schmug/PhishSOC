@@ -87,6 +87,12 @@ export class WorkspaceProvider implements MailProvider {
 		if (!msg.providerMessageId) return;
 		const v = verdict as { action?: string } | null;
 		if (!v?.action) return;
+		// Resolve config FIRST and bail before any credential/token/network work
+		// unless the mailbox is in active mode. Only active mode writes labels
+		// (spec invariant); observe mode must never touch the tenant's Gmail.
+		const raw = await getMailboxSettings(env, msg.mailboxId);
+		const cfg = sidecarConfigOf(raw);
+		if (!cfg || cfg.mode !== "active") return;
 		const creds = await sidecarCredentials(env, msg.mailboxId);
 		if (!creds) return;
 		const labelIds = await ensureLabels(creds.token, [...SIDECAR_LABEL_NAMES], creds.cachedLabelIds);
