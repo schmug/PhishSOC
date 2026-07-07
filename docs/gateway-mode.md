@@ -21,8 +21,8 @@ signing, and outbound scanning are tracked in follow-up issues.
    a full mirror copy of everything regardless.
 
 Recipients with no registered PhishSOC mailbox are scored with domain-tier
-settings, capped at `tag` (there is no mailbox to quarantine into), relayed,
-and NOT stored.
+settings; a `quarantine` or `block` verdict is capped at `tag` (there is no
+mailbox to quarantine or drop into), relayed, and NOT stored.
 
 ## Limitations (read first)
 

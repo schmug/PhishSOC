@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	dotStuff,
 	SmtpPermanentError,
 	SmtpTransientError,
 	submitRaw,
@@ -175,5 +176,13 @@ describe("submitRaw", () => {
 			}),
 		).rejects.toBeInstanceOf(SmtpPermanentError);
 		expect(connectCalled.value).toBe(false);
+	});
+});
+
+describe("dotStuff", () => {
+	it("preserves high bytes (0x80-0xFF) unchanged", () => {
+		const highBytes = new Uint8Array(Array.from({ length: 128 }, (_, i) => 0x80 + i));
+		const raw = new Uint8Array([...highBytes, 0x0d, 0x0a]);
+		expect(dotStuff(raw)).toEqual(raw);
 	});
 });
