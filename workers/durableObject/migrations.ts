@@ -578,6 +578,15 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE emails ADD COLUMN body_reaped_at TEXT;
         `,
 	},
+	{
+		// Inline-gateway relay outcome tracking (issue #32). NULL when the
+		// domain has no relay policy (or ingest predates this migration);
+		// "relayed" | "held" | "failed" once a relay decision is made in
+		// `receiveEmail`. See workers/lib/gateway-relay.ts. Renumbered from 26
+		// to 27 on the #587 (API-sidecar, migration 26) merge.
+		name: "27_relay_status",
+		sql: `ALTER TABLE emails ADD COLUMN relay_status TEXT;`,
+	},
 ];
 
 /**

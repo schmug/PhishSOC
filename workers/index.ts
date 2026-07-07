@@ -18,10 +18,12 @@ import {
 } from "./lib/mailbox-settings";
 import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, mergeOrgSettingsPut } from "./lib/org-settings";
 import { OrgSettings } from "../shared/org-settings";
-import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
+import { getDomainSettings, putDomainSettings, domainFromMailboxId } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings, SidecarSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline, type FinalVerdict } from "./security";
+import { resolveRelayPolicy } from "./lib/relay-policy";
+import { relayAfterVerdict } from "./lib/gateway-relay";
 import { dispatchNewEmailNotification } from "./lib/new-email-notify";
 import { parseAuthResults } from "./security/auth";
 import { runDeepScan } from "./intel/deep-scan";
@@ -848,6 +850,17 @@ app.put("/api/v1/domains/:domain/settings", async (c) => {
 	const parsed = DomainSettings.safeParse(body?.settings ?? {});
 	if (!parsed.success) {
 		return c.json({ error: "Invalid domain settings", issues: parsed.error.issues }, 400);
+	}
+	// The relay target host + credentials-secret name in this tier are
+	// operator-trusted primitives (an inline gateway relays live SMTP
+	// credentials to whatever host is configured here), so writing them is
+	// restricted to domains this org actually owns — parity with the
+	// ownership gate on catch-all routing and on gateway routing
+	// (workers/providers/cf-routing.ts). Reading settings for an unowned
+	// domain is left unrestricted above: it harmlessly returns {}.
+	const owned = await getOwnedDomains(c.env);
+	if (!owned.includes(domain)) {
+		return c.json({ error: "Domain is not in this org's domains; add it via POST /api/v1/org/domains first." }, 403);
 	}
 	// Symmetry with #106's mailbox PUT/POST: drop fields equal to the
 	// system default before persisting so a fresh form save with rendered
@@ -1797,6 +1810,32 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 						(err as Error).message,
 					);
 				});
+		}
+	}
+
+	// Inline gateway relay (issue #32). When this mailbox's domain has an
+	// enabled relay policy, the verdict decides whether the message ALSO
+	// relays to the backend MX. Storage above is untouched — relay is
+	// additive for registered mailboxes. Transient SMTP failures throw out
+	// of receiveEmail so CF Email Routing defers and the origin retries
+	// (may re-store a duplicate; accepted, see spec); permanent failures
+	// keep the mirror copy, alert, and mark relay_status=failed.
+	const relayDomain = domainFromMailboxId(mailboxId);
+	const relayPolicy = relayDomain ? resolveRelayPolicy(await getDomainSettings(env, relayDomain)) : null;
+	if (relayPolicy) {
+		const outcome = await relayAfterVerdict({
+			env,
+			ctx,
+			raw: new Uint8Array(normalized.rawEmail),
+			verdict: securityVerdict,
+			policy: relayPolicy,
+			envelopeFrom: normalized.envelopeFrom ?? "",
+			rcptTo: mailboxId,
+		});
+		const status =
+			outcome === "relayed" ? "relayed" : outcome === "failed_permanent" ? "failed" : outcome === "held" ? "held" : null;
+		if (status) {
+			await stub.setRelayStatus(messageId, status).catch((e) => console.error("setRelayStatus failed:", (e as Error).message));
 		}
 	}
 

@@ -8,6 +8,7 @@ import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
 import { app as apiApp, receiveEmail, receiveCatchall, reapExpiredHoneypots } from "./index";
 import { normalizeInbound } from "./providers/cf-routing";
+import { receiveGatewayPassthrough } from "./lib/gateway-receive";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
 import { pollSidecarMailboxes, reapSidecarBodies } from "./providers/workspace";
@@ -166,7 +167,10 @@ export default {
 		// `to` is the SMTP envelope recipient (RCPT TO) Cloudflare Email
 		// Routing matched its rule on; normalizeInbound resolves the target
 		// mailbox from it rather than trusting the parsed `To:` header.
-		event: { raw: ReadableStream; rawSize: number; to?: string },
+		// `from` is the envelope MAIL FROM — the runtime `ForwardableEmailMessage`
+		// carries it even though the previous signature omitted it; the gateway
+		// relay path (issue #32) needs it to preserve the original sender.
+		event: { raw: ReadableStream; rawSize: number; to?: string; from?: string },
 		env: Env,
 		ctx: ExecutionContext,
 	) {
@@ -175,6 +179,8 @@ export default {
 			if (!normalized) return;
 			if (normalized.kind === "catchall") {
 				await receiveCatchall(normalized, env, ctx);
+			} else if (normalized.kind === "gateway") {
+				await receiveGatewayPassthrough(normalized, env, ctx);
 			} else {
 				await receiveEmail(normalized, env, ctx);
 			}

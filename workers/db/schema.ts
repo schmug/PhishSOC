@@ -41,6 +41,10 @@ export const emails = sqliteTable("emails", {
 	// migration, or pipeline threw before persistence).
 	stage_trace: text("stage_trace"),
 	deep_scan_status: text("deep_scan_status").default("pending"),
+	// Inline-gateway relay outcome (issue #32): "relayed" | "held" |
+	// "failed"; NULL when the domain has no relay policy (or ingest
+	// predates the gateway feature).
+	relay_status: text("relay_status"),
 	created_by: text("created_by").default("user"),
 });
 

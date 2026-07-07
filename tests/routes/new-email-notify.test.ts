@@ -286,4 +286,21 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
 		expect(body.text).not.toContain("attacker@evil.example|");
 		expect(body.text).toContain("attacker@evil.example");
 	});
+
+	it("inline-gateway relay branch (issue #32) is inert when the domain has no relay policy", async () => {
+		// makeEnv's BUCKET only stubs head/put; BUCKET.get is undefined, so
+		// getDomainSettings' fetch throws internally and it falls back to `{}`,
+		// which resolveRelayPolicy resolves to null — no relay attempted, and
+		// setRelayStatus (not present in makeMailboxStub) is never invoked.
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		// receiveEmail resolves without throwing. Its return value is irrelevant
+		// here — #587 changed it from void to a ReceiveEmailResult; inertness is
+		// proven by setRelayStatus never being invoked, below.
+		await receiveEmail(makeNormalized(makeEmail()), makeEnv(stub, { NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL }), ctx);
+		await settle();
+
+		expect(stub.createEmail).toHaveBeenCalledOnce();
+		expect((stub as Record<string, unknown>).setRelayStatus).toBeUndefined();
+	});
 });

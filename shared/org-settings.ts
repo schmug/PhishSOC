@@ -53,6 +53,18 @@ export const OrgSettings = z
      * `DELETE /api/v1/org/domains/:domain`.
      */
     domains: z.array(z.string()).optional(),
+    /**
+     * Inline-gateway ARC sealer identity (issue #32). One sealer per
+     * deployment; the PKCS8 private key lives in the
+     * `ARC_SEAL_PRIVATE_KEY` Worker Secret, never in this blob.
+     */
+    gateway: z
+      .object({
+        arcSealerDomain: z.string().optional(),
+        arcSelector: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
