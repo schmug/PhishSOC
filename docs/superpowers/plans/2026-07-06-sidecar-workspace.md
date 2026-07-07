@@ -2732,7 +2732,8 @@ One secret can serve many monitored mailboxes in the same tenant.
 | Test connection: stage `auth` (401) | DWD grant missing/wrong client ID, or scope not granted |
 | Label writes fail with 403, reads fine | Grant is `gmail.readonly`; widen to `gmail.modify` |
 | Settings warning: "history gap" | Poll cursor expired (Gmail retains history ~1 week); monitoring reinitialized from now — mail during the gap was not scored |
-| Health: unhealthy, `consecutive_failures` ≥ 5 | Poller backed off to 15-minute retries; fix the recorded `last_error`, next success resets it |
+| Health: unhealthy (`consecutive_failures` ≥ 3, or last poll > 15 min ago) | Fix the recorded `last_error`; the next successful poll resets the counters |
+| Failures reach ≥ 5 | Poller backs off to 15-minute retries until a success |
 ```
 
 - [ ] **Step 2: Add the CLAUDE.md subsystem row**
