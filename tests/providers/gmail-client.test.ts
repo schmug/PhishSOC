@@ -1,6 +1,6 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	parseServiceAccountJson,
 	mintAccessToken,

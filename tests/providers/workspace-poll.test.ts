@@ -1,6 +1,6 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../workers/index", () => ({
 	receiveEmail: vi.fn(),
@@ -279,6 +279,64 @@ describe("pollWorkspaceMailbox", () => {
 		const r2 = await pollWorkspaceMailbox(makeEnv(stub2), ctx, "user@tenant.example", CFG);
 		expect(r2).toMatchObject({ processed: 5, deduped: MAX_MESSAGES_PER_POLL });
 		expect(stub2.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBe("999");
+	});
+
+	it("mid-batch throw: at-least-once — processed>0 with the cursor frozen", async () => {
+		// g1 succeeds, g2's messages.get 500s: the batch aborts AFTER g1 was
+		// ingested. processed must be 1 (g1 is stored) AND the cursor must be
+		// frozen so g2+ are retried next poll — at-least-once, never skip.
+		const stub = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-x", verdict: null });
+		const many = [0, 1, 2].map((i) => ({ message: { id: `g${i}`, labelIds: ["INBOX"] } }));
+		gmailFetch({
+			"/history": () => new Response(JSON.stringify({ historyId: "777", history: [{ messagesAdded: many }] }), { status: 200 }),
+			"/messages/g1": () => new Response("boom", { status: 500 }),
+			"/messages/": (u) => {
+				const id = u.pathname.split("/").pop()!;
+				return new Response(JSON.stringify({ id, raw: rawMessage(`${id}@x`, "s") }), { status: 200 });
+			},
+		});
+		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(r.error).not.toBeNull();
+		expect(r.processed).toBe(1); // g0 ingested before g1 threw
+		const patch = stub.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch.history_cursor).toBeUndefined(); // frozen
+		expect(patch.consecutive_failures).toBe(1);
+	});
+
+	it("token mint gate: near-expiry token is refreshed and the new token is persisted", async () => {
+		const { makeTestServiceAccount } = await import("./helpers");
+		const { sa } = await makeTestServiceAccount();
+		// Token inside the 5-minute refresh margin → mint a fresh one.
+		const stub = makeStub({ ...freshState("100"), token_expires_at: Date.now() + 60_000 });
+		mockedReceive.mockResolvedValue({ messageId: "local-x", verdict: null });
+
+		let tokenFetched = false;
+		vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => {
+			const u = new URL(String(url));
+			if (u.hostname === "oauth2.googleapis.com" && u.pathname === "/token") {
+				tokenFetched = true;
+				return new Response(JSON.stringify({ access_token: "fresh-tok", expires_in: 3600, token_type: "Bearer" }), { status: 200 });
+			}
+			if (u.hostname === "gmail.googleapis.com") {
+				if (u.pathname.startsWith("/gmail/v1/users/me/history")) {
+					return new Response(JSON.stringify({ historyId: "200", history: [{ messagesAdded: [{ message: { id: "g1", labelIds: ["INBOX"] } }] }] }), { status: 200 });
+				}
+				if (u.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+					return new Response(JSON.stringify({ id: "g1", raw: rawMessage("m1@x", "s") }), { status: 200 });
+				}
+			}
+			throw new Error(`unexpected fetch ${u.hostname}${u.pathname}`);
+		}));
+
+		const env = makeEnv(stub);
+		(env as unknown as Record<string, unknown>).SIDECAR_SECRET_test = JSON.stringify(sa);
+		const r = await pollWorkspaceMailbox(env, ctx, "user@tenant.example", CFG);
+		expect(r.error).toBeNull();
+		expect(tokenFetched).toBe(true);
+		const patch = stub.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch.access_token).toBe("fresh-tok");
+		expect(patch.token_expires_at).toBeGreaterThan(Date.now() + 3000_000);
 	});
 
 	it("truncated history (page cap) freezes the cursor even when processed < MAX", async () => {
