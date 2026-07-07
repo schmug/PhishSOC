@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
 	SmtpPermanentError,
 	SmtpTransientError,
+	dotStuff,
 	submitRaw,
 	type SmtpConnectFn,
 	type SmtpSocketLike,
 } from "../../workers/lib/smtp-client";
+import { latin1Decode, latin1Encode } from "../../workers/lib/arc-seal";
 
 /**
  * Scripted fake SMTP server. Each entry: a regex the next client line must
@@ -101,6 +103,23 @@ function happyScript(): ScriptStep[] {
 		{ expect: /^QUIT$/, reply: "221 bye" },
 	];
 }
+
+describe("dotStuff", () => {
+	it("preserves bytes 0x80-0xFF byte-for-byte while doubling a leading dot", () => {
+		const bytes = new Uint8Array(256);
+		for (let i = 0; i < 256; i++) bytes[i] = i;
+		const prefix = "Subject: t\r\n\r\n.";
+		const raw = new Uint8Array([...latin1Encode(prefix), ...bytes, ...latin1Encode("\r\n")]);
+		const stuffed = dotStuff(raw);
+		const text = latin1Decode(stuffed);
+		const stuffedPrefix = "Subject: t\r\n\r\n..";
+		expect(text.startsWith(stuffedPrefix)).toBe(true);
+		for (let i = 0; i < 256; i++) {
+			expect(text.charCodeAt(stuffedPrefix.length + i)).toBe(bytes[i]);
+		}
+		expect(text.endsWith("\r\n")).toBe(true);
+	});
+});
 
 describe("submitRaw", () => {
 	it("walks the full STARTTLS + AUTH submission flow and dot-stuffs", async () => {

@@ -169,6 +169,8 @@ export default function DomainSettingsRoute() {
 
 		const existing = (data?.settings ?? {}) as DomainSettingsShape;
 		const normalizedHub = hubOverride ? normalizeHubConfig(hub) : undefined;
+		const parsedRelayPort = Number.parseInt(relayPort, 10);
+		const resolvedRelayPort = Number.isNaN(parsedRelayPort) ? 587 : parsedRelayPort;
 
 		let nextIntel: DomainSettingsShape["intel"];
 		if (hubOverride) {
@@ -200,7 +202,7 @@ export default function DomainSettingsRoute() {
 						enabled: true,
 						target: {
 							host: relayHost.trim(),
-							port: Number.parseInt(relayPort, 10) || 587,
+							port: resolvedRelayPort,
 							implicitTls: relayImplicitTls,
 						},
 						...(relayCredentialsSecret.trim() ? { credentialsSecret: relayCredentialsSecret.trim() } : {}),

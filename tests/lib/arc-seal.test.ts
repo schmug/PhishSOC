@@ -1,7 +1,13 @@
 import { describe, expect, it, beforeAll } from "vitest";
 // mailauth is Node-only — fine here (tests run in the Node pool), forbidden in workers/.
 import { authenticate } from "mailauth";
-import { hasExistingArcChain, latin1Encode, sealMessage } from "../../workers/lib/arc-seal";
+import {
+	canonicalizeBodyRelaxed,
+	hasExistingArcChain,
+	latin1Decode,
+	latin1Encode,
+	sealMessage,
+} from "../../workers/lib/arc-seal";
 
 const SEALER = "gw.example.com";
 const SELECTOR = "arc1";
@@ -102,5 +108,37 @@ describe("sealMessage", () => {
 		const raw = latin1Encode(withChain);
 		expect(hasExistingArcChain(raw)).toBe(true);
 		expect(await sealMessage(raw, OPTS())).toBeNull();
+	});
+});
+
+describe("latin1Decode / latin1Encode byte fidelity", () => {
+	it("round-trips all bytes 0x00-0xFF, including the 0x80-0x9F windows-1252 trap range", () => {
+		const bytes = new Uint8Array(256);
+		for (let i = 0; i < 256; i++) bytes[i] = i;
+		const decoded = latin1Decode(bytes);
+		expect(decoded.length).toBe(256);
+		for (let i = 0; i < 256; i++) expect(decoded.charCodeAt(i)).toBe(i);
+		expect(latin1Encode(decoded)).toEqual(bytes);
+	});
+
+	it("round-trips a buffer spanning multiple internal 0x8000-byte chunks", () => {
+		const SIZE = 200_000; // several multiples of the 0x8000 (32KB) chunk boundary
+		const bytes = new Uint8Array(SIZE);
+		for (let i = 0; i < SIZE; i++) bytes[i] = i & 0xff;
+		const decoded = latin1Decode(bytes);
+		expect(decoded.length).toBe(SIZE);
+		for (const boundary of [0x7fff, 0x8000, 0x8001, 0x10000, 0x18000, SIZE - 1]) {
+			expect(decoded.charCodeAt(boundary)).toBe(bytes[boundary]);
+		}
+		expect(latin1Encode(decoded)).toEqual(bytes);
+	});
+});
+
+describe("canonicalizeBodyRelaxed with high-byte content", () => {
+	it("preserves bytes 0x80-0xFF while collapsing WSP runs and stripping trailing blank lines", () => {
+		const line = "hi\x80\xffbyte  \t there  ";
+		const raw = latin1Encode(line + "\r\n\r\n\r\n");
+		const canon = canonicalizeBodyRelaxed(raw);
+		expect(latin1Decode(canon)).toBe("hi\x80\xffbyte there\r\n");
 	});
 });
