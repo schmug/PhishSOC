@@ -161,6 +161,34 @@ describe("pollWorkspaceMailbox", () => {
 		}));
 	});
 
+	it("active mode label 403: audit row + case survive, cursor advances, failure surfaces in health", async () => {
+		const stub = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-1", verdict: { action: "quarantine", score: 90, confidence: 0.9, explanation: "", signals: [] } as never });
+		gmailFetch({
+			"/history": () => new Response(JSON.stringify({ historyId: "200", history: [{ messagesAdded: [{ message: { id: "g1", labelIds: ["INBOX"] } }] }] }), { status: 200 }),
+			// modify listed BEFORE /messages/g1 — startsWith prefix matching.
+			"/messages/g1/modify": () => new Response("insufficient scope", { status: 403 }),
+			"/messages/g1": () => new Response(JSON.stringify({ id: "g1", raw: rawMessage("m1@x", "phish!") }), { status: 200 }),
+			"/labels": () => new Response(JSON.stringify({ labels: [{ id: "LQ", name: "PhishPilot/Quarantine" }, { id: "LS", name: "PhishPilot/Suspicious" }, { id: "LA", name: "PhishPilot/Allow" }] }), { status: 200 }),
+		});
+		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", { ...CFG, mode: "active" });
+		// Ingest succeeded → not a batch error; the label write failed in isolation.
+		expect(r.error).toBeNull();
+		expect(r.processed).toBe(1);
+		// Audit row written despite the label 403, with an empty labels list.
+		expect(stub.appendSidecarAudit).toHaveBeenCalledWith(expect.objectContaining({
+			gmail_message_id: "g1", action: "quarantine", mode: "active", labels_applied: "[]",
+		}));
+		// Case still created (containment: the flag isn't lost).
+		expect(stub.createCase).toHaveBeenCalledWith(expect.objectContaining({ emailId: "local-1" }));
+		const patch = stub.putSidecarState.mock.calls.at(-1)![0];
+		// Ingest complete → cursor advances (Fix 1 rules still apply).
+		expect(patch.history_cursor).toBe("200");
+		// But the wrong-scope grant surfaces in health, not silently reset.
+		expect(patch.consecutive_failures).toBe(1);
+		expect(patch.last_error).toMatch(/label write failed/);
+	});
+
 	it("null verdict: no audit row, no case, no label", async () => {
 		const stub = makeStub(freshState("100"));
 		mockedReceive.mockResolvedValue({ messageId: "local-1", verdict: null });

@@ -222,6 +222,12 @@ export async function pollWorkspaceMailbox(
 		// (each poll dedupes them for free and makes forward progress on the
 		// tail). `hitCap` means we stopped early with work still pending.
 		let hitCap = false;
+		// Label writes are contained per-message (Fix 3): a 403 (e.g. a
+		// gmail.readonly DWD grant in active mode) must NOT abort the batch and
+		// lose the audit row + case. We tally failures and surface them in
+		// health at the end instead of throwing.
+		let labelFailures = 0;
+		let firstLabelError: string | null = null;
 		for (const gmailId of history.messageIds) {
 			if (processed >= MAX_MESSAGES_PER_POLL) { hitCap = true; break; }
 			const bytes = await getRawMessage(token, gmailId);
@@ -241,8 +247,16 @@ export async function pollWorkspaceMailbox(
 			const verdict = result.verdict;
 			let applied: string[] = [];
 			if (cfg.mode === "active") {
-				labelIds = await ensureLabels(token, [...SIDECAR_LABEL_NAMES], labelIds);
-				applied = await applyVerdictLabels(token, gmailId, verdict.action, cfg.quarantine_behavior, labelIds);
+				try {
+					labelIds = await ensureLabels(token, [...SIDECAR_LABEL_NAMES], labelIds);
+					applied = await applyVerdictLabels(token, gmailId, verdict.action, cfg.quarantine_behavior, labelIds);
+				} catch (e) {
+					// Contain the failure: the audit row + case still get written
+					// below so the flagged mail is never lost, and the wrong-scope
+					// grant surfaces in health at end-of-batch.
+					labelFailures += 1;
+					if (!firstLabelError) firstLabelError = (e as Error).message;
+				}
 			}
 			await stub.appendSidecarAudit({
 				ts: new Date().toISOString(), gmail_message_id: gmailId, email_id: result.messageId,
@@ -264,6 +278,14 @@ export async function pollWorkspaceMailbox(
 		// page-cap truncated) AND we worked through all of it (not batch-capped).
 		if (!hitCap && !history.truncated) patch.history_cursor = history.historyId;
 		if (labelIds) patch.label_ids = JSON.stringify(labelIds);
+		// Label failures don't freeze the cursor (ingest succeeded — the cursor
+		// rules above stand), but they DO surface in health so a wrong-scope
+		// grant isn't buried by the next dedupe-only poll resetting
+		// consecutive_failures to 0.
+		if (labelFailures > 0) {
+			patch.last_error = `label write failed for ${labelFailures} message(s): ${firstLabelError}`.slice(0, 500);
+			patch.consecutive_failures = state.consecutive_failures + 1;
+		}
 		await stub.putSidecarState(patch);
 		return { processed, deduped, error: null };
 	} catch (e) {
