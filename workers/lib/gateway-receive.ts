@@ -31,7 +31,7 @@ export async function receiveGatewayPassthrough(
 	const policy = resolveRelayPolicy(await getDomainSettings(env, domain));
 	if (!policy) {
 		// Policy changed between normalizeInbound and here — nothing to do.
-		console.log("gateway passthrough: no relay policy for", domain, "- dropping");
+		console.warn("gateway passthrough: no relay policy for", domain, "- dropping");
 		return;
 	}
 

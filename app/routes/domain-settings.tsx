@@ -200,7 +200,7 @@ export default function DomainSettingsRoute() {
 						enabled: true,
 						target: {
 							host: relayHost.trim(),
-							port: Number.parseInt(relayPort, 10) || 587,
+							port: Number.isNaN(Number.parseInt(relayPort, 10)) ? 587 : Number.parseInt(relayPort, 10),
 							implicitTls: relayImplicitTls,
 						},
 						...(relayCredentialsSecret.trim() ? { credentialsSecret: relayCredentialsSecret.trim() } : {}),

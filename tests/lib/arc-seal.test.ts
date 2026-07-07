@@ -1,7 +1,13 @@
 import { describe, expect, it, beforeAll } from "vitest";
 // mailauth is Node-only — fine here (tests run in the Node pool), forbidden in workers/.
 import { authenticate } from "mailauth";
-import { hasExistingArcChain, latin1Encode, sealMessage } from "../../workers/lib/arc-seal";
+import {
+	canonicalizeBodyRelaxed,
+	hasExistingArcChain,
+	latin1Decode,
+	latin1Encode,
+	sealMessage,
+} from "../../workers/lib/arc-seal";
 
 const SEALER = "gw.example.com";
 const SELECTOR = "arc1";
@@ -102,5 +108,41 @@ describe("sealMessage", () => {
 		const raw = latin1Encode(withChain);
 		expect(hasExistingArcChain(raw)).toBe(true);
 		expect(await sealMessage(raw, OPTS())).toBeNull();
+	});
+});
+
+describe("latin1Decode / latin1Encode byte fidelity", () => {
+	it("round-trips every byte 0x00-0xFF, including 0x80-0x9F windows-1252 would corrupt", () => {
+		const bytes = new Uint8Array(256);
+		for (let i = 0; i < 256; i++) bytes[i] = i;
+		const decoded = latin1Decode(bytes);
+		expect(decoded.length).toBe(256);
+		for (let i = 0; i < 256; i++) expect(decoded.charCodeAt(i)).toBe(i);
+		expect(latin1Encode(decoded)).toEqual(bytes);
+	});
+
+	it("round-trips a buffer spanning multiple 0x8000 decode chunks with high bytes", () => {
+		// CHUNK = 0x8000 in latin1Decode; use a length that crosses two chunk
+		// boundaries and cycles through the full 0x00-0xFF range so the
+		// chunk boundary itself can't clip or corrupt a high byte.
+		const len = 0x8000 * 2 + 100;
+		const bytes = new Uint8Array(len);
+		for (let i = 0; i < len; i++) bytes[i] = i & 0xff;
+		const decoded = latin1Decode(bytes);
+		expect(decoded.length).toBe(len);
+		expect(latin1Encode(decoded)).toEqual(bytes);
+		// Spot-check bytes right at and after each chunk boundary.
+		expect(decoded.charCodeAt(0x8000 - 1)).toBe((0x8000 - 1) & 0xff);
+		expect(decoded.charCodeAt(0x8000)).toBe(0x8000 & 0xff);
+		expect(decoded.charCodeAt(0x8000 * 2)).toBe((0x8000 * 2) & 0xff);
+	});
+});
+
+describe("canonicalizeBodyRelaxed byte fidelity", () => {
+	it("preserves high bytes (0x80-0xFF) in body content", () => {
+		const highByteLine = new Uint8Array([0x80, 0x9f, 0xa0, 0xff, 0x41]); // high bytes + 'A'
+		const body = new Uint8Array([...highByteLine, 0x0d, 0x0a]); // + CRLF
+		const canon = canonicalizeBodyRelaxed(body);
+		expect(Array.from(canon.subarray(0, highByteLine.length))).toEqual(Array.from(highByteLine));
 	});
 });

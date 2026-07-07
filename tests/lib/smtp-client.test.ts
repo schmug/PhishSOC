@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	SmtpPermanentError,
 	SmtpTransientError,
+	dotStuff,
 	submitRaw,
 	type SmtpConnectFn,
 	type SmtpSocketLike,
@@ -101,6 +102,35 @@ function happyScript(): ScriptStep[] {
 		{ expect: /^QUIT$/, reply: "221 bye" },
 	];
 }
+
+describe("dotStuff", () => {
+	it("round-trips high bytes (0x80-0xFF) with no stuffing needed", () => {
+		// No CR/LF/'.' byte values present, so nothing should be stuffed and the
+		// trailing CRLF is already present — output must equal input exactly.
+		const len = 200;
+		const bytes = new Uint8Array(len + 2);
+		for (let i = 0; i < len; i++) bytes[i] = 0x80 + (i % 128);
+		bytes[len] = 0x0d;
+		bytes[len + 1] = 0x0a;
+		expect(dotStuff(bytes)).toEqual(bytes);
+	});
+
+	it("round-trips high bytes across the 0x8000 decode chunk boundary", () => {
+		const len = 0x8000 * 2 + 123;
+		const bytes = new Uint8Array(len + 2);
+		for (let i = 0; i < len; i++) bytes[i] = 0x80 + (i % 128);
+		bytes[len] = 0x0d;
+		bytes[len + 1] = 0x0a;
+		expect(dotStuff(bytes)).toEqual(bytes);
+	});
+
+	it("still stuffs a leading dot when surrounded by high bytes", () => {
+		const bytes = new Uint8Array([0x80, 0x0d, 0x0a, 0x2e, 0xff, 0x0d, 0x0a]); // <0x80>\r\n.<0xff>\r\n
+		const out = dotStuff(bytes);
+		// The line starting with '.' gets an extra '.' prepended.
+		expect(Array.from(out)).toEqual([0x80, 0x0d, 0x0a, 0x2e, 0x2e, 0xff, 0x0d, 0x0a]);
+	});
+});
 
 describe("submitRaw", () => {
 	it("walks the full STARTTLS + AUTH submission flow and dot-stuffs", async () => {
