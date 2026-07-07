@@ -319,13 +319,27 @@ function VerdictMixCard({
 					role="tablist"
 					aria-label="Verdict-mix window"
 					className="flex items-center gap-1 rounded-md bg-paper-2 p-0.5"
+					onKeyDown={(e) => {
+						if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+							e.preventDefault();
+							const tabs = ["24h", "7d"] as const;
+							const idx = tabs.indexOf(window);
+							const nextIdx =
+								e.key === "ArrowRight" ? (idx + 1) % 2 : (idx - 1 + 2) % 2;
+							setWindow(tabs[nextIdx]);
+							document.getElementById(`verdict-tab-${tabs[nextIdx]}`)?.focus();
+						}
+					}}
 				>
 					{(["24h", "7d"] as const).map((w) => (
 						<button
 							key={w}
+							id={`verdict-tab-${w}`}
 							type="button"
 							role="tab"
 							aria-selected={window === w}
+							aria-controls="verdict-tab-panel"
+							tabIndex={window === w ? 0 : -1}
 							onClick={() => setWindow(w)}
 							className={`px-2 py-0.5 rounded text-[11px] tabular-nums transition-colors ${
 								window === w
@@ -339,34 +353,40 @@ function VerdictMixCard({
 				</div>
 				<div className="text-[12px] text-ink-3">{total} classified</div>
 			</div>
-			{total === 0 ? (
-				<p className="text-[12.5px] text-ink-3">
-					No classified mail in the window.
-				</p>
-			) : (
-				<ul className="space-y-2">
-					{entries.map((e) => {
-						const pct = total === 0 ? 0 : (e.count / total) * 100;
-						return (
-							<li key={e.key} className="flex items-center gap-3">
-								<div className="text-[12px] text-ink-2 w-24 shrink-0">
-									{e.label}
-								</div>
-								<div className="flex-1 h-1.5 rounded-full bg-paper-3 overflow-hidden">
-									<div
-										className="h-full bg-accent"
-										style={{ width: `${pct}%` }}
-										aria-hidden
-									/>
-								</div>
-								<div className="pp-mono text-[11px] text-ink-3 tabular-nums w-10 text-right">
-									{e.count}
-								</div>
-							</li>
-						);
-					})}
-				</ul>
-			)}
+			<div
+				id="verdict-tab-panel"
+				role="tabpanel"
+				aria-labelledby={`verdict-tab-${window}`}
+			>
+				{total === 0 ? (
+					<p className="text-[12.5px] text-ink-3">
+						No classified mail in the window.
+					</p>
+				) : (
+					<ul className="space-y-2">
+						{entries.map((e) => {
+							const pct = total === 0 ? 0 : (e.count / total) * 100;
+							return (
+								<li key={e.key} className="flex items-center gap-3">
+									<div className="text-[12px] text-ink-2 w-24 shrink-0">
+										{e.label}
+									</div>
+									<div className="flex-1 h-1.5 rounded-full bg-paper-3 overflow-hidden">
+										<div
+											className="h-full bg-accent"
+											style={{ width: `${pct}%` }}
+											aria-hidden
+										/>
+									</div>
+									<div className="pp-mono text-[11px] text-ink-3 tabular-nums w-10 text-right">
+										{e.count}
+									</div>
+								</li>
+							);
+						})}
+					</ul>
+				)}
+			</div>
 		</div>
 	);
 }
