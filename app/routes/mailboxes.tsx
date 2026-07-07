@@ -120,6 +120,16 @@ export default function MailboxesRoute() {
 
 	const mailboxAclStatusMap = new Map(mailboxes.map((m) => [m.id, m.acl_status]));
 
+	// API-sidecar mailboxes (#31) — their authoritative store is the
+	// operator's Google Workspace inbox, so they render in a separate group
+	// linking to settings (not the inbox view) rather than mixed into the
+	// normal list. `isConfigured` accounts come from `emailAddresses`, which
+	// carries no sidecar flag, so the split only applies to the `mailboxes`
+	// list itself.
+	const sidecarStatusMap = new Map(mailboxes.map((m) => [m.id, m]));
+	const plainAccounts = accounts.filter((a) => !sidecarStatusMap.get(a.id)?.sidecar);
+	const sidecarAccounts = accounts.filter((a) => sidecarStatusMap.get(a.id)?.sidecar);
+
 	const handleLockDown = async (mailboxId: string, e: MouseEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -192,65 +202,116 @@ export default function MailboxesRoute() {
 						<Loader size="lg" />
 					</div>
 				) : accounts.length > 0 ? (
-					<div className="pp-card overflow-hidden">
-						{accounts.map((account, idx) => (
-							<RouterLink
-								key={account.id}
-								to={`/mailbox/${account.id}`}
-								className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-paper-2 ${
-									idx > 0 ? "border-t border-line" : ""
-								}`}
-							>
-								<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-paper-3 text-sm font-bold text-ink">
-									{account.name.charAt(0).toUpperCase()}
+					<>
+						{plainAccounts.length > 0 && (
+							<div className="pp-card overflow-hidden">
+								{plainAccounts.map((account, idx) => (
+									<RouterLink
+										key={account.id}
+										to={`/mailbox/${account.id}`}
+										className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-paper-2 ${
+											idx > 0 ? "border-t border-line" : ""
+										}`}
+									>
+										<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-paper-3 text-sm font-bold text-ink">
+											{account.name.charAt(0).toUpperCase()}
+										</div>
+										<div className="min-w-0 flex-1">
+											<div className="text-sm font-medium text-ink truncate">
+												{account.name}
+											</div>
+											<div className="text-sm text-ink-3">
+												{account.email}
+											</div>
+										</div>
+										{mailboxAclStatusMap.get(account.id) === "unscoped" && (
+											<>
+												<span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+													Unscoped
+												</span>
+												<Button
+													variant="ghost"
+													size="sm"
+													loading={
+														lockDownMailbox.isPending &&
+														lockDownMailbox.variables === account.id
+													}
+													onClick={(e) => handleLockDown(account.id, e)}
+												>
+													Lock down
+												</Button>
+											</>
+										)}
+										{!isConfigured && (
+											<Button
+												variant="ghost"
+												size="sm"
+												shape="square"
+												icon={<TrashIcon size={16} />}
+												aria-label={`Delete mailbox ${account.email}`}
+												onClick={(e) => {
+													e.preventDefault();
+													e.stopPropagation();
+													setMailboxToDelete({
+														id: account.id,
+														email: account.email,
+													});
+													setIsDeleteOpen(true);
+												}}
+											/>
+										)}
+									</RouterLink>
+								))}
+							</div>
+						)}
+
+						{sidecarAccounts.length > 0 && (
+							<div className={plainAccounts.length > 0 ? "mt-6" : undefined}>
+								<div className="text-xs font-medium uppercase tracking-[0.06em] text-ink-3 mb-2 px-1">
+									Sidecar mailboxes
 								</div>
-								<div className="min-w-0 flex-1">
-									<div className="text-sm font-medium text-ink truncate">
-										{account.name}
-									</div>
-									<div className="text-sm text-ink-3">
-										{account.email}
-									</div>
+								<div className="pp-card overflow-hidden">
+									{sidecarAccounts.map((account, idx) => {
+										const health = sidecarStatusMap.get(account.id)?.sidecar_health;
+										const unhealthy = !!health && !health.healthy;
+										return (
+											<RouterLink
+												key={account.id}
+												to={`/mailbox/${account.id}/settings`}
+												className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-paper-2 ${
+													idx > 0 ? "border-t border-line" : ""
+												}`}
+											>
+												<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-paper-3 text-sm font-bold text-ink">
+													{account.name.charAt(0).toUpperCase()}
+												</div>
+												<div className="min-w-0 flex-1">
+													<div className="text-sm font-medium text-ink truncate">
+														{account.name}
+													</div>
+													<div className="text-sm text-ink-3">
+														{account.email}
+													</div>
+												</div>
+												{unhealthy && (
+													<span
+														className="shrink-0 text-amber-600 dark:text-amber-400 text-sm"
+														title={health?.last_error ?? "Sidecar needs attention"}
+														aria-label={`Sidecar unhealthy: ${health?.last_error ?? "needs attention"}`}
+													>
+														▲
+													</span>
+												)}
+												<span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-paper-2 text-ink-3 border border-line">
+													Sidecar
+												</span>
+											</RouterLink>
+										);
+									})}
 								</div>
-								{mailboxAclStatusMap.get(account.id) === "unscoped" && (
-									<>
-										<span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
-											Unscoped
-										</span>
-										<Button
-											variant="ghost"
-											size="sm"
-											loading={
-												lockDownMailbox.isPending &&
-												lockDownMailbox.variables === account.id
-											}
-											onClick={(e) => handleLockDown(account.id, e)}
-										>
-											Lock down
-										</Button>
-									</>
-								)}
-								{!isConfigured && (
-									<Button
-										variant="ghost"
-										size="sm"
-										shape="square"
-										icon={<TrashIcon size={16} />}
-										aria-label={`Delete mailbox ${account.email}`}
-										onClick={(e) => {
-											e.preventDefault();
-											e.stopPropagation();
-											setMailboxToDelete({
-												id: account.id,
-												email: account.email,
-											});
-											setIsDeleteOpen(true);
-										}}
-									/>
-								)}
-							</RouterLink>
-						))}
-					</div>
+							</div>
+						)}
+					</>
 				) : (
 					<div className="pp-card py-16 px-6">
 						<div className="flex flex-col items-center text-center">

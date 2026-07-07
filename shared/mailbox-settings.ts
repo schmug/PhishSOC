@@ -243,6 +243,35 @@ export const HoneypotSettings = z
 export type HoneypotSettings = z.infer<typeof HoneypotSettings>;
 
 /**
+ * API-sidecar configuration (issue #31). When present, this mailbox is a
+ * *sidecar* mailbox: its authoritative message store is the operator's
+ * existing Google Workspace inbox, and PhishSOC only polls, scores, and
+ * (in active mode) labels it. Absence of this block = a normal local
+ * mailbox. Defaults (observe mode, label-only, 7-day retention) are NOT
+ * set here — `workers/lib/sidecar-config.ts` applies them at read time,
+ * per the #106 absent-key-inherits convention.
+ *
+ * The service-account JSON is NEVER persisted in R2 — only the *name* of a
+ * worker secret (`credentials_secret_name`), resolved from `env` at call
+ * time. Same pattern (and same confused-deputy rationale) as
+ * `HubConfig.api_key_secret_name`.
+ */
+export const SidecarSettings = z
+  .object({
+    provider: z.literal("workspace"),
+    credentials_secret_name: z
+      .string()
+      .min(1)
+      .startsWith("SIDECAR_SECRET_", { message: "Secret name must start with SIDECAR_SECRET_" }),
+    mode: z.enum(["observe", "active"]).optional(),
+    quarantine_behavior: z.enum(["label-only", "label-and-archive"]).optional(),
+    retention_days: z.number().int().min(0).optional(),
+  })
+  .passthrough();
+
+export type SidecarSettings = z.infer<typeof SidecarSettings>;
+
+/**
  * Per-mailbox settings stored at R2 key `mailboxes/<mailboxId>.json`.
  *
  * Semantic shift introduced by #106: **field absence = inherit**. Defaults
@@ -271,6 +300,7 @@ export const MailboxSettings = z.object({
   intel: IntelSettings.optional(),
   yaramail_scanner: YaraMailScannerSettings.optional(),
   honeypot: HoneypotSettings.optional(),
+  sidecar: SidecarSettings.optional(),
 }).passthrough();
 
 export type MailboxSettings = z.infer<typeof MailboxSettings>;

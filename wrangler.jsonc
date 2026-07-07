@@ -76,7 +76,10 @@
 		"crons": [
 			// Refresh threat-intel feeds hourly. Individual feeds respect their
 			// own refreshHours via ETag caching — the cron just wakes the worker.
-			"0 * * * *"
+			"0 * * * *",
+			// Sidecar mailbox poll (issue #31). No-ops (one R2 list) when no
+			// mailbox has a `sidecar` settings block.
+			"* * * * *"
 		]
 	},
 	"ai": {

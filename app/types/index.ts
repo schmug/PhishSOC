@@ -112,6 +112,28 @@ export interface YaraMailScannerSettings {
 	endpoint_url?: string;
 }
 
+/**
+ * Per-mailbox API-sidecar config (issue #31). Mirrors the backend
+ * `SidecarSettings` zod schema in `shared/mailbox-settings.ts`.
+ * `credentials_secret_name` holds the NAME of a worker secret, not the
+ * secret value — the service-account JSON never leaves `wrangler secret put`.
+ */
+export interface SidecarSettings {
+	provider: "workspace";
+	credentials_secret_name: string;
+	mode?: "observe" | "active";
+	quarantine_behavior?: "label-only" | "label-and-archive";
+	retention_days?: number;
+}
+
+/** Poll-health surfaced for a sidecar mailbox (issue #31, Task 9). Present
+ * (non-null) only when the mailbox has a saved `sidecar` block. */
+export interface SidecarHealth {
+	healthy: boolean;
+	last_poll_at: number | null;
+	last_error: string | null;
+}
+
 export interface MailboxSettings {
 	fromName?: string;
 	forwarding?: { enabled: boolean; email: string };
@@ -121,6 +143,7 @@ export interface MailboxSettings {
 	security?: SecuritySettings;
 	intel?: IntelSettings;
 	yaramail_scanner?: YaraMailScannerSettings;
+	sidecar?: SidecarSettings;
 }
 
 export interface Mailbox {
@@ -129,6 +152,12 @@ export interface Mailbox {
 	name: string;
 	settings?: MailboxSettings;
 	acl_status?: "scoped" | "unscoped";
+	/** True when this mailbox has a saved `settings.sidecar` block (issue #31).
+	 * Present on `/api/v1/mailboxes` list items only. */
+	sidecar?: boolean;
+	/** Poll health for a sidecar mailbox; null when not sidecar-configured.
+	 * Present on both the list endpoint and the single-mailbox GET. */
+	sidecar_health?: SidecarHealth | null;
 }
 
 export interface Email {

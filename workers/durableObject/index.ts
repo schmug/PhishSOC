@@ -18,6 +18,16 @@ import { lookupIpGeo } from "../dmarc/geo";
 import { parseStageTrace } from "../security/stage-trace";
 import { resolvePtr } from "../dmarc/ptr-resolve";
 import { buildDmarcSourceLabel } from "../../shared/dmarc-provider";
+import type { SqlLike } from "./catchall-intel";
+import {
+	_getSidecarStateImpl,
+	_putSidecarStateImpl,
+	_appendSidecarAuditImpl,
+	_findEmailIdByMessageIdImpl,
+	_listReapableEmailsImpl,
+	_markBodiesReapedImpl,
+	type SidecarStateRow,
+} from "./sidecar-state";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -728,6 +738,32 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 
 		return true;
+	}
+
+	// ── API-sidecar mode (issue #31) ────────────────────────────────────
+
+	async getSidecarState() {
+		return _getSidecarStateImpl(this.ctx.storage.sql as SqlLike);
+	}
+
+	async putSidecarState(patch: Partial<SidecarStateRow>) {
+		_putSidecarStateImpl(this.ctx.storage.sql as SqlLike, patch);
+	}
+
+	async appendSidecarAudit(row: { ts: string; gmail_message_id: string; email_id: string; action: string; score: number | null; labels_applied: string; mode: string }) {
+		_appendSidecarAuditImpl(this.ctx.storage.sql as SqlLike, row);
+	}
+
+	async findEmailIdByMessageId(messageId: string) {
+		return _findEmailIdByMessageIdImpl(this.ctx.storage.sql as SqlLike, messageId);
+	}
+
+	async listReapableSidecarEmails(cutoffIso: string) {
+		return _listReapableEmailsImpl(this.ctx.storage.sql as SqlLike, cutoffIso);
+	}
+
+	async markBodiesReaped(ids: string[], reapedAtIso: string) {
+		return _markBodiesReapedImpl(this.ctx.storage.sql as SqlLike, ids, reapedAtIso);
 	}
 
 	// ── Search (raw SQL — dynamic condition builder) ───────────────────
