@@ -1051,8 +1051,15 @@ app.get("/api/v1/mailboxes/:mailboxId", async (c: AppContext) => {
 	const sidecarCfg = sidecarConfigOf(settings);
 	let sidecar_health: ReturnType<typeof sidecarHealthOf> | null = null;
 	if (sidecarCfg) {
-		const state = await c.var.mailboxStub.getSidecarState().catch(() => null);
-		sidecar_health = sidecarHealthOf(state);
+		// Fail CLOSED on a DO read error, matching the list endpoint: a swallowed
+		// error must surface as unhealthy, not masquerade as "healthy / not
+		// polled yet" (which sidecarHealthOf(null) would report).
+		try {
+			const state = await c.var.mailboxStub.getSidecarState();
+			sidecar_health = sidecarHealthOf(state);
+		} catch {
+			sidecar_health = { healthy: false, last_poll_at: null, last_error: "state unavailable" };
+		}
 	}
 
 	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings, sidecar_health });
