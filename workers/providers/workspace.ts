@@ -211,10 +211,13 @@ export async function pollWorkspaceMailbox(
 			return { processed: 0, deduped: 0, error: null };
 		}
 
-		const capped = history.messageIds.length > MAX_MESSAGES_PER_POLL;
-		const messageIds = history.messageIds;
-
-		for (const gmailId of messageIds.slice(0, MAX_MESSAGES_PER_POLL)) {
+		// Cap on PROCESSED messages, not raw ids: deduped messages cost nothing
+		// so a burst of >MAX already-stored ids can never wedge the mailbox
+		// (each poll dedupes them for free and makes forward progress on the
+		// tail). `hitCap` means we stopped early with work still pending.
+		let hitCap = false;
+		for (const gmailId of history.messageIds) {
+			if (processed >= MAX_MESSAGES_PER_POLL) { hitCap = true; break; }
 			const bytes = await getRawMessage(token, gmailId);
 			const parsed = await new PostalMime().parse(bytes);
 			const rfcId = parsed.messageId ? extractMsgId(parsed.messageId) : null;
@@ -251,8 +254,9 @@ export async function pollWorkspaceMailbox(
 			}
 		}
 
-		// Rule 6: advance the cursor only when the batch was complete.
-		if (!capped) patch.history_cursor = history.historyId;
+		// Rule 6: advance the cursor ONLY when the listing was complete (not
+		// page-cap truncated) AND we worked through all of it (not batch-capped).
+		if (!hitCap && !history.truncated) patch.history_cursor = history.historyId;
 		if (labelIds) patch.label_ids = JSON.stringify(labelIds);
 		await stub.putSidecarState(patch);
 		return { processed, deduped, error: null };

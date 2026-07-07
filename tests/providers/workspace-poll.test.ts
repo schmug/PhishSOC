@@ -204,7 +204,9 @@ describe("pollWorkspaceMailbox", () => {
 		expect(r).toEqual({ processed: 0, deduped: 0, error: null });
 	});
 
-	it("caps the batch at MAX_MESSAGES_PER_POLL and does not advance the cursor when capped", async () => {
+	it("caps at MAX_MESSAGES_PER_POLL PROCESSED messages and freezes the cursor when capped", async () => {
+		// 30 FRESH ids (none deduped): the cap counts processed messages, so
+		// exactly MAX are processed and the cursor stays frozen.
 		const stub = makeStub(freshState("100"));
 		mockedReceive.mockResolvedValue({ messageId: "local-x", verdict: null });
 		const many = Array.from({ length: MAX_MESSAGES_PER_POLL + 5 }, (_, i) => ({ message: { id: `g${i}`, labelIds: ["INBOX"] } }));
@@ -217,6 +219,63 @@ describe("pollWorkspaceMailbox", () => {
 		});
 		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
 		expect(r.processed).toBe(MAX_MESSAGES_PER_POLL);
+		expect(stub.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBeUndefined();
+	});
+
+	it("regression: a >MAX burst converges — deduped messages do NOT consume the cap, cursor advances once the tail is worked", async () => {
+		// 30 ids listed on BOTH polls. Poll 1 processes the first 25 (all fresh)
+		// and freezes the cursor. Poll 2 must dedupe those 25 for FREE and
+		// process the remaining 5, then advance — proving no permanent wedge.
+		const N = MAX_MESSAGES_PER_POLL + 5; // 30
+		const many = Array.from({ length: N }, (_, i) => ({ message: { id: `g${i}`, labelIds: ["INBOX"] } }));
+		const history = () => new Response(JSON.stringify({ historyId: "999", history: [{ messagesAdded: many }] }), { status: 200 });
+		const messages = (u: URL) => {
+			const id = u.pathname.split("/").pop()!;
+			return new Response(JSON.stringify({ id, raw: rawMessage(`${id}@x`, "s") }), { status: 200 });
+		};
+
+		// -- Poll 1: nothing deduped --
+		const stub1 = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-x", verdict: null });
+		gmailFetch({ "/history": history, "/messages/": messages });
+		const r1 = await pollWorkspaceMailbox(makeEnv(stub1), ctx, "user@tenant.example", CFG);
+		expect(r1).toMatchObject({ processed: MAX_MESSAGES_PER_POLL, deduped: 0 });
+		expect(stub1.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBeUndefined();
+
+		// -- Poll 2: the first 25 RFC Message-IDs are now already stored --
+		const stub2 = makeStub(freshState("100"));
+		// gmail id gN → RFC Message-ID gN@x (see rawMessage). The first 25 dedupe.
+		const seen = new Set(Array.from({ length: MAX_MESSAGES_PER_POLL }, (_, i) => `g${i}@x`));
+		stub2.findEmailIdByMessageId.mockImplementation(async (mid: string) => (seen.has(mid) ? "already" : null));
+		gmailFetch({ "/history": history, "/messages/": messages });
+		const r2 = await pollWorkspaceMailbox(makeEnv(stub2), ctx, "user@tenant.example", CFG);
+		expect(r2).toMatchObject({ processed: 5, deduped: MAX_MESSAGES_PER_POLL });
+		expect(stub2.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBe("999");
+	});
+
+	it("truncated history (page cap) freezes the cursor even when processed < MAX", async () => {
+		// listNewMessageIds reports truncated:true; only a couple ids processed,
+		// but the cursor must NOT advance past an incomplete listing.
+		const stub = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-x", verdict: null });
+		let pages = 0;
+		gmailFetch({
+			"/history": () => {
+				pages += 1;
+				return new Response(JSON.stringify({
+					historyId: "999",
+					nextPageToken: `p${pages}`, // always dangles → truncated
+					history: [{ messagesAdded: [{ message: { id: `g${pages}`, labelIds: ["INBOX"] } }] }],
+				}), { status: 200 });
+			},
+			"/messages/": (u) => {
+				const id = u.pathname.split("/").pop()!;
+				return new Response(JSON.stringify({ id, raw: rawMessage(`${id}@x`, "s") }), { status: 200 });
+			},
+		});
+		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(r.processed).toBeLessThan(MAX_MESSAGES_PER_POLL);
+		expect(r.processed).toBeGreaterThan(0);
 		expect(stub.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBeUndefined();
 	});
 });

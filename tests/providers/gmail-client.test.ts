@@ -134,7 +134,27 @@ describe("listNewMessageIds", () => {
 		}));
 		const { listNewMessageIds } = await import("../../workers/providers/gmail-client");
 		const r = await listNewMessageIds("tok", "100");
-		expect(r).toEqual({ ok: true, messageIds: ["m1", "m3"], historyId: "200" });
+		expect(r).toEqual({ ok: true, messageIds: ["m1", "m3"], historyId: "200", truncated: false });
+	});
+
+	it("reports truncated: true when the page cap is hit with a pending nextPageToken", async () => {
+		let pages = 0;
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/history": () => {
+				pages += 1;
+				// Every page dangles a nextPageToken so the loop can only stop on
+				// the page cap — never because the listing was exhausted.
+				return new Response(JSON.stringify({
+					historyId: "300",
+					nextPageToken: `p${pages}`,
+					history: [{ messagesAdded: [{ message: { id: `m${pages}`, labelIds: ["INBOX"] } }] }],
+				}), { status: 200 });
+			},
+		}));
+		const { listNewMessageIds } = await import("../../workers/providers/gmail-client");
+		const r = await listNewMessageIds("tok", "100");
+		expect(r).toEqual({ ok: true, messageIds: ["m1", "m2", "m3"], historyId: "300", truncated: true });
+		expect(pages).toBe(3); // MAX_HISTORY_PAGES — the 4th page is never fetched
 	});
 
 	it("returns { ok: false, expired: true } on a 404 (cursor too old)", async () => {
@@ -150,7 +170,7 @@ describe("listNewMessageIds", () => {
 			"/history": () => new Response(JSON.stringify({ historyId: "150" }), { status: 200 }),
 		}));
 		const { listNewMessageIds } = await import("../../workers/providers/gmail-client");
-		expect(await listNewMessageIds("tok", "100")).toEqual({ ok: true, messageIds: [], historyId: "150" });
+		expect(await listNewMessageIds("tok", "100")).toEqual({ ok: true, messageIds: [], historyId: "150", truncated: false });
 	});
 });
 
