@@ -28,6 +28,7 @@ seed, not a comprehensive style guide.
 | `workers/intel/` | Async deep-scan stage: redirect-chain resolution, RDAP domain age, CrowdSec CTI, Spamhaus DROP/EDROP CIDR, attachment heuristics, and threat-intel feed management |
 | `workers/lib/` | Shared backend helpers: mailbox/domain/org settings resolution, attachment storage, email helpers, token handling, and schema definitions |
 | `workers/routes/` | Hono sub-apps for scoped API routes: reply/forward, DMARC, TLS-RPT, cases, send-email, hub UI, ACL |
+| `workers/providers/` | Pluggable mail ingress/egress adapters (#30): CF Email Routing + Resend defaults, Google Workspace API-sidecar poller (#31) |
 | `workers/durableObject/` | `MailboxDO` — per-mailbox Durable Object with SQLite schema/migrations and R2 attachment storage |
 | `workers/mcp/` | `EmailMCP` — MCP server exposing email tools over HTTP so external AI clients (Claude Code, Cursor) can act on mailboxes |
 | `workers/dmarc/` | DMARC aggregate-report ingest and RUF forensic-report ingest |

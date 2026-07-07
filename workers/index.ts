@@ -20,8 +20,8 @@ import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, 
 import { OrgSettings } from "../shared/org-settings";
 import { getDomainSettings, putDomainSettings, domainFromMailboxId } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
-import { MailboxSettings } from "../shared/mailbox-settings";
-import { runSecurityPipeline } from "./security";
+import { MailboxSettings, SidecarSettings } from "../shared/mailbox-settings";
+import { runSecurityPipeline, type FinalVerdict } from "./security";
 import { resolveRelayPolicy } from "./lib/relay-policy";
 import { relayAfterVerdict } from "./lib/gateway-relay";
 import { dispatchNewEmailNotification } from "./lib/new-email-notify";
@@ -34,6 +34,8 @@ import { tlsrptRoutes } from "./routes/tlsrpt";
 import { caseRoutes } from "./routes/cases";
 import { sendEmailRoutes } from "./routes/send-email";
 import { hubUiRoutes } from "./routes/hub-ui";
+import { sidecarRoutes } from "./routes/sidecar";
+import { sidecarConfigOf, sidecarHealthOf } from "./lib/sidecar-config";
 import {
 	aggregateDomainStats,
 	aggregateDomainsList,
@@ -161,6 +163,7 @@ app.route("/api/v1/mailboxes/:mailboxId/dmarc", dmarcRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/tlsrpt", tlsrptRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/hub", hubUiRoutes);
+app.route("/api/v1/mailboxes/:mailboxId/sidecar", sidecarRoutes);
 app.route("/api/v1/mailboxes/:mailboxId", sendEmailRoutes);
 
 // Rejects strings that aren't registrable domains (no protocol, path, @, single label).
@@ -278,16 +281,35 @@ app.get("/api/v1/mailboxes", async (c) => {
 
 	// Exclude honeypot mailboxes (#24) — they are IOC sensors and must never
 	// surface in the user UI, regardless of ACL. Settings reads are cached.
-	const honeypotFlags = await Promise.all(
+	// Widened (#31) to also capture the sidecar flag in the same pass.
+	const flags = await Promise.all(
 		rawMailboxes.map(async (m) => {
 			try {
-				return !!(await resolveMailboxSettings(c.env, m.id)).raw?.honeypot?.enabled;
+				const raw = (await resolveMailboxSettings(c.env, m.id)).raw;
+				return { honeypot: !!raw?.honeypot?.enabled, sidecar: !!sidecarConfigOf(raw) };
 			} catch {
-				return false;
+				return { honeypot: false, sidecar: false };
 			}
 		}),
 	);
-	const allMailboxes = rawMailboxes.filter((_, i) => !honeypotFlags[i]);
+	// Sidecar mailboxes also carry poll health so the list can render a
+	// warning badge (spec: "renewal/poll failure raises a Settings warning
+	// within one cycle"). One extra DO call per SIDECAR mailbox only.
+	const healths = await Promise.all(
+		rawMailboxes.map(async (m, i) => {
+			if (!flags[i].sidecar) return null;
+			try {
+				const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(m.id));
+				const state = await stub.getSidecarState();
+				return sidecarHealthOf(state);
+			} catch {
+				return { healthy: false, last_poll_at: null, last_error: "state unavailable" };
+			}
+		}),
+	);
+	const allMailboxes = rawMailboxes
+		.map((m, i) => ({ ...m, sidecar: flags[i].sidecar, sidecar_health: healths[i] }))
+		.filter((_, i) => !flags[i].honeypot);
 
 	// Read ACLs for all mailboxes — needed for acl_status (#241) in both branches.
 	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
@@ -930,6 +952,17 @@ app.post("/api/v1/mailboxes", async (c) => {
 	if ((settings as MailboxSettings | undefined)?.honeypot !== undefined) {
 		return c.json({ error: HONEYPOT_CLIENT_ERROR }, 400);
 	}
+	// Validate a sidecar block at create time (#31): CreateMailboxBody accepts
+	// settings as z.record(z.any()), so a malformed block (bad secret-name
+	// prefix, wrong provider) would otherwise persist and get nuked by the
+	// lenient-parser fallback on the next strict read.
+	const sidecarBlock = (settings as { sidecar?: unknown } | undefined)?.sidecar;
+	if (sidecarBlock !== undefined) {
+		const parsed = SidecarSettings.safeParse(sidecarBlock);
+		if (!parsed.success) {
+			return c.json({ error: `Invalid sidecar settings: ${parsed.error.issues[0]?.message ?? "malformed"}` }, 400);
+		}
+	}
 	const email = rawEmail.toLowerCase();
 	const allowedAddresses = (c.env.EMAIL_ADDRESSES ?? []) as string[];
 	if (allowedAddresses.length > 0 && !allowedAddresses.map((a) => a.toLowerCase()).includes(email)) {
@@ -1031,11 +1064,29 @@ app.post("/api/v1/honeypots", async (c) => {
 	return c.json({ created, domain, expires_at: expiresAt, count: created.length }, 201);
 });
 
-app.get("/api/v1/mailboxes/:mailboxId", async (c) => {
+app.get("/api/v1/mailboxes/:mailboxId", async (c: AppContext) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const obj = await c.env.BUCKET.get(`mailboxes/${mailboxId}.json`);
 	if (!obj) return c.json({ error: "Not found" }, 404);
-	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings: await obj.json() });
+	const settings = await obj.json();
+
+	// Sidecar poll health (#31) — null when this mailbox has no sidecar
+	// config, so the Settings UI only renders the health badge when relevant.
+	const sidecarCfg = sidecarConfigOf(settings);
+	let sidecar_health: ReturnType<typeof sidecarHealthOf> | null = null;
+	if (sidecarCfg) {
+		// Fail CLOSED on a DO read error, matching the list endpoint: a swallowed
+		// error must surface as unhealthy, not masquerade as "healthy / not
+		// polled yet" (which sidecarHealthOf(null) would report).
+		try {
+			const state = await c.var.mailboxStub.getSidecarState();
+			sidecar_health = sidecarHealthOf(state);
+		} catch {
+			sidecar_health = { healthy: false, last_poll_at: null, last_error: "state unavailable" };
+		}
+	}
+
+	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings, sidecar_health });
 });
 
 app.get("/api/v1/mailboxes/:mailboxId/dashboard", async (c: AppContext) => {
@@ -1494,6 +1545,18 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
 // -- Receive inbound email ------------------------------------------
 
 /**
+ * Result of a completed `receiveEmail` run. Returned so API-sidecar
+ * providers (e.g. the Workspace poller, issue #31) can apply the verdict
+ * back to the tenant's own inbox (labels, folder moves) without a second
+ * lookup. `verdict` is `null` when the security pipeline didn't run or
+ * produced no verdict (e.g. mailbox security disabled).
+ */
+export interface ReceiveEmailResult {
+	messageId: string;
+	verdict: FinalVerdict | null;
+}
+
+/**
  * Process a normalised inbound message through the full pipeline:
  * DO storage → security scoring → async deep-scan → agent auto-draft.
  *
@@ -1501,15 +1564,21 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
  * determination) is handled upstream by `workers/providers/cf-routing.ts`
  * before this function is called.  Other providers (Workspace, M365)
  * produce the same `MailboxInbound` shape.
+ *
+ * Returns `null` when the message was not processed by the pipeline
+ * (unknown mailbox, or diverted to honeypot/DMARC-RUA/TLS-RPT/DMARC-RUF
+ * handling); otherwise returns `{ messageId, verdict }` so callers that
+ * need to act on the outcome (e.g. sidecar providers applying Gmail
+ * labels) don't have to re-derive it.
  */
-async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: ExecutionContext) {
+async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: ExecutionContext): Promise<ReceiveEmailResult | null> {
 	const { parsedEmail, mailboxId } = normalized;
 	const allRecipients = (parsedEmail.to ?? []).map((t) => (t as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
 	const ccRecipients = (parsedEmail.cc ?? []).map((e) => (e as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
 	const bccRecipients = (parsedEmail.bcc ?? []).map((e) => (e as { address?: string }).address?.toLowerCase()).filter((a): a is string => Boolean(a));
 
 	const messageId = crypto.randomUUID();
-	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return; }
+	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return null; }
 
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
 
@@ -1596,7 +1665,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 				(e) => console.error(`honeypot inbound handling failed for ${mailboxId}:`, (e as Error).message),
 			),
 		);
-		return;
+		return null;
 	}
 
 	// DMARC aggregate reports arrive as email. Detect and divert to the
@@ -1607,7 +1676,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 			const result = await ingestDmarcReport(env, mailboxId, messageId, parsedEmail);
 			if (result.ingested) {
 				await stub.moveEmail(messageId, Folders.ARCHIVE);
-				return;
+				return null;
 			}
 		} catch (e) {
 			console.error("dmarc ingest failed:", (e as Error).message);
@@ -1623,7 +1692,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 			const result = await ingestTlsRptReport(env, mailboxId, messageId, parsedEmail);
 			if (result.ingested) {
 				await stub.moveEmail(messageId, Folders.ARCHIVE);
-				return;
+				return null;
 			}
 		} catch (e) {
 			console.error("tlsrpt ingest failed:", (e as Error).message);
@@ -1641,7 +1710,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 				const result = await ingestDmarcRuf(env, mailboxId, messageId, parsedEmail, rufSettings);
 				if (result.ingested) {
 					await stub.moveEmail(messageId, Folders.ARCHIVE);
-					return;
+					return null;
 				}
 				console.log("dmarc ruf drop:", result.reason);
 			}
@@ -1854,13 +1923,19 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 		}
 	}
 
-	// Auto-draft dispatch is gated on resolved settings (mailbox > org >
-	// default). The security pipeline above always runs; only the agent's
-	// onNewEmail fetch is skipped when the operator has disabled auto-draft
-	// for this mailbox (or for the org as a whole).
+	const result: ReceiveEmailResult = { messageId, verdict: securityVerdict };
+
+	// Sidecar mailboxes (issue #31) never auto-draft: replies happen in the
+	// tenant's own inbox, and an agent draft in PhishSOC would be invisible
+	// there. This also keeps the read-only promise of observe mode.
+	//
+	// Auto-draft dispatch is otherwise gated on resolved settings (mailbox >
+	// org > default). The security pipeline above always runs; only the
+	// agent's onNewEmail fetch is skipped when the operator has disabled
+	// auto-draft for this mailbox (or for the org as a whole).
 	const mailboxSettings = await resolveMailboxSettings(env, mailboxId);
-	if (!mailboxSettings.autoDraft.enabled) {
-		return;
+	if (mailboxSettings.raw?.sidecar || !mailboxSettings.autoDraft.enabled) {
+		return result;
 	}
 
 	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
@@ -1877,6 +1952,8 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 				: null,
 		}),
 	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
+
+	return result;
 }
 
 /**

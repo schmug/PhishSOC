@@ -542,11 +542,49 @@ export const mailboxMigrations: Migration[] = [
         `,
 	},
 	{
+		// API-sidecar mode (issue #31). `sidecar_state` is a singleton row
+		// (id=1) holding the Gmail history cursor, cached DWD access token,
+		// cached label-name→id map, and poll health counters. `sidecar_audit`
+		// records every verdict decision the poller makes — including
+		// observe-mode decisions that wrote no labels — so promotion to
+		// active labeling can be justified from the recorded mix.
+		// `emails.body_reaped_at` marks bodies stripped by the retention
+		// reap; verdict/metadata columns are never touched by the reap.
+		name: "26_sidecar_state_audit",
+		sql: `
+            CREATE TABLE sidecar_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                history_cursor TEXT,
+                access_token TEXT,
+                token_expires_at INTEGER,
+                label_ids TEXT,
+                last_poll_at INTEGER,
+                last_error TEXT,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE sidecar_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                gmail_message_id TEXT NOT NULL,
+                email_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                score INTEGER,
+                labels_applied TEXT NOT NULL,
+                mode TEXT NOT NULL
+            );
+            CREATE INDEX idx_sidecar_audit_ts ON sidecar_audit(ts DESC);
+
+            ALTER TABLE emails ADD COLUMN body_reaped_at TEXT;
+        `,
+	},
+	{
 		// Inline-gateway relay outcome tracking (issue #32). NULL when the
 		// domain has no relay policy (or ingest predates this migration);
 		// "relayed" | "held" | "failed" once a relay decision is made in
-		// `receiveEmail`. See workers/lib/gateway-relay.ts.
-		name: "26_relay_status",
+		// `receiveEmail`. See workers/lib/gateway-relay.ts. Renumbered from 26
+		// to 27 on the #587 (API-sidecar, migration 26) merge.
+		name: "27_relay_status",
 		sql: `ALTER TABLE emails ADD COLUMN relay_status TEXT;`,
 	},
 ];

@@ -20,6 +20,7 @@ import {
 	validateHubConfig,
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
+import { SidecarSettingsCard, type SidecarFormValue } from "~/components/SidecarSettingsCard";
 import type { HubConfigSettings, SecuritySettings, YaraMailScannerSettings } from "~/types";
 import {
 	TEXT_MODELS,
@@ -154,6 +155,12 @@ export default function SettingsRoute() {
 	// a fresh mailbox never contacts the sidecar unless the operator opts in.
 	const [yaraScannerEnabled, setYaraScannerEnabled] = useState(false);
 	const [yaraScannerEndpointUrl, setYaraScannerEndpointUrl] = useState("");
+
+	// API-sidecar (Google Workspace polling, #31). null = not configured.
+	// `savedConfigExists` gates the observe→active mode toggle: new configs
+	// can only start in observe, promotion is a second save.
+	const [sidecar, setSidecar] = useState<SidecarFormValue | null>(null);
+	const [savedSidecarExists, setSavedSidecarExists] = useState(false);
 
 	const [isSaving, setIsSaving] = useState(false);
 
@@ -298,6 +305,23 @@ export default function SettingsRoute() {
 			setYaraScannerEndpointUrl("");
 		}
 
+		// sidecar (#31) — strictly per-mailbox, no inheritance. Normalize
+		// absent optional fields to the card's defaults when a partial block
+		// is present (e.g. saved before `mode` existed).
+		const savedSidecar = (mailbox.settings as { sidecar?: SidecarFormValue } | undefined)?.sidecar;
+		setSavedSidecarExists(!!savedSidecar);
+		setSidecar(
+			savedSidecar
+				? {
+						provider: "workspace",
+						credentials_secret_name: savedSidecar.credentials_secret_name,
+						mode: savedSidecar.mode ?? "observe",
+						quarantine_behavior: savedSidecar.quarantine_behavior ?? "label-only",
+						retention_days: savedSidecar.retention_days ?? 7,
+					}
+				: null,
+		);
+
 		// availableModels intentionally omitted from deps — see commit
 		// message for the rationale (re-running this effect would clobber
 		// edits when the dynamic models list resolves).
@@ -363,7 +387,9 @@ export default function SettingsRoute() {
 			security: securityOverride ? security : undefined,
 			intel: nextIntel,
 			yaramail_scanner: nextYaraScanner,
+			...(sidecar ? { sidecar } : {}),
 		};
+		if (!sidecar) delete (settings as Record<string, unknown>).sidecar;
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
 			feedback.success("Settings saved!");
@@ -853,6 +879,15 @@ export default function SettingsRoute() {
 						)}
 					</div>
 				</div>
+
+				{/* API sidecar (Google Workspace polling, #31) */}
+				<SidecarSettingsCard
+					value={sidecar}
+					onChange={setSidecar}
+					health={mailbox.sidecar_health ?? null}
+					savedConfigExists={savedSidecarExists}
+					mailboxId={mailboxId!}
+				/>
 
 				{/* Access / Members — per-mailbox ACL panel (#291). Not part of the
 				    settings-tier save; managed via separate ACL endpoints. */}

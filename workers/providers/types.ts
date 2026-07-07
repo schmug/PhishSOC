@@ -39,6 +39,12 @@ export interface MailboxInbound {
 	 * used by gateway relay.
 	 */
 	envelopeFrom?: string;
+	/**
+	 * Provider-native message id (e.g. Gmail message id). Set by API-sidecar
+	 * providers so `applyVerdict` can address the source message; undefined
+	 * for CF Email Routing, which has no writable source inbox.
+	 */
+	providerMessageId?: string;
 }
 
 /**

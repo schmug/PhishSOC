@@ -178,7 +178,7 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
 		const { ctx, settle } = makeCtx();
 		await expect(
 			receiveEmail(makeNormalized(makeEmail()), makeEnv(stub, { NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL }), ctx),
-		).resolves.toBeUndefined();
+		).resolves.not.toBeNull();
 		await settle();
 
 		expect(stub.createEmail).toHaveBeenCalledOnce();
@@ -191,7 +191,7 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
 		const { ctx, settle } = makeCtx();
 		await expect(
 			receiveEmail(makeNormalized(makeEmail()), makeEnv(stub, { NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL }), ctx),
-		).resolves.toBeUndefined();
+		).resolves.not.toBeNull();
 		await settle();
 
 		expect(stub.createEmail).toHaveBeenCalledOnce();
@@ -294,9 +294,10 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
 		// setRelayStatus (not present in makeMailboxStub) is never invoked.
 		const stub = makeMailboxStub();
 		const { ctx, settle } = makeCtx();
-		await expect(
-			receiveEmail(makeNormalized(makeEmail()), makeEnv(stub, { NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL }), ctx),
-		).resolves.toBeUndefined();
+		// receiveEmail resolves without throwing. Its return value is irrelevant
+		// here — #587 changed it from void to a ReceiveEmailResult; inertness is
+		// proven by setRelayStatus never being invoked, below.
+		await receiveEmail(makeNormalized(makeEmail()), makeEnv(stub, { NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL }), ctx);
 		await settle();
 
 		expect(stub.createEmail).toHaveBeenCalledOnce();

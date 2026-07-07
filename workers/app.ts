@@ -11,6 +11,7 @@ import { normalizeInbound } from "./providers/cf-routing";
 import { receiveGatewayPassthrough } from "./lib/gateway-receive";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
+import { pollSidecarMailboxes, reapSidecarBodies } from "./providers/workspace";
 import { deleteExpiredChallenges } from "./lib/webauthn-store";
 import { webauthnRoute } from "./routes/webauthn";
 import { callerAllowedForMailbox, emailAgentMailboxIdFromPath } from "./lib/mailbox-acl";
@@ -191,10 +192,26 @@ export default {
 		}
 	},
 	async scheduled(
-		_event: ScheduledController,
+		event: ScheduledController,
 		env: Env,
 		ctx: ExecutionContext,
 	) {
+		// Minutely tick (issue #31): sidecar mailbox polling ONLY. Everything
+		// else stays on the hourly tick. An unknown cron string falls through
+		// to the hourly branch so `wrangler dev --test-scheduled` and future
+		// triggers keep today's behavior.
+		if (event.cron === "* * * * *") {
+			ctx.waitUntil(
+				pollSidecarMailboxes(env, ctx).then(
+					(r) => {
+						if (r.polled > 0) console.log(`sidecar: polled ${r.polled} mailboxes, ${r.processed} messages, ${r.failures} failures`);
+					},
+					(e) => console.error("sidecar poll failed:", (e as Error).message),
+				),
+			);
+			return;
+		}
+
 		ctx.waitUntil(
 			refreshAllFeeds(env).then(
 				(r) => console.log(`intel: refreshed ${r.feeds} feeds, ${r.entries} entries`),
@@ -228,6 +245,17 @@ export default {
 					if (r.reaped > 0) console.log(`honeypots: reaped ${r.reaped} expired`);
 				},
 				(e) => console.error("honeypot reap failed:", (e as Error).message),
+			),
+		);
+
+		// Strip sidecar message bodies past their retention window (issue #31).
+		// Separate waitUntil so a reap failure never breaks the other cron jobs.
+		ctx.waitUntil(
+			reapSidecarBodies(env).then(
+				(r) => {
+					if (r.reaped > 0) console.log(`sidecar: reaped ${r.reaped} bodies across ${r.mailboxes} mailboxes`);
+				},
+				(e) => console.error("sidecar body reap failed:", (e as Error).message),
 			),
 		);
 	},
