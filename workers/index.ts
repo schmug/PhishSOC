@@ -20,7 +20,7 @@ import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, 
 import { OrgSettings } from "../shared/org-settings";
 import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
-import { MailboxSettings } from "../shared/mailbox-settings";
+import { MailboxSettings, SidecarSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline, type FinalVerdict } from "./security";
 import { dispatchNewEmailNotification } from "./lib/new-email-notify";
 import { parseAuthResults } from "./security/auth";
@@ -938,6 +938,17 @@ app.post("/api/v1/mailboxes", async (c) => {
 	const { name, settings, email: rawEmail } = CreateMailboxBody.parse(await c.req.json());
 	if ((settings as MailboxSettings | undefined)?.honeypot !== undefined) {
 		return c.json({ error: HONEYPOT_CLIENT_ERROR }, 400);
+	}
+	// Validate a sidecar block at create time (#31): CreateMailboxBody accepts
+	// settings as z.record(z.any()), so a malformed block (bad secret-name
+	// prefix, wrong provider) would otherwise persist and get nuked by the
+	// lenient-parser fallback on the next strict read.
+	const sidecarBlock = (settings as { sidecar?: unknown } | undefined)?.sidecar;
+	if (sidecarBlock !== undefined) {
+		const parsed = SidecarSettings.safeParse(sidecarBlock);
+		if (!parsed.success) {
+			return c.json({ error: `Invalid sidecar settings: ${parsed.error.issues[0]?.message ?? "malformed"}` }, 400);
+		}
 	}
 	const email = rawEmail.toLowerCase();
 	const allowedAddresses = (c.env.EMAIL_ADDRESSES ?? []) as string[];

@@ -47,6 +47,9 @@ function makeMailboxNs(sidecarStates: Record<string, unknown> = {}) {
 				const id_ = id.toString();
 				return sidecarStates[id_] ?? null;
 			},
+			async getFolders() {
+				return [];
+			},
 		}),
 	};
 }
@@ -150,6 +153,47 @@ describe("GET /api/v1/mailboxes — sidecar annotation (#31)", () => {
 		const res = await app.request("/api/v1/mailboxes", {}, env);
 		const body = (await res.json()) as Array<{ id: string }>;
 		expect(body.find((x) => x.id === "hp@acme.example")).toBeUndefined();
+	});
+});
+
+describe("POST /api/v1/mailboxes — sidecar block validation (#31)", () => {
+	function makeEnv() {
+		const bucket = makeR2({ "org/settings.json": JSON.stringify({}) });
+		return {
+			bucket,
+			env: { BUCKET: bucket, MAILBOX: makeMailboxNs() } as unknown as Parameters<typeof app.request>[2],
+		};
+	}
+
+	function post(env: Parameters<typeof app.request>[2], body: unknown) {
+		return app.request(
+			"/api/v1/mailboxes",
+			{ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+			env,
+		);
+	}
+
+	it("rejects a malformed sidecar block (bad secret-name prefix) with 400", async () => {
+		const { env } = makeEnv();
+		const res = await post(env, {
+			name: "Side",
+			email: "new@acme.example",
+			settings: { sidecar: { provider: "workspace", credentials_secret_name: "WRONG_PREFIX_x" } },
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toMatch(/sidecar/i);
+	});
+
+	it("creates a mailbox when the sidecar block is valid", async () => {
+		const { env, bucket } = makeEnv();
+		const res = await post(env, {
+			name: "Side",
+			email: "valid@acme.example",
+			settings: { sidecar: { provider: "workspace", credentials_secret_name: "SIDECAR_SECRET_ok" } },
+		});
+		expect(res.status).toBe(201);
+		expect(bucket.store.has("mailboxes/valid@acme.example.json")).toBe(true);
 	});
 });
 
