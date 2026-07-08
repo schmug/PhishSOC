@@ -8,6 +8,8 @@
 //   - saving with no block omits the `sidecar` key from the PUT payload
 //   - removing an existing saved config deletes the `sidecar` key on save
 //   - the secret-name prefix validation disables the Test button
+//   - the Test connection failure paths ({ ok: false, stage, error } and a
+//     rejected fetch) render role="alert" messages (#597)
 
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -296,5 +298,52 @@ describe("Settings · Workspace sidecar section (#31)", () => {
 			"/api/v1/mailboxes/m1/sidecar/test",
 			expect.objectContaining({ method: "POST" }),
 		);
+	});
+
+	it("shows the stage-prefixed error as an alert when the test reports ok: false", async () => {
+		const user = userEvent.setup();
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ ok: false, stage: "auth", error: "invalid_grant" }),
+		} as Response);
+		vi.stubGlobal("fetch", fetchMock);
+
+		mailboxFixture = makeMailbox({
+			sidecar: {
+				provider: "workspace",
+				credentials_secret_name: "SIDECAR_SECRET_x",
+				mode: "observe",
+				quarantine_behavior: "label-only",
+				retention_days: 7,
+			},
+		} as Record<string, unknown>);
+		renderSettings();
+
+		await user.click(await screen.findByRole("button", { name: /test connection/i }));
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("auth: invalid_grant");
+	});
+
+	it("shows the thrown error message as an alert when the test fetch rejects", async () => {
+		const user = userEvent.setup();
+		const fetchMock = vi.fn().mockRejectedValue(new Error("network unreachable"));
+		vi.stubGlobal("fetch", fetchMock);
+
+		mailboxFixture = makeMailbox({
+			sidecar: {
+				provider: "workspace",
+				credentials_secret_name: "SIDECAR_SECRET_x",
+				mode: "observe",
+				quarantine_behavior: "label-only",
+				retention_days: 7,
+			},
+		} as Record<string, unknown>);
+		renderSettings();
+
+		await user.click(await screen.findByRole("button", { name: /test connection/i }));
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("network unreachable");
 	});
 });
