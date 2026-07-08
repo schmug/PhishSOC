@@ -121,6 +121,40 @@ describe("sidecarHealthOf x last_gap (#594)", () => {
 	});
 });
 
+describe("sidecarHealthOf x label_error (#590)", () => {
+	const base = { consecutive_failures: 0, last_poll_at: Date.now(), last_error: null };
+
+	it("a persisted label error flips healthy false and stays visible", () => {
+		const h = sidecarHealthOf({ ...base, label_error: "label write failed for 1 message(s): 403" });
+		expect(h.healthy).toBe(false);
+		expect(h.label_error).toBe("label write failed for 1 message(s): 403");
+	});
+
+	it("no label error → healthy (and label_error: null in the payload)", () => {
+		const h = sidecarHealthOf({ ...base, label_error: null });
+		expect(h.healthy).toBe(true);
+		expect(h.label_error).toBeNull();
+	});
+
+	it("tolerates pre-#590 state rows without the column (and the null state)", () => {
+		expect(sidecarHealthOf(base).healthy).toBe(true);
+		expect(sidecarHealthOf(base).label_error).toBeNull();
+		expect(sidecarHealthOf(null).label_error).toBeNull();
+	});
+
+	it("label error flips healthy even when the poll counters look clean — the point-a flap", () => {
+		// The exact regression: a label-clean poll reset consecutive_failures/
+		// last_error, so health flapped green while the DWD grant stayed wrong.
+		const h = sidecarHealthOf({
+			consecutive_failures: 0,
+			last_poll_at: Date.now(),
+			last_error: null,
+			label_error: "label write failed for 3 message(s): insufficient scope",
+		});
+		expect(h.healthy).toBe(false);
+	});
+});
+
 describe("stripDefaultEqual x sidecar", () => {
 	it("passes the sidecar block through untouched (no system default to strip against)", () => {
 		const input = {

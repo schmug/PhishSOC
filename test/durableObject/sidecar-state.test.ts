@@ -17,6 +17,8 @@ import {
 	_putSidecarStateImpl,
 	_acquirePollLeaseImpl,
 	_appendSidecarAuditImpl,
+	_findSidecarAuditPendingLabelsImpl,
+	_updateSidecarAuditLabelsImpl,
 	_appendSidecarEventImpl,
 	_listSidecarEventsImpl,
 	_latestSidecarGapImpl,
@@ -43,7 +45,9 @@ function makeSqlLike(): SqlLike {
             last_poll_at INTEGER,
             last_error TEXT,
             consecutive_failures INTEGER NOT NULL DEFAULT 0,
-            poll_lease_until INTEGER
+            poll_lease_until INTEGER,
+            label_error TEXT,
+            label_failure_count INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE sidecar_audit (
@@ -57,6 +61,7 @@ function makeSqlLike(): SqlLike {
             mode TEXT NOT NULL
         );
         CREATE INDEX idx_sidecar_audit_ts ON sidecar_audit(ts DESC);
+        CREATE INDEX idx_sidecar_audit_gmail_message_id ON sidecar_audit(gmail_message_id);
 
         CREATE TABLE sidecar_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,6 +174,71 @@ describe("sidecar_audit", () => {
 		});
 		const rows = [...sql.exec("SELECT gmail_message_id, mode FROM sidecar_audit ORDER BY id")];
 		expect(rows.length).toBe(2);
+	});
+});
+
+describe("durable label-failure signal (#590)", () => {
+	it("label_error / label_failure_count round-trip through state patches and survive unrelated patches", () => {
+		const sql = makeSqlLike();
+		_putSidecarStateImpl(sql, { label_error: "label write failed: 403", label_failure_count: 2 });
+		let s = _getSidecarStateImpl(sql)!;
+		expect(s.label_error).toBe("label write failed: 403");
+		expect(s.label_failure_count).toBe(2);
+		// A label-quiet poll patches other keys only — patch-only semantics keep
+		// the durable signal raised (the point-a fix: no flap back to healthy).
+		_putSidecarStateImpl(sql, { last_poll_at: 123, last_error: null, consecutive_failures: 0 });
+		s = _getSidecarStateImpl(sql)!;
+		expect(s.label_error).toBe("label write failed: 403");
+		expect(s.label_failure_count).toBe(2);
+		// Only a successful label write clears it (explicit patch).
+		_putSidecarStateImpl(sql, { label_error: null, label_failure_count: 0 });
+		s = _getSidecarStateImpl(sql)!;
+		expect(s.label_error).toBeNull();
+		expect(s.label_failure_count).toBe(0);
+	});
+});
+
+describe("audit lookup for label backfill (#590)", () => {
+	const auditRow = (gmailId: string, labels: string, mode: string, ts = "2026-07-06T00:00:00Z") => ({
+		ts, gmail_message_id: gmailId, email_id: `e-${gmailId}`,
+		action: "quarantine", score: 90, labels_applied: labels, mode,
+	});
+
+	it("returns the pending active-mode row (labels_applied '[]') and null after backfill", () => {
+		const sql = makeSqlLike();
+		expect(_findSidecarAuditPendingLabelsImpl(sql, "g1")).toBeNull();
+		_appendSidecarAuditImpl(sql, auditRow("g1", "[]", "active"));
+		const pending = _findSidecarAuditPendingLabelsImpl(sql, "g1")!;
+		expect(pending).toMatchObject({ action: "quarantine" });
+		expect(typeof pending.id).toBe("number");
+		// Backfill success: the SAME row is updated in place — never a second
+		// row, so the one-audit-row-per-verdict-decision contract holds.
+		_updateSidecarAuditLabelsImpl(sql, pending.id, '["PhishPilot/Quarantine"]');
+		expect(_findSidecarAuditPendingLabelsImpl(sql, "g1")).toBeNull();
+		const rows = [...sql.exec("SELECT labels_applied FROM sidecar_audit WHERE gmail_message_id = 'g1'")];
+		expect(rows.length).toBe(1);
+		expect((rows[0] as { labels_applied: string }).labels_applied).toBe('["PhishPilot/Quarantine"]');
+	});
+
+	it("ignores rows whose labels were applied and other messages' rows", () => {
+		const sql = makeSqlLike();
+		_appendSidecarAuditImpl(sql, auditRow("g1", '["PhishPilot/Quarantine"]', "active"));
+		_appendSidecarAuditImpl(sql, auditRow("g2", "[]", "active"));
+		expect(_findSidecarAuditPendingLabelsImpl(sql, "g1")).toBeNull();
+		expect(_findSidecarAuditPendingLabelsImpl(sql, "g2")).not.toBeNull();
+	});
+
+	it("never selects observe-mode rows: empty labels are by design there, not a failure", () => {
+		const sql = makeSqlLike();
+		_appendSidecarAuditImpl(sql, auditRow("g1", "[]", "observe"));
+		expect(_findSidecarAuditPendingLabelsImpl(sql, "g1")).toBeNull();
+	});
+
+	it("picks the LATEST pending row when a message somehow has several", () => {
+		const sql = makeSqlLike();
+		_appendSidecarAuditImpl(sql, { ...auditRow("g1", "[]", "active", "2026-07-05T00:00:00Z"), action: "tag" });
+		_appendSidecarAuditImpl(sql, auditRow("g1", "[]", "active", "2026-07-06T00:00:00Z"));
+		expect(_findSidecarAuditPendingLabelsImpl(sql, "g1")).toMatchObject({ action: "quarantine" });
 	});
 });
 

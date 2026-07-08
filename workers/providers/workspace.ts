@@ -150,11 +150,13 @@ interface SidecarStub {
 	getSidecarState(): Promise<{
 		history_cursor: string | null; access_token: string | null; token_expires_at: number | null;
 		label_ids: string | null; last_poll_at: number | null; last_error: string | null; consecutive_failures: number;
-		poll_lease_until: number | null;
+		poll_lease_until: number | null; label_error: string | null; label_failure_count: number;
 	} | null>;
 	acquirePollLease(nowMs: number, ttlMs: number): Promise<boolean>;
 	putSidecarState(patch: Record<string, unknown>): Promise<void>;
 	appendSidecarAudit(row: Record<string, unknown>): Promise<void>;
+	findSidecarAuditPendingLabels(gmailMessageId: string): Promise<{ id: number; action: string } | null>;
+	updateSidecarAuditLabels(id: number, labelsApplied: string): Promise<void>;
 	appendSidecarEvent(row: Record<string, unknown>): Promise<void>;
 	findEmailIdByMessageId(messageId: string): Promise<string | null>;
 	findEmailIdByProviderMessageId(providerMessageId: string): Promise<string | null>;
@@ -172,7 +174,10 @@ const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ?
  * first-run cursor anchor (no backfill), history-gap re-anchor, batch cap
  * (no cursor advance when capped), per-message dedupe on RFC Message-ID
  * (falling back to the stored provider id when the header is absent, #593),
- * active-mode labeling, and both-mode audit/case writes.
+ * active-mode labeling, and both-mode audit/case writes. Label failures are
+ * contained per message and recorded durably (#590: `label_error` /
+ * `label_failure_count`, cleared only by a successful write); dedupe hits in
+ * active mode retry a label the audit row shows never landed.
  *
  * Never throws: all failures are caught, recorded in `sidecar_state`
  * (cursor frozen, consecutive_failures incremented), and returned as
@@ -188,7 +193,7 @@ export async function pollWorkspaceMailbox(
 	const state = (await stub.getSidecarState()) ?? {
 		history_cursor: null, access_token: null, token_expires_at: null,
 		label_ids: null, last_poll_at: null, last_error: null, consecutive_failures: 0,
-		poll_lease_until: null,
+		poll_lease_until: null, label_error: null, label_failure_count: 0,
 	};
 
 	// Backoff gate (rule 2). Sits BEFORE the lease so a backed-off mailbox
@@ -279,8 +284,11 @@ export async function pollWorkspaceMailbox(
 		// Label writes are contained per-message (Fix 3): a 403 (e.g. a
 		// gmail.readonly DWD grant in active mode) must NOT abort the batch and
 		// lose the audit row + case. We tally failures and surface them in
-		// health at the end instead of throwing.
+		// health at the end instead of throwing. Successes are tallied too
+		// (#590): only a successful write may clear the durable label-failure
+		// signal.
 		let labelFailures = 0;
+		let labelSuccesses = 0;
 		let firstLabelError: string | null = null;
 		for (const gmailId of history.messageIds) {
 			if (processed >= MAX_MESSAGES_PER_POLL) { hitCap = true; break; }
@@ -293,7 +301,33 @@ export async function pollWorkspaceMailbox(
 			const existingId = rfcId
 				? await stub.findEmailIdByMessageId(rfcId)
 				: await stub.findEmailIdByProviderMessageId(gmailId);
-			if (existingId) { deduped += 1; continue; }
+			if (existingId) {
+				deduped += 1;
+				// Label backfill (#590): a replayed message whose ACTIVE-mode
+				// audit row shows the label write never landed (labels_applied
+				// "[]") gets the label retried now. Ingest is NOT re-run — the
+				// at-least-once invariant stands (no duplicate email row, audit
+				// row, or Case); only the label write and an in-place audit-row
+				// update happen. Observe mode never probes: it writes nothing by
+				// design, and skipping keeps dedupe hits at one DO call there.
+				// (Active-mode dedupe hits — the rare replay path — cost one
+				// extra DO probe; dedupe misses stay one call.)
+				if (cfg.mode === "active") {
+					const pending = await stub.findSidecarAuditPendingLabels(gmailId);
+					if (pending) {
+						try {
+							labelIds = await ensureLabels(token, [...SIDECAR_LABEL_NAMES], labelIds);
+							const applied = await applyVerdictLabels(token, gmailId, pending.action, cfg.quarantine_behavior, labelIds);
+							await stub.updateSidecarAuditLabels(pending.id, JSON.stringify(applied));
+							labelSuccesses += 1;
+						} catch (e) {
+							labelFailures += 1;
+							if (!firstLabelError) firstLabelError = (e as Error).message;
+						}
+					}
+				}
+				continue;
+			}
 			const normalized: MailboxInbound = {
 				kind: "mailbox",
 				rawEmail: bytes.buffer as ArrayBuffer,
@@ -310,6 +344,7 @@ export async function pollWorkspaceMailbox(
 				try {
 					labelIds = await ensureLabels(token, [...SIDECAR_LABEL_NAMES], labelIds);
 					applied = await applyVerdictLabels(token, gmailId, verdict.action, cfg.quarantine_behavior, labelIds);
+					labelSuccesses += 1;
 				} catch (e) {
 					// Contain the failure: the audit row + case still get written
 					// below so the flagged mail is never lost, and the wrong-scope
@@ -343,9 +378,25 @@ export async function pollWorkspaceMailbox(
 		// grant isn't buried by the next dedupe-only poll resetting
 		// consecutive_failures to 0.
 		if (labelFailures > 0) {
-			patch.last_error = `label write failed for ${labelFailures} message(s): ${firstLabelError}`.slice(0, 500);
+			const labelError = `label write failed for ${labelFailures} message(s): ${firstLabelError}`.slice(0, 500);
+			patch.last_error = labelError;
 			patch.consecutive_failures = state.consecutive_failures + 1;
+			// Durable signal (#590), decoupled from the transient counters
+			// above: those reset on the very next label-clean poll, flapping
+			// health back to green while the misconfiguration (e.g. a
+			// gmail.readonly DWD grant in active mode) persists. label_error /
+			// label_failure_count clear ONLY when a label write succeeds.
+			patch.label_error = labelError;
+			patch.label_failure_count = state.label_failure_count + labelFailures;
+		} else if (labelSuccesses > 0) {
+			// A successful write proves the grant works again — clear the
+			// persisted signal so health recovers.
+			patch.label_error = null;
+			patch.label_failure_count = 0;
 		}
+		// A label-quiet poll (no writes attempted) leaves both keys out of the
+		// patch entirely: putSidecarState's patch-only semantics keep a raised
+		// signal raised — the point-(a) fix in #590.
 		await stub.putSidecarState(patch);
 		return { processed, deduped, error: null };
 	} catch (e) {

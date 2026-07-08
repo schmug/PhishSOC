@@ -132,6 +132,11 @@ export interface SidecarHealth {
 	healthy: boolean;
 	last_poll_at: number | null;
 	last_error: string | null;
+	/** Durable label-failure signal (issue #590): the most recent label-write
+	 * error. Survives the label-clean polls that null `last_error` and flips
+	 * `healthy` false until a label write succeeds (e.g. the DWD grant is
+	 * widened from gmail.readonly to gmail.modify). */
+	label_error?: string | null;
 	/** Most recent durable history-gap record (issue #594): when the Gmail
 	 * history cursor expired and the cursor jump that bounds the window of
 	 * unscored mail. Survives the clean polls that null `last_error`; null

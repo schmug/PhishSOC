@@ -24,6 +24,8 @@ import {
 	_putSidecarStateImpl,
 	_acquirePollLeaseImpl,
 	_appendSidecarAuditImpl,
+	_findSidecarAuditPendingLabelsImpl,
+	_updateSidecarAuditLabelsImpl,
 	_appendSidecarEventImpl,
 	_listSidecarEventsImpl,
 	_latestSidecarGapImpl,
@@ -769,6 +771,14 @@ export class MailboxDO extends DurableObject<Env> {
 
 	async appendSidecarAudit(row: { ts: string; gmail_message_id: string; email_id: string; action: string; score: number | null; labels_applied: string; mode: string }) {
 		_appendSidecarAuditImpl(this.ctx.storage.sql as SqlLike, row);
+	}
+
+	async findSidecarAuditPendingLabels(gmailMessageId: string) {
+		return _findSidecarAuditPendingLabelsImpl(this.ctx.storage.sql as SqlLike, gmailMessageId);
+	}
+
+	async updateSidecarAuditLabels(id: number, labelsApplied: string) {
+		_updateSidecarAuditLabelsImpl(this.ctx.storage.sql as SqlLike, id, labelsApplied);
 	}
 
 	async appendSidecarEvent(row: SidecarEventRow) {

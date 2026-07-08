@@ -100,7 +100,7 @@ describe("GET /api/v1/mailboxes — sidecar annotation (#31)", () => {
 		}>;
 		const m = body.find((x) => x.id === "side@acme.example");
 		expect(m?.sidecar).toBe(true);
-		expect(m?.sidecar_health).toEqual({ healthy: true, last_poll_at: null, last_error: null, last_gap: null });
+		expect(m?.sidecar_health).toEqual({ healthy: true, last_poll_at: null, last_error: null, label_error: null, last_gap: null });
 	});
 
 	it("marks a sidecar mailbox unhealthy after 3+ consecutive failures", async () => {
@@ -259,7 +259,36 @@ describe("GET /api/v1/mailboxes/:mailboxId — sidecar_health (#31)", () => {
 		const body = (await res.json()) as {
 			sidecar_health: { healthy: boolean; last_poll_at: number | null; last_error: string | null };
 		};
-		expect(body.sidecar_health).toEqual({ healthy: true, last_poll_at: recentTs, last_error: "temp", last_gap: null });
+		expect(body.sidecar_health).toEqual({ healthy: true, last_poll_at: recentTs, last_error: "temp", label_error: null, last_gap: null });
+	});
+
+	it("surfaces a persisted label error as unhealthy even when the poll counters are clean (#590)", async () => {
+		// State as it looks after a label-403 poll FOLLOWED by a label-clean
+		// poll: transient counters reset (the pre-#590 flap), but the durable
+		// label_error column keeps the settings warning up until a write lands.
+		const recentTs = Date.now() - 60_000;
+		const bucket = makeR2({
+			"org/settings.json": JSON.stringify({}),
+			"mailboxes/side@acme.example.json": JSON.stringify(sidecarBlock),
+		});
+		const env = {
+			BUCKET: bucket,
+			MAILBOX: makeMailboxNs({
+				"side@acme.example": {
+					consecutive_failures: 0, last_poll_at: recentTs, last_error: null,
+					label_error: "label write failed for 2 message(s): insufficient scope", label_failure_count: 2,
+				},
+			}),
+		} as unknown as Parameters<typeof app.request>[2];
+
+		const res = await app.request("/api/v1/mailboxes/side@acme.example", {}, env);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			sidecar_health: { healthy: boolean; last_error: string | null; label_error: string | null };
+		};
+		expect(body.sidecar_health.healthy).toBe(false);
+		expect(body.sidecar_health.last_error).toBeNull();
+		expect(body.sidecar_health.label_error).toMatch(/label write failed/);
 	});
 
 	it("surfaces a durable history-gap record in sidecar_health.last_gap even after last_error resets (#594)", async () => {

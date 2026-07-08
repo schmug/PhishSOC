@@ -244,6 +244,32 @@ describe("Settings · Workspace sidecar section (#31)", () => {
 		expect(await screen.findByText(/token exchange failed/i)).toBeInTheDocument();
 	});
 
+	it("renders the durable label_error even after a clean poll nulled last_error (#590)", async () => {
+		mailboxFixture = makeMailbox(
+			{
+				sidecar: {
+					provider: "workspace",
+					credentials_secret_name: "SIDECAR_SECRET_x",
+					mode: "active",
+					quarantine_behavior: "label-only",
+					retention_days: 7,
+				},
+			} as Record<string, unknown>,
+			{
+				sidecar_health: {
+					healthy: false,
+					last_poll_at: Date.now(),
+					last_error: null, // the clean poll reset it...
+					label_error: "label write failed for 2 message(s): insufficient scope", // ...but this persists
+				},
+			},
+		);
+		renderSettings();
+
+		expect(await screen.findByText(/label write failed for 2 message/i)).toBeInTheDocument();
+		expect(screen.getByText(/attention needed/i, { selector: "p" })).toBeInTheDocument();
+	});
+
 	it("runs the connection test and shows the result", async () => {
 		const user = userEvent.setup();
 		const fetchMock = vi.fn().mockResolvedValue({

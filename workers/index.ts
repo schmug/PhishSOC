@@ -305,7 +305,7 @@ app.get("/api/v1/mailboxes", async (c) => {
 				const [state, lastGap] = await Promise.all([stub.getSidecarState(), stub.getLatestSidecarGap()]);
 				return sidecarHealthOf(state, lastGap);
 			} catch {
-				return { healthy: false, last_poll_at: null, last_error: "state unavailable", last_gap: null };
+				return { healthy: false, last_poll_at: null, last_error: "state unavailable", label_error: null, last_gap: null };
 			}
 		}),
 	);
@@ -1089,7 +1089,7 @@ app.get("/api/v1/mailboxes/:mailboxId", async (c: AppContext) => {
 			]);
 			sidecar_health = sidecarHealthOf(state, lastGap);
 		} catch {
-			sidecar_health = { healthy: false, last_poll_at: null, last_error: "state unavailable", last_gap: null };
+			sidecar_health = { healthy: false, last_poll_at: null, last_error: "state unavailable", label_error: null, last_gap: null };
 		}
 	}
 
