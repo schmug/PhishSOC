@@ -1,10 +1,20 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 /**
- * Sidecar poll-state, audit, dedupe, and retention-reap logic (issue #31).
- * Pure `_xImpl(sql, ...)` functions so the business logic is testable
- * against node:sqlite without a Workers runtime — same pattern as
+ * Sidecar poll-state, audit, events, dedupe, and retention-reap logic
+ * (issue #31). Pure `_xImpl(sql, ...)` functions so the business logic is
+ * testable against node:sqlite without a Workers runtime — same pattern as
  * `catchall-intel.ts`. `MailboxDO` exposes thin async delegates.
+ *
+ * `sidecar_events` (issue #594) is a dedicated append-only log for
+ * operational events — today only `kind: "history-gap"` (the Gmail history
+ * cursor aged out and the poller re-anchored, so a window of mail was never
+ * scored). It is deliberately NOT folded into `sidecar_audit`: that table's
+ * contract is one row per verdict decision (gmail_message_id/action/mode
+ * are NOT NULL and meaningful), and a gap row with a blank message id would
+ * silently corrupt the verdict-mix counts that justify observe→active
+ * promotion. Events carry the cursor jump (`old_cursor` → `new_cursor`) so
+ * an operator can bound the unscored window.
  */
 
 import type { SqlLike } from "./catchall-intel";
@@ -49,6 +59,41 @@ export function _appendSidecarAuditImpl(
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		row.ts, row.gmail_message_id, row.email_id, row.action, row.score, row.labels_applied, row.mode,
 	);
+}
+
+export interface SidecarEventRow {
+	ts: string;
+	kind: string;
+	old_cursor: string | null;
+	new_cursor: string | null;
+	detail: string | null;
+}
+
+const EVENT_COLUMNS = "ts, kind, old_cursor, new_cursor, detail";
+
+/** Append one durable operational event (#594). Append-only: no update or
+ * delete path exists, so a recorded gap can never be erased by later polls. */
+export function _appendSidecarEventImpl(sql: SqlLike, row: SidecarEventRow): void {
+	sql.exec(
+		`INSERT INTO sidecar_events (${EVENT_COLUMNS}) VALUES (?, ?, ?, ?, ?)`,
+		row.ts, row.kind, row.old_cursor, row.new_cursor, row.detail,
+	);
+}
+
+/** List events newest-first (per-mailbox by DO scope), capped for the API. */
+export function _listSidecarEventsImpl(sql: SqlLike, limit = 50): SidecarEventRow[] {
+	return [...sql.exec(
+		`SELECT ${EVENT_COLUMNS} FROM sidecar_events ORDER BY id DESC LIMIT ?`,
+		limit,
+	)] as unknown as SidecarEventRow[];
+}
+
+/** Most recent history-gap event, or null — drives `sidecar_health.last_gap`. */
+export function _latestSidecarGapImpl(sql: SqlLike): SidecarEventRow | null {
+	const rows = [...sql.exec(
+		`SELECT ${EVENT_COLUMNS} FROM sidecar_events WHERE kind = 'history-gap' ORDER BY id DESC LIMIT 1`,
+	)];
+	return rows.length > 0 ? (rows[0] as unknown as SidecarEventRow) : null;
 }
 
 export function _findEmailIdByMessageIdImpl(sql: SqlLike, messageId: string): string | null {

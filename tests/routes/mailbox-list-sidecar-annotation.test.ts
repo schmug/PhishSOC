@@ -39,13 +39,17 @@ function makeR2(initial: Record<string, string> = {}) {
 	};
 }
 
-function makeMailboxNs(sidecarStates: Record<string, unknown> = {}) {
+function makeMailboxNs(sidecarStates: Record<string, unknown> = {}, sidecarGaps: Record<string, unknown> = {}) {
 	return {
 		idFromName: (n: string) => ({ toString: () => n }),
 		get: (id: { toString: () => string }) => ({
 			async getSidecarState() {
 				const id_ = id.toString();
 				return sidecarStates[id_] ?? null;
+			},
+			async getLatestSidecarGap() {
+				const id_ = id.toString();
+				return sidecarGaps[id_] ?? null;
 			},
 			async getFolders() {
 				return [];
@@ -96,7 +100,7 @@ describe("GET /api/v1/mailboxes — sidecar annotation (#31)", () => {
 		}>;
 		const m = body.find((x) => x.id === "side@acme.example");
 		expect(m?.sidecar).toBe(true);
-		expect(m?.sidecar_health).toEqual({ healthy: true, last_poll_at: null, last_error: null });
+		expect(m?.sidecar_health).toEqual({ healthy: true, last_poll_at: null, last_error: null, last_gap: null });
 	});
 
 	it("marks a sidecar mailbox unhealthy after 3+ consecutive failures", async () => {
@@ -138,6 +142,29 @@ describe("GET /api/v1/mailboxes — sidecar annotation (#31)", () => {
 		const body = (await res.json()) as Array<{ id: string; sidecar_health: { healthy: boolean } | null }>;
 		const m = body.find((x) => x.id === "side@acme.example");
 		expect(m?.sidecar_health?.healthy).toBe(false);
+	});
+
+	it("annotates the list with last_gap from the durable history-gap record (#594)", async () => {
+		const bucket = makeR2({
+			"org/settings.json": JSON.stringify({}),
+			"mailboxes/side@acme.example.json": JSON.stringify(sidecarBlock),
+		});
+		const env = {
+			BUCKET: bucket,
+			MAILBOX: makeMailboxNs(
+				{ "side@acme.example": { consecutive_failures: 0, last_poll_at: Date.now(), last_error: null } },
+				{ "side@acme.example": { ts: "2026-07-06T09:00:00Z", kind: "history-gap", old_cursor: "100", new_cursor: "900", detail: "cursor expired" } },
+			),
+		} as unknown as Parameters<typeof app.request>[2];
+
+		const res = await app.request("/api/v1/mailboxes", {}, env);
+		const body = (await res.json()) as Array<{
+			id: string;
+			sidecar_health: { healthy: boolean; last_gap: { ts: string; old_cursor: string | null; new_cursor: string | null } | null } | null;
+		}>;
+		const m = body.find((x) => x.id === "side@acme.example");
+		expect(m?.sidecar_health?.healthy).toBe(true);
+		expect(m?.sidecar_health?.last_gap).toEqual({ ts: "2026-07-06T09:00:00Z", old_cursor: "100", new_cursor: "900" });
 	});
 
 	it("does not leak honeypot mailboxes even when they also carry a sidecar block", async () => {
@@ -232,7 +259,35 @@ describe("GET /api/v1/mailboxes/:mailboxId — sidecar_health (#31)", () => {
 		const body = (await res.json()) as {
 			sidecar_health: { healthy: boolean; last_poll_at: number | null; last_error: string | null };
 		};
-		expect(body.sidecar_health).toEqual({ healthy: true, last_poll_at: recentTs, last_error: "temp" });
+		expect(body.sidecar_health).toEqual({ healthy: true, last_poll_at: recentTs, last_error: "temp", last_gap: null });
+	});
+
+	it("surfaces a durable history-gap record in sidecar_health.last_gap even after last_error resets (#594)", async () => {
+		// State as it looks one clean poll AFTER a history gap: last_error is
+		// back to null (the pre-#594 evidence-vanishing state), but the durable
+		// sidecar_events row still drives the operator-facing surface.
+		const recentTs = Date.now() - 60_000;
+		const bucket = makeR2({
+			"org/settings.json": JSON.stringify({}),
+			"mailboxes/side@acme.example.json": JSON.stringify(sidecarBlock),
+		});
+		const env = {
+			BUCKET: bucket,
+			MAILBOX: makeMailboxNs(
+				{ "side@acme.example": { consecutive_failures: 0, last_poll_at: recentTs, last_error: null } },
+				{ "side@acme.example": { ts: "2026-07-06T09:00:00Z", kind: "history-gap", old_cursor: "100", new_cursor: "900", detail: "cursor expired" } },
+			),
+		} as unknown as Parameters<typeof app.request>[2];
+
+		const res = await app.request("/api/v1/mailboxes/side@acme.example", {}, env);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			sidecar_health: { healthy: boolean; last_error: string | null; last_gap: unknown };
+		};
+		// Gap ≠ failure: health stays green, but the gap stays visible.
+		expect(body.sidecar_health.healthy).toBe(true);
+		expect(body.sidecar_health.last_error).toBeNull();
+		expect(body.sidecar_health.last_gap).toEqual({ ts: "2026-07-06T09:00:00Z", old_cursor: "100", new_cursor: "900" });
 	});
 
 	it("returns sidecar_health with healthy:false when the last poll is stale", async () => {

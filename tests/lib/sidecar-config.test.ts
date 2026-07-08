@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { MailboxSettings, SidecarSettings } from "../../shared/mailbox-settings";
-import { sidecarConfigOf } from "../../workers/lib/sidecar-config";
+import { sidecarConfigOf, sidecarHealthOf } from "../../workers/lib/sidecar-config";
 import { stripDefaultEqual } from "../../workers/lib/mailbox-settings";
 
 describe("SidecarSettings schema", () => {
@@ -92,6 +92,32 @@ describe("sidecarConfigOf", () => {
 		expect(cfg?.mode).toBe("active");
 		expect(cfg?.quarantine_behavior).toBe("label-and-archive");
 		expect(cfg?.retention_days).toBe(0);
+	});
+});
+
+describe("sidecarHealthOf x last_gap (#594)", () => {
+	it("reports last_gap: null when no gap event exists (and by default)", () => {
+		expect(sidecarHealthOf(null).last_gap).toBeNull();
+		expect(
+			sidecarHealthOf({ consecutive_failures: 0, last_poll_at: Date.now(), last_error: null }, null).last_gap,
+		).toBeNull();
+	});
+
+	it("surfaces the gap timestamp + cursor jump WITHOUT flipping healthy (gap ≠ failure)", () => {
+		const h = sidecarHealthOf(
+			{ consecutive_failures: 0, last_poll_at: Date.now(), last_error: null },
+			{ ts: "2026-07-06T00:00:00Z", old_cursor: "100", new_cursor: "900" },
+		);
+		expect(h.healthy).toBe(true);
+		expect(h.last_gap).toEqual({ ts: "2026-07-06T00:00:00Z", old_cursor: "100", new_cursor: "900" });
+	});
+
+	it("keeps last_gap to the surfaced shape even when the DO row carries extra columns", () => {
+		const h = sidecarHealthOf(
+			{ consecutive_failures: 0, last_poll_at: Date.now(), last_error: null },
+			{ ts: "2026-07-06T00:00:00Z", old_cursor: "100", new_cursor: "900", kind: "history-gap", detail: "x" } as never,
+		);
+		expect(h.last_gap).toEqual({ ts: "2026-07-06T00:00:00Z", old_cursor: "100", new_cursor: "900" });
 	});
 });
 

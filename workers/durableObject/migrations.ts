@@ -587,6 +587,28 @@ export const mailboxMigrations: Migration[] = [
 		name: "27_relay_status",
 		sql: `ALTER TABLE emails ADD COLUMN relay_status TEXT;`,
 	},
+	{
+		// Durable sidecar operational events (issue #594). Today the only
+		// kind is 'history-gap': the Gmail history cursor aged out, the
+		// poller re-anchored, and the mail that arrived in between was never
+		// scored. `sidecar_state.last_error` is transient (the next clean
+		// poll nulls it), so gap evidence must live in an append-only log.
+		// Kept separate from `sidecar_audit`, whose contract is one row per
+		// verdict decision — see workers/durableObject/sidecar-state.ts.
+		// `old_cursor`/`new_cursor` record the jump; `detail` is free text.
+		name: "28_sidecar_events",
+		sql: `
+            CREATE TABLE sidecar_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                old_cursor TEXT,
+                new_cursor TEXT,
+                detail TEXT
+            );
+            CREATE INDEX idx_sidecar_events_ts ON sidecar_events(ts DESC);
+        `,
+	},
 ];
 
 /**

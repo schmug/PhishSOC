@@ -31,6 +31,7 @@ function makeStub(state: Record<string, unknown> | null) {
 		getSidecarState: vi.fn().mockResolvedValue(state),
 		putSidecarState: vi.fn().mockResolvedValue(undefined),
 		appendSidecarAudit: vi.fn().mockResolvedValue(undefined),
+		appendSidecarEvent: vi.fn().mockResolvedValue(undefined),
 		findEmailIdByMessageId: vi.fn().mockResolvedValue(null),
 		createCase: vi.fn().mockResolvedValue({ id: "case-1" }),
 	};
@@ -213,6 +214,42 @@ describe("pollWorkspaceMailbox", () => {
 		expect(patch.history_cursor).toBe("900");
 		expect(patch.consecutive_failures).toBe(0);
 		expect(patch.last_error).toMatch(/history gap/);
+		// Durable record (#594): the gap lands in sidecar_events with the
+		// cursor jump, not just the transient last_error field.
+		expect(stub.appendSidecarEvent).toHaveBeenCalledTimes(1);
+		expect(stub.appendSidecarEvent).toHaveBeenCalledWith(expect.objectContaining({
+			kind: "history-gap", old_cursor: "1", new_cursor: "900", ts: expect.any(String),
+		}));
+	});
+
+	it("history-gap record survives the next clean poll (#594): last_error resets to null, the event stays", async () => {
+		// Poll 1: expired cursor → re-anchor + durable gap event.
+		const stub = makeStub(freshState("1"));
+		gmailFetch({
+			"/history": () => new Response("Not Found", { status: 404 }),
+			"/profile": () => new Response(JSON.stringify({ emailAddress: "u@t", historyId: "900" }), { status: 200 }),
+		});
+		await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(stub.appendSidecarEvent).toHaveBeenCalledTimes(1);
+		expect(stub.putSidecarState.mock.calls.at(-1)![0].last_error).toMatch(/history gap/);
+
+		// Poll 2 (~1 minute later, clean): the state patch overwrites
+		// last_error with null — the pre-#594 behavior that erased all gap
+		// evidence — but the durable event is append-only: nothing in the
+		// clean-poll path clears or rewrites sidecar_events.
+		stub.getSidecarState.mockResolvedValue(freshState("900"));
+		gmailFetch({
+			"/history": () => new Response(JSON.stringify({ historyId: "901", history: [] }), { status: 200 }),
+		});
+		const r2 = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(r2.error).toBeNull();
+		const patch = stub.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch.last_error).toBeNull();
+		expect(patch.history_cursor).toBe("901");
+		// Still exactly one gap event: the clean poll neither re-appended nor
+		// erased it. (No stub method deletes events; DO-level survival is
+		// pinned in test/durableObject/sidecar-state.test.ts.)
+		expect(stub.appendSidecarEvent).toHaveBeenCalledTimes(1);
 	});
 
 	it("a Gmail failure freezes the cursor, increments consecutive_failures, records last_error", async () => {

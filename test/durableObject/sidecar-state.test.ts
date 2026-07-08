@@ -16,6 +16,9 @@ import {
 	_getSidecarStateImpl,
 	_putSidecarStateImpl,
 	_appendSidecarAuditImpl,
+	_appendSidecarEventImpl,
+	_listSidecarEventsImpl,
+	_latestSidecarGapImpl,
 	_findEmailIdByMessageIdImpl,
 	_listReapableEmailsImpl,
 	_markBodiesReapedImpl,
@@ -51,6 +54,16 @@ function makeSqlLike(): SqlLike {
             mode TEXT NOT NULL
         );
         CREATE INDEX idx_sidecar_audit_ts ON sidecar_audit(ts DESC);
+
+        CREATE TABLE sidecar_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            old_cursor TEXT,
+            new_cursor TEXT,
+            detail TEXT
+        );
+        CREATE INDEX idx_sidecar_events_ts ON sidecar_events(ts DESC);
 
         CREATE TABLE emails (
             id TEXT PRIMARY KEY,
@@ -113,6 +126,50 @@ describe("sidecar_audit", () => {
 		});
 		const rows = [...sql.exec("SELECT gmail_message_id, mode FROM sidecar_audit ORDER BY id")];
 		expect(rows.length).toBe(2);
+	});
+});
+
+describe("sidecar_events (durable history-gap record, #594)", () => {
+	const gap = (ts: string, oldCursor: string, newCursor: string) => ({
+		ts, kind: "history-gap", old_cursor: oldCursor, new_cursor: newCursor,
+		detail: "cursor expired past Gmail history retention; mail during the gap was not scored",
+	});
+
+	it("appends events and lists them newest-first, queryable per mailbox DO", () => {
+		const sql = makeSqlLike();
+		expect(_listSidecarEventsImpl(sql)).toEqual([]);
+		_appendSidecarEventImpl(sql, gap("2026-07-01T00:00:00Z", "100", "900"));
+		_appendSidecarEventImpl(sql, gap("2026-07-06T00:00:00Z", "900", "4200"));
+		const rows = _listSidecarEventsImpl(sql);
+		// DO SQLite rowsWritten counts index rows, so insert success is asserted
+		// via the read-back count (> 0), never an exact rowsWritten figure.
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rows.map((r) => r.ts)).toEqual(["2026-07-06T00:00:00Z", "2026-07-01T00:00:00Z"]);
+		expect(rows[0]).toMatchObject({ kind: "history-gap", old_cursor: "900", new_cursor: "4200" });
+	});
+
+	it("latestSidecarGap returns null with no events and the most recent gap row otherwise", () => {
+		const sql = makeSqlLike();
+		expect(_latestSidecarGapImpl(sql)).toBeNull();
+		_appendSidecarEventImpl(sql, gap("2026-07-01T00:00:00Z", "100", "900"));
+		_appendSidecarEventImpl(sql, gap("2026-07-06T00:00:00Z", "900", "4200"));
+		expect(_latestSidecarGapImpl(sql)).toMatchObject({
+			ts: "2026-07-06T00:00:00Z", old_cursor: "900", new_cursor: "4200",
+		});
+	});
+
+	it("a history-gap event survives a subsequent clean-poll state write resetting last_error", () => {
+		const sql = makeSqlLike();
+		// The re-anchor poll: durable event + transient last_error.
+		_appendSidecarEventImpl(sql, gap("2026-07-06T00:00:00Z", "100", "900"));
+		_putSidecarStateImpl(sql, { history_cursor: "900", last_error: "history gap: cursor expired", consecutive_failures: 0 });
+		// One clean poll later: last_error resets to null...
+		_putSidecarStateImpl(sql, { history_cursor: "901", last_error: null, consecutive_failures: 0 });
+		expect(_getSidecarStateImpl(sql)?.last_error).toBeNull();
+		// ...but the durable gap record is untouched (append-only, no reset path).
+		const rows = _listSidecarEventsImpl(sql);
+		expect(rows.length).toBe(1);
+		expect(_latestSidecarGapImpl(sql)).toMatchObject({ old_cursor: "100", new_cursor: "900" });
 	});
 });
 
