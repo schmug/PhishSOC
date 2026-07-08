@@ -218,7 +218,7 @@ export function parseSettingsLenient<T extends z.ZodTypeAny>(
         console.warn(
           `parseSettingsLenient: dropped invalid ${droppedLabels.join(
             "+",
-          )} on read (secret-name prefix invariant); preserved the rest of the tier`,
+          )} on read; preserved the rest of the tier`,
         );
         return retry.data;
       }
