@@ -137,6 +137,12 @@ export const SIDECAR_BACKOFF_THRESHOLD = 5;
 export const SIDECAR_BACKOFF_INTERVAL_MS = 15 * 60 * 1000;
 export const MAX_MESSAGES_PER_POLL = 25;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+/**
+ * Poll lease TTL (#591): must comfortably exceed a worst-case tick (a full
+ * batch is ~26 sequential Gmail round-trips) and expire on its own so a
+ * crashed poller never wedges the mailbox.
+ */
+export const POLL_LEASE_TTL_MS = 5 * 60 * 1000;
 
 export interface PollResult { processed: number; deduped: number; error: string | null }
 
@@ -144,7 +150,9 @@ interface SidecarStub {
 	getSidecarState(): Promise<{
 		history_cursor: string | null; access_token: string | null; token_expires_at: number | null;
 		label_ids: string | null; last_poll_at: number | null; last_error: string | null; consecutive_failures: number;
+		poll_lease_until: number | null;
 	} | null>;
+	acquirePollLease(nowMs: number, ttlMs: number): Promise<boolean>;
 	putSidecarState(patch: Record<string, unknown>): Promise<void>;
 	appendSidecarAudit(row: Record<string, unknown>): Promise<void>;
 	appendSidecarEvent(row: Record<string, unknown>): Promise<void>;
@@ -158,8 +166,9 @@ const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ?
 
 /**
  * Poll one sidecar-enabled mailbox for new Gmail messages and feed them
- * through the shared receive pipeline. See the 10-rule algorithm in
- * docs/superpowers/sdd/task-7-brief.md: backoff gate, token reuse/mint,
+ * through the shared receive pipeline. Guarded by a per-mailbox poll lease
+ * (#591) so overlapping cron ticks cannot double-process. See the 10-rule
+ * algorithm in docs/superpowers/sdd/task-7-brief.md: backoff gate, token reuse/mint,
  * first-run cursor anchor (no backfill), history-gap re-anchor, batch cap
  * (no cursor advance when capped), per-message dedupe on RFC Message-ID
  * (falling back to the stored provider id when the header is absent, #593),
@@ -179,14 +188,26 @@ export async function pollWorkspaceMailbox(
 	const state = (await stub.getSidecarState()) ?? {
 		history_cursor: null, access_token: null, token_expires_at: null,
 		label_ids: null, last_poll_at: null, last_error: null, consecutive_failures: 0,
+		poll_lease_until: null,
 	};
 
-	// Backoff gate (rule 2).
+	// Backoff gate (rule 2). Sits BEFORE the lease so a backed-off mailbox
+	// costs a read, not a lease write, per minute.
 	if (
 		state.consecutive_failures >= SIDECAR_BACKOFF_THRESHOLD &&
 		state.last_poll_at !== null &&
 		Date.now() - state.last_poll_at < SIDECAR_BACKOFF_INTERVAL_MS
 	) {
+		return { processed: 0, deduped: 0, error: null };
+	}
+
+	// Poll lease (#591): a tick that runs past 60s overlaps the next cron
+	// invocation — both would read the same cursor and could pass the
+	// per-message dedupe probe before either stores. The check-and-set is
+	// atomic inside the DO (one round-trip); a held lease means another
+	// poller owns this mailbox right now, so skip without touching state.
+	// The TTL-expiry steal in acquirePollLease covers a crashed holder.
+	if (!(await stub.acquirePollLease(Date.now(), POLL_LEASE_TTL_MS))) {
 		return { processed: 0, deduped: 0, error: null };
 	}
 
@@ -212,6 +233,10 @@ export async function pollWorkspaceMailbox(
 		const patch: Record<string, unknown> = {
 			access_token: token, token_expires_at: tokenExpiresAt,
 			last_poll_at: Date.now(), last_error: null, consecutive_failures: 0,
+			// Lease release (#591) rides the state patch every completion path
+			// (first-run, history-gap, steady state) already writes — no extra
+			// DO round-trip.
+			poll_lease_until: null,
 		};
 
 		if (!state.history_cursor) {
@@ -328,6 +353,10 @@ export async function pollWorkspaceMailbox(
 		await stub.putSidecarState({
 			last_poll_at: Date.now(), last_error: message,
 			consecutive_failures: state.consecutive_failures + 1,
+			// Failure path releases the lease too (#591): a failing poll must
+			// not hold the mailbox for the whole TTL. If THIS write also fails,
+			// the lease simply expires on its own.
+			poll_lease_until: null,
 		}).catch((pe) => console.error("sidecar state write failed:", (pe as Error).message));
 		return { processed, deduped, error: message };
 	}
