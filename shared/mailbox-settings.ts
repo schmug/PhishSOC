@@ -138,17 +138,29 @@ export const IntelSettings = z
  * The strict schema is still used verbatim on WRITE paths (settings PUT
  * endpoints, `parseOrgSettings` / `parseDomainSettings`) so malformed input is
  * rejected at write time. But on READ, a *legacy stored blob* whose
- * `intel.hub.api_key_secret_name` (or a feed's `auth_secret`) predates the
- * `HUB_SECRET_` / `FEED_SECRET_` prefix invariant must not blow away the whole
- * tier — a strict `.parse()` throws on the entire object, which would silently
- * drop `agentModel`, `autoDraft`, `security`, etc. on every read.
+ * `intel.hub.api_key_secret_name` (or a feed's `auth_secret`, or the sidecar's
+ * `credentials_secret_name`) predates the `HUB_SECRET_` / `FEED_SECRET_` /
+ * `SIDECAR_SECRET_` prefix invariant must not blow away the whole tier — a
+ * strict `.parse()` throws on the entire object, which would silently drop
+ * `agentModel`, `autoDraft`, `security`, etc. on every read.
  *
- * Strategy: parse strictly; on failure, drop ONLY the offending `intel.hub`
- * and/or the invalid `intel.feeds[]` entries, then retry. The runtime guards
- * (`loadHubConfig` / `resolveFeeds`) already enforce the prefix at use time, so
- * a dropped hub merely disables hub reporting rather than corrupting the tier.
- * Anything malformed beyond that known case falls back to empty (prior
+ * Strategy: parse strictly; on failure, drop ONLY the offending `intel.hub`,
+ * the invalid `intel.feeds[]` entries, and/or the invalid `sidecar` block,
+ * then retry. The runtime guards (`loadHubConfig` / `resolveFeeds` /
+ * `sidecarConfigOf`) already enforce the prefix at use time, so a dropped
+ * block merely disables that one feature rather than corrupting the tier.
+ * Anything malformed beyond those known cases falls back to empty (prior
  * behaviour). NOTE: read-only — never use this on a write path.
+ *
+ * SECURITY NOTE (#592): salvage means DROP, never accept. An invalid block —
+ * e.g. a `sidecar.credentials_secret_name` outside the `SIDECAR_SECRET_`
+ * namespace, which could otherwise point the poller at an arbitrary worker
+ * secret — is deleted from the parsed result, never passed through, "fixed
+ * up", or written back to R2 (the stored blob is untouched). The strict
+ * schemas stay the write-path gate and `sidecarConfigOf` / `loadHubConfig`
+ * stay the runtime enforcement layer; this function only prevents the
+ * failure mode where one bad block wipes every other setting (including
+ * `security` overrides) to `{}` on read.
  */
 export function parseSettingsLenient<T extends z.ZodTypeAny>(
   schema: T,
@@ -157,39 +169,58 @@ export function parseSettingsLenient<T extends z.ZodTypeAny>(
   const first = schema.safeParse(raw ?? {});
   if (first.success) return first.data;
 
-  if (raw && typeof raw === "object" && !Array.isArray(raw) && "intel" in raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     const rec = raw as Record<string, unknown>;
+    const issues = first.error.issues;
+    const salvaged: Record<string, unknown> = { ...rec };
+    const droppedLabels: string[] = [];
+
     const intel = rec.intel;
     if (intel && typeof intel === "object" && !Array.isArray(intel)) {
-      const issues = first.error.issues;
       const dropHub = issues.some((i) => i.path[0] === "intel" && i.path[1] === "hub");
       const dropFeeds = issues.some(
         (i) => i.path[0] === "intel" && i.path[1] === "feeds",
       );
       if (dropHub || dropFeeds) {
-        const salvaged: Record<string, unknown> = {
+        const salvagedIntel: Record<string, unknown> = {
           ...(intel as Record<string, unknown>),
         };
-        if (dropHub) delete salvaged.hub;
+        if (dropHub) delete salvagedIntel.hub;
         if (dropFeeds) {
-          salvaged.feeds = Array.isArray(salvaged.feeds)
-            ? (salvaged.feeds as unknown[]).filter(
+          salvagedIntel.feeds = Array.isArray(salvagedIntel.feeds)
+            ? (salvagedIntel.feeds as unknown[]).filter(
                 (f) => IntelFeed.safeParse(f).success,
               )
             : undefined;
         }
-        const retry = schema.safeParse({ ...rec, intel: salvaged });
-        if (retry.success) {
-          console.warn(
-            `parseSettingsLenient: dropped invalid intel.${[
-              dropHub && "hub",
-              dropFeeds && "feeds",
-            ]
-              .filter(Boolean)
-              .join("+")} on read (secret-name prefix invariant); preserved the rest of the tier`,
-          );
-          return retry.data;
-        }
+        salvaged.intel = salvagedIntel;
+        droppedLabels.push(
+          `intel.${[dropHub && "hub", dropFeeds && "feeds"]
+            .filter(Boolean)
+            .join("+")}`,
+        );
+      }
+    }
+
+    // #592: an invalid `sidecar` block (bad `SIDECAR_SECRET_` prefix, legacy
+    // shape, manual R2 edit) is dropped wholesale — never partially accepted —
+    // so it degrades to "sidecar disabled" on read instead of wiping the tier.
+    const dropSidecar =
+      "sidecar" in rec && issues.some((i) => i.path[0] === "sidecar");
+    if (dropSidecar) {
+      delete salvaged.sidecar;
+      droppedLabels.push("sidecar");
+    }
+
+    if (droppedLabels.length > 0) {
+      const retry = schema.safeParse(salvaged);
+      if (retry.success) {
+        console.warn(
+          `parseSettingsLenient: dropped invalid ${droppedLabels.join(
+            "+",
+          )} on read (secret-name prefix invariant); preserved the rest of the tier`,
+        );
+        return retry.data;
       }
     }
   }

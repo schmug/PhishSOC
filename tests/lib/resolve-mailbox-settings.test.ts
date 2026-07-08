@@ -1260,3 +1260,106 @@ describe("parseSettingsLenient — read-path leniency for legacy non-prefixed se
 	});
 });
 
+describe("parseSettingsLenient — sidecar salvage (#592)", () => {
+	it("drops an invalid sidecar (non-SIDECAR_SECRET_ credentials name) but preserves the rest of the tier", () => {
+		const parsed = parseSettingsLenient(MailboxSettings, {
+			agentModel: "@cf/custom/v1",
+			security: { allowlist_senders: ["trusted@example.com"] },
+			sidecar: {
+				provider: "workspace",
+				// Violates the SIDECAR_SECRET_ prefix invariant — could otherwise
+				// point the poller at an arbitrary worker secret.
+				credentials_secret_name: "MASTER_DB_PASSWORD",
+			},
+		});
+		// The tier survives — the strict schema would have thrown and wiped it,
+		// silently losing the security overrides on every read.
+		expect(parsed.agentModel).toBe("@cf/custom/v1");
+		expect(
+			(parsed.security as Record<string, unknown> | undefined)?.allowlist_senders,
+		).toEqual(["trusted@example.com"]);
+		// Salvage means DROP, never accept — the invalid block is gone entirely
+		// (the runtime sidecarConfigOf guard would also null it at use time).
+		expect(parsed.sidecar).toBeUndefined();
+	});
+
+	it("drops a structurally malformed sidecar block (unknown provider), not just bad prefixes", () => {
+		const parsed = parseSettingsLenient(MailboxSettings, {
+			agentModel: "@cf/custom/v1",
+			sidecar: {
+				provider: "imap", // legacy blob / manual R2 edit
+				credentials_secret_name: "SIDECAR_SECRET_OK",
+			},
+		});
+		expect(parsed.agentModel).toBe("@cf/custom/v1");
+		expect(parsed.sidecar).toBeUndefined();
+	});
+
+	it("names the dropped sidecar block in the console warning, matching the hub/feeds style", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			parseSettingsLenient(MailboxSettings, {
+				sidecar: {
+					provider: "workspace",
+					credentials_secret_name: "MASTER_DB_PASSWORD",
+				},
+			});
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(warn.mock.calls[0][0]).toContain("dropped invalid sidecar");
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("returns the value unchanged when the sidecar block is valid", () => {
+		const parsed = parseSettingsLenient(MailboxSettings, {
+			sidecar: {
+				provider: "workspace",
+				credentials_secret_name: "SIDECAR_SECRET_OK",
+				mode: "active",
+			},
+		});
+		expect(parsed.sidecar?.credentials_secret_name).toBe("SIDECAR_SECRET_OK");
+		expect(parsed.sidecar?.mode).toBe("active");
+	});
+
+	it("drops both an invalid intel.hub and an invalid sidecar in one salvage pass", () => {
+		const parsed = parseSettingsLenient(MailboxSettings, {
+			agentModel: "@cf/custom/v1",
+			intel: {
+				hub: {
+					url: "https://hub.example.com",
+					org_uuid: "org-1",
+					api_key_secret_name: "MASTER_DB_PASSWORD",
+				},
+			},
+			sidecar: {
+				provider: "workspace",
+				credentials_secret_name: "MASTER_DB_PASSWORD",
+			},
+		});
+		expect(parsed.agentModel).toBe("@cf/custom/v1");
+		expect(parsed.intel?.hub).toBeUndefined();
+		expect(parsed.sidecar).toBeUndefined();
+	});
+
+	it("getMailboxSettings does not wipe the tier when a stored blob carries a bad sidecar credentials name", async () => {
+		const bucket = makeFakeBucket({
+			[MAILBOX_KEY]: {
+				agentModel: "@cf/custom/v1",
+				security: { allowlist_senders: ["trusted@example.com"] },
+				sidecar: {
+					provider: "workspace",
+					credentials_secret_name: "MASTER_DB_PASSWORD",
+				},
+			},
+		});
+		const settings = await getMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(settings.agentModel).toBe("@cf/custom/v1");
+		expect(
+			(settings.security as Record<string, unknown> | undefined)?.allowlist_senders,
+		).toEqual(["trusted@example.com"]);
+		expect(settings.sidecar).toBeUndefined();
+	});
+});
+
