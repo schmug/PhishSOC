@@ -26,6 +26,13 @@ function rawMessage(msgId: string, subject: string): string {
 	return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+// Same, but with NO Message-ID header — adversarial mail omits it on purpose
+// to dodge Message-ID-keyed dedupe (#593).
+function rawMessageNoMsgId(subject: string): string {
+	const raw = `Subject: ${subject}\r\nFrom: a@evil.example\r\nTo: user@tenant.example\r\n\r\nbody`;
+	return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function makeStub(state: Record<string, unknown> | null) {
 	return {
 		getSidecarState: vi.fn().mockResolvedValue(state),
@@ -33,6 +40,7 @@ function makeStub(state: Record<string, unknown> | null) {
 		appendSidecarAudit: vi.fn().mockResolvedValue(undefined),
 		appendSidecarEvent: vi.fn().mockResolvedValue(undefined),
 		findEmailIdByMessageId: vi.fn().mockResolvedValue(null),
+		findEmailIdByProviderMessageId: vi.fn().mockResolvedValue(null),
 		createCase: vi.fn().mockResolvedValue({ id: "case-1" }),
 	};
 }
@@ -339,6 +347,57 @@ describe("pollWorkspaceMailbox", () => {
 		const patch = stub.putSidecarState.mock.calls.at(-1)![0];
 		expect(patch.history_cursor).toBeUndefined(); // frozen
 		expect(patch.consecutive_failures).toBe(1);
+	});
+
+	it("regression (#593): replayed poll dedupes a Message-ID-less message via the provider id — no duplicate email/audit/case", async () => {
+		const many = [0, 1].map((i) => ({ message: { id: `g${i}`, labelIds: ["INBOX"] } }));
+		const history = () => new Response(JSON.stringify({ historyId: "777", history: [{ messagesAdded: many }] }), { status: 200 });
+
+		// -- Poll 1: g0 (NO Message-ID header) ingests and is flagged; g1's
+		// messages.get 500s mid-batch, so the cursor freezes and the next
+		// poll re-lists BOTH ids. --
+		const stub1 = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-g0", verdict: { action: "quarantine", score: 90, confidence: 0.9, explanation: "", signals: [] } as never });
+		gmailFetch({
+			"/history": history,
+			"/messages/g1": () => new Response("boom", { status: 500 }),
+			"/messages/g0": () => new Response(JSON.stringify({ id: "g0", raw: rawMessageNoMsgId("no-msgid phish") }), { status: 200 }),
+		});
+		const r1 = await pollWorkspaceMailbox(makeEnv(stub1), ctx, "user@tenant.example", CFG);
+		expect(r1.error).not.toBeNull();
+		expect(r1.processed).toBe(1); // g0 ingested before g1 threw
+		expect(stub1.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBeUndefined(); // frozen
+		expect(stub1.appendSidecarAudit).toHaveBeenCalledTimes(1);
+		expect(stub1.createCase).toHaveBeenCalledTimes(1);
+
+		// -- Poll 2 (replay): g0 is already stored under its Gmail id. The
+		// RFC Message-ID lookup can never match (there is no Message-ID), so
+		// the dedupe must fall back to the provider-native id. --
+		vi.clearAllMocks();
+		const stub2 = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-g1", verdict: null });
+		stub2.findEmailIdByProviderMessageId.mockImplementation(async (gid: string) => (gid === "g0" ? "local-g0" : null));
+		gmailFetch({
+			"/history": history,
+			"/messages/g1": () => new Response(JSON.stringify({ id: "g1", raw: rawMessage("g1@x", "ok") }), { status: 200 }),
+			"/messages/g0": () => new Response(JSON.stringify({ id: "g0", raw: rawMessageNoMsgId("no-msgid phish") }), { status: 200 }),
+		});
+		const r2 = await pollWorkspaceMailbox(makeEnv(stub2), ctx, "user@tenant.example", CFG);
+		expect(r2).toMatchObject({ processed: 1, deduped: 1, error: null });
+		// g0 was NOT re-ingested: receiveEmail ran only for g1.
+		expect(mockedReceive).toHaveBeenCalledTimes(1);
+		expect(mockedReceive.mock.calls[0][0].providerMessageId).toBe("g1");
+		// No duplicate audit row or Case for the replayed g0.
+		expect(stub2.appendSidecarAudit).not.toHaveBeenCalled();
+		expect(stub2.createCase).not.toHaveBeenCalled();
+		// Dedupe stays ONE DO call per message: the provider-id lookup only
+		// runs for the Message-ID-less message, never in addition to the
+		// Message-ID lookup.
+		expect(stub2.findEmailIdByProviderMessageId).toHaveBeenCalledTimes(1);
+		expect(stub2.findEmailIdByProviderMessageId).toHaveBeenCalledWith("g0");
+		expect(stub2.findEmailIdByMessageId).toHaveBeenCalledTimes(1); // g1 only
+		// Replay fully worked → cursor advances past the wedge.
+		expect(stub2.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBe("777");
 	});
 
 	it("token mint gate: near-expiry token is refreshed and the new token is persisted", async () => {

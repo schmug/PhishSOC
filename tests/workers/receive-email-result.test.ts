@@ -132,6 +132,32 @@ describe("receiveEmail result value (issue #31)", () => {
 		expect(result).toBeNull();
 	});
 
+	it("persists the provider-native message id on the email row (#593 dedupe fallback)", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+
+		await receiveEmail({ ...makeNormalized(), providerMessageId: "gmail-123" }, env, makeCtx());
+
+		expect(stub.createEmail).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ provider_message_id: "gmail-123" }),
+			expect.anything(),
+		);
+	});
+
+	it("leaves provider_message_id null for providers without a native id (CF Email Routing)", async () => {
+		const stub = makeStub();
+		const env = makeEnv(stub);
+
+		await receiveEmail(makeNormalized(), env, makeCtx());
+
+		expect(stub.createEmail).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ provider_message_id: null }),
+			expect.anything(),
+		);
+	});
+
 	it("skips auto-draft dispatch when the mailbox has a sidecar block", async () => {
 		const stub = makeStub();
 		const env = makeEnv(stub);

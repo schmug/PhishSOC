@@ -20,6 +20,7 @@ import {
 	_listSidecarEventsImpl,
 	_latestSidecarGapImpl,
 	_findEmailIdByMessageIdImpl,
+	_findEmailIdByProviderMessageIdImpl,
 	_listReapableEmailsImpl,
 	_markBodiesReapedImpl,
 } from "../../workers/durableObject/sidecar-state";
@@ -71,8 +72,10 @@ function makeSqlLike(): SqlLike {
             date TEXT,
             body TEXT,
             message_id TEXT,
+            provider_message_id TEXT,
             body_reaped_at TEXT
         );
+        CREATE INDEX idx_emails_provider_message_id ON emails(provider_message_id);
         CREATE TABLE attachments (
             id TEXT PRIMARY KEY,
             email_id TEXT,
@@ -182,6 +185,28 @@ describe("Message-ID dedupe lookup", () => {
 		);
 		expect(_findEmailIdByMessageIdImpl(sql, "abc@mail.gmail.com")).toBe("e1");
 		expect(_findEmailIdByMessageIdImpl(sql, "missing@x")).toBeNull();
+	});
+});
+
+describe("provider-id dedupe lookup (#593)", () => {
+	it("finds an email by its provider-native (Gmail) id and returns null on miss", () => {
+		const sql = makeSqlLike();
+		sql.exec(
+			"INSERT INTO emails (id, folder_id, date, body, provider_message_id) VALUES (?, ?, ?, ?, ?)",
+			"e1", "inbox", "2026-07-06T00:00:00Z", "hello", "gmail-abc123",
+		);
+		expect(_findEmailIdByProviderMessageIdImpl(sql, "gmail-abc123")).toBe("e1");
+		expect(_findEmailIdByProviderMessageIdImpl(sql, "gmail-missing")).toBeNull();
+	});
+
+	it("a Message-ID-less email row (message_id NULL) is still findable by provider id", () => {
+		const sql = makeSqlLike();
+		sql.exec(
+			"INSERT INTO emails (id, folder_id, date, body, message_id, provider_message_id) VALUES (?, ?, ?, ?, NULL, ?)",
+			"e2", "inbox", "2026-07-06T00:00:00Z", "no msgid", "gmail-xyz",
+		);
+		expect(_findEmailIdByMessageIdImpl(sql, "anything@x")).toBeNull();
+		expect(_findEmailIdByProviderMessageIdImpl(sql, "gmail-xyz")).toBe("e2");
 	});
 });
 
