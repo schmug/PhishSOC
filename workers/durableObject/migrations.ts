@@ -609,6 +609,23 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX idx_sidecar_events_ts ON sidecar_events(ts DESC);
         `,
 	},
+	{
+		// Provider-native message id (issue #593) — dedupe fallback for
+		// sidecar messages that carry no RFC Message-ID header (adversarial
+		// mail omits it deliberately). The Workspace poller's replay dedupe
+		// keys on `emails.message_id`; when that is NULL every replayed poll
+		// (cursor frozen by a mid-batch failure) re-ingested the message.
+		// Persisting the Gmail message id at ingest gives the poller a
+		// stable second key: `findEmailIdByProviderMessageId`. NULL for CF
+		// Email Routing ingest (no writable source inbox → no provider id)
+		// and for all pre-#593 rows. Forward-only ALTER; the index keeps the
+		// per-message dedupe probe off a table scan.
+		name: "29_provider_message_id",
+		sql: `
+            ALTER TABLE emails ADD COLUMN provider_message_id TEXT;
+            CREATE INDEX IF NOT EXISTS idx_emails_provider_message_id ON emails(provider_message_id);
+        `,
+	},
 ];
 
 /**

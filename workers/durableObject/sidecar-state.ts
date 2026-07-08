@@ -101,6 +101,20 @@ export function _findEmailIdByMessageIdImpl(sql: SqlLike, messageId: string): st
 	return rows.length > 0 ? (rows[0] as { id: string }).id : null;
 }
 
+/**
+ * Dedupe fallback for messages without an RFC Message-ID header (issue
+ * #593): look up the email row by the provider-native id (the Gmail
+ * message id) persisted at ingest. Mechanism (b) from the issue — a
+ * `provider_message_id` column on `emails` (migration 29) rather than an
+ * audit row per ingested message — because a null-verdict message writes
+ * no `sidecar_audit` row (that table's contract is one row per verdict
+ * decision), so an audit-trail lookup would still re-ingest unscored mail.
+ */
+export function _findEmailIdByProviderMessageIdImpl(sql: SqlLike, providerMessageId: string): string | null {
+	const rows = [...sql.exec(`SELECT id FROM emails WHERE provider_message_id = ? LIMIT 1`, providerMessageId)];
+	return rows.length > 0 ? (rows[0] as { id: string }).id : null;
+}
+
 export function _listReapableEmailsImpl(
 	sql: SqlLike,
 	cutoffIso: string,

@@ -27,6 +27,7 @@ import {
 	_listSidecarEventsImpl,
 	_latestSidecarGapImpl,
 	_findEmailIdByMessageIdImpl,
+	_findEmailIdByProviderMessageIdImpl,
 	_listReapableEmailsImpl,
 	_markBodiesReapedImpl,
 	type SidecarStateRow,
@@ -111,6 +112,13 @@ interface EmailData {
 	email_references?: string | null;
 	thread_id?: string | null;
 	message_id?: string | null;
+	/**
+	 * Provider-native message id (issue #593): the Gmail message id when
+	 * the row was ingested by an API-sidecar provider. Dedupe fallback for
+	 * messages without an RFC Message-ID header; NULL for CF Email Routing
+	 * ingest and outbound sends.
+	 */
+	provider_message_id?: string | null;
 	raw_headers?: string | null;
 	/**
 	 * Provenance of the row (issue #266): "agent" when the draft was
@@ -774,6 +782,10 @@ export class MailboxDO extends DurableObject<Env> {
 		return _findEmailIdByMessageIdImpl(this.ctx.storage.sql as SqlLike, messageId);
 	}
 
+	async findEmailIdByProviderMessageId(providerMessageId: string) {
+		return _findEmailIdByProviderMessageIdImpl(this.ctx.storage.sql as SqlLike, providerMessageId);
+	}
+
 	async listReapableSidecarEmails(cutoffIso: string) {
 		return _listReapableEmailsImpl(this.ctx.storage.sql as SqlLike, cutoffIso);
 	}
@@ -1050,6 +1062,7 @@ export class MailboxDO extends DurableObject<Env> {
 				email_references: email.email_references ?? null,
 				thread_id: email.thread_id ?? null,
 				message_id: email.message_id ?? null,
+				provider_message_id: email.provider_message_id ?? null,
 				raw_headers: email.raw_headers ?? null,
 				created_by: email.created_by ?? "user",
 			})

@@ -14,6 +14,19 @@
  *
  * Per #30's contract this file plus gmail-client.ts is the whole provider:
  * no edits to workers/security/, workers/intel/, or workers/agent/.
+ *
+ * Replay dedupe (issue #593): the poll loop is at-least-once (a mid-batch
+ * failure freezes the cursor, so the next poll re-lists already-ingested
+ * ids), and idempotency comes from a per-message dedupe probe. The primary
+ * key is the RFC `Message-ID` header; for messages WITHOUT one — which
+ * adversarial mail omits deliberately — the probe falls back to the
+ * provider-native Gmail message id, persisted on the email row at ingest
+ * (`emails.provider_message_id`, migration 29). That is mechanism (b) from
+ * the issue: a column on the email row, NOT (a) an audit row per ingested
+ * message, because `sidecar_audit`'s contract is one row per verdict
+ * decision — a null-verdict message writes no audit row, so an audit-trail
+ * lookup would still re-ingest unscored mail on every replay. Either way
+ * the dedupe stays one DO call per message.
  */
 
 import PostalMime from "postal-mime";
@@ -136,6 +149,7 @@ interface SidecarStub {
 	appendSidecarAudit(row: Record<string, unknown>): Promise<void>;
 	appendSidecarEvent(row: Record<string, unknown>): Promise<void>;
 	findEmailIdByMessageId(messageId: string): Promise<string | null>;
+	findEmailIdByProviderMessageId(providerMessageId: string): Promise<string | null>;
 	createCase(input: Record<string, unknown>): Promise<{ id: string }>;
 }
 
@@ -147,7 +161,8 @@ const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ?
  * through the shared receive pipeline. See the 10-rule algorithm in
  * docs/superpowers/sdd/task-7-brief.md: backoff gate, token reuse/mint,
  * first-run cursor anchor (no backfill), history-gap re-anchor, batch cap
- * (no cursor advance when capped), per-message dedupe on RFC Message-ID,
+ * (no cursor advance when capped), per-message dedupe on RFC Message-ID
+ * (falling back to the stored provider id when the header is absent, #593),
  * active-mode labeling, and both-mode audit/case writes.
  *
  * Never throws: all failures are caught, recorded in `sidecar_state`
@@ -246,8 +261,14 @@ export async function pollWorkspaceMailbox(
 			if (processed >= MAX_MESSAGES_PER_POLL) { hitCap = true; break; }
 			const bytes = await getRawMessage(token, gmailId);
 			const parsed = await new PostalMime().parse(bytes);
+			// Replay dedupe (rule 7 + #593): RFC Message-ID when present;
+			// otherwise the provider-native Gmail id persisted at ingest (see
+			// the module docstring). One DO call per message either way.
 			const rfcId = parsed.messageId ? extractMsgId(parsed.messageId) : null;
-			if (rfcId && (await stub.findEmailIdByMessageId(rfcId))) { deduped += 1; continue; }
+			const existingId = rfcId
+				? await stub.findEmailIdByMessageId(rfcId)
+				: await stub.findEmailIdByProviderMessageId(gmailId);
+			if (existingId) { deduped += 1; continue; }
 			const normalized: MailboxInbound = {
 				kind: "mailbox",
 				rawEmail: bytes.buffer as ArrayBuffer,

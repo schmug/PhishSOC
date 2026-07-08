@@ -1658,6 +1658,9 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 		body: parsedEmail.html || parsedEmail.text || "",
 		in_reply_to: inReplyTo, email_references: emailReferences.length > 0 ? JSON.stringify(emailReferences) : null,
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
+		// Provider-native id (issue #593): dedupe fallback key for sidecar
+		// messages with no RFC Message-ID header; null for CF Email Routing.
+		provider_message_id: normalized.providerMessageId ?? null,
 	}, attachmentData);
 
 	// Honeypot mailboxes (#24) are IOC sensors, not real inboxes. The message is

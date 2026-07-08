@@ -28,6 +28,11 @@ export const emails = sqliteTable("emails", {
 	email_references: text("email_references"),
 	thread_id: text("thread_id"),
 	message_id: text("message_id"),
+	// Provider-native message id (issue #593): the Gmail message id for
+	// API-sidecar ingest. Second dedupe key for messages without an RFC
+	// Message-ID header — see workers/providers/workspace.ts. NULL for CF
+	// Email Routing ingest and pre-#593 rows.
+	provider_message_id: text("provider_message_id"),
 	raw_headers: text("raw_headers"),
 	security_verdict: text("security_verdict"),
 	security_score: integer("security_score"),
