@@ -626,6 +626,17 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_emails_provider_message_id ON emails(provider_message_id);
         `,
 	},
+	{
+		// Poll lease (issue #591) — mutual exclusion for the minutely sidecar
+		// poller. A tick that runs past 60s otherwise overlaps the next one:
+		// both read the same cursor and can pass the per-message dedupe probe
+		// before either stores. `poll_lease_until` is an epoch-ms expiry the
+		// DO checks-and-sets atomically (`acquirePollLease`); it expires on
+		// its own so a crashed poller can never wedge the mailbox. NULL =
+		// released. Forward-only ALTER, same pattern as 27/29.
+		name: "30_poll_lease",
+		sql: `ALTER TABLE sidecar_state ADD COLUMN poll_lease_until INTEGER;`,
+	},
 ];
 
 /**

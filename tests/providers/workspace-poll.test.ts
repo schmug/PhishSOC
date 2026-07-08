@@ -7,7 +7,7 @@ vi.mock("../../workers/index", () => ({
 }));
 
 import { receiveEmail } from "../../workers/index";
-import { pollWorkspaceMailbox, MAX_MESSAGES_PER_POLL } from "../../workers/providers/workspace";
+import { pollWorkspaceMailbox, MAX_MESSAGES_PER_POLL, POLL_LEASE_TTL_MS } from "../../workers/providers/workspace";
 import type { SidecarConfig } from "../../workers/lib/sidecar-config";
 
 const mockedReceive = vi.mocked(receiveEmail);
@@ -36,6 +36,7 @@ function rawMessageNoMsgId(subject: string): string {
 function makeStub(state: Record<string, unknown> | null) {
 	return {
 		getSidecarState: vi.fn().mockResolvedValue(state),
+		acquirePollLease: vi.fn().mockResolvedValue(true),
 		putSidecarState: vi.fn().mockResolvedValue(undefined),
 		appendSidecarAudit: vi.fn().mockResolvedValue(undefined),
 		appendSidecarEvent: vi.fn().mockResolvedValue(undefined),
@@ -70,6 +71,7 @@ function freshState(cursor: string | null) {
 		last_poll_at: null,
 		last_error: null,
 		consecutive_failures: 0,
+		poll_lease_until: null,
 	};
 }
 
@@ -275,6 +277,69 @@ describe("pollWorkspaceMailbox", () => {
 		vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("must not fetch"); }));
 		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
 		expect(r).toEqual({ processed: 0, deduped: 0, error: null });
+		// Backoff gate sits BEFORE the lease: a backed-off mailbox burns no
+		// lease write per minute (#591).
+		expect(stub.acquirePollLease).not.toHaveBeenCalled();
+	});
+
+	it("poll lease held (#591): overlapping tick returns immediately — zero Gmail fetches, zero state writes", async () => {
+		const stub = makeStub(freshState("100"));
+		stub.acquirePollLease.mockResolvedValue(false); // another tick holds the lease
+		vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("must not fetch"); }));
+		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(r).toEqual({ processed: 0, deduped: 0, error: null });
+		expect(mockedReceive).not.toHaveBeenCalled();
+		expect(stub.putSidecarState).not.toHaveBeenCalled();
+		expect(stub.appendSidecarAudit).not.toHaveBeenCalled();
+		// The skip cost exactly one DO round-trip (the check-and-set itself).
+		expect(stub.acquirePollLease).toHaveBeenCalledTimes(1);
+	});
+
+	it("poll lease (#591): acquired once per poll with the 5-minute TTL and released in the success patch", async () => {
+		const stub = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-1", verdict: null });
+		gmailFetch({
+			"/history": () => new Response(JSON.stringify({
+				historyId: "200",
+				history: [{ messagesAdded: [{ message: { id: "g1", labelIds: ["INBOX"] } }] }],
+			}), { status: 200 }),
+			"/messages/g1": () => new Response(JSON.stringify({ id: "g1", raw: rawMessage("m1@x", "hello") }), { status: 200 }),
+		});
+		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(r.error).toBeNull();
+		// One acquire round-trip, TTL comfortably above a worst-case tick.
+		expect(stub.acquirePollLease).toHaveBeenCalledTimes(1);
+		expect(stub.acquirePollLease).toHaveBeenCalledWith(expect.any(Number), POLL_LEASE_TTL_MS);
+		expect(POLL_LEASE_TTL_MS).toBe(5 * 60 * 1000);
+		// Release rides the existing success state patch — no extra DO call.
+		expect(stub.putSidecarState).toHaveBeenCalledTimes(1);
+		expect(stub.putSidecarState.mock.calls.at(-1)![0].poll_lease_until).toBeNull();
+	});
+
+	it("poll lease (#591): the failure path releases too — a failing poll never wedges the mailbox for the TTL", async () => {
+		const stub = makeStub(freshState("100"));
+		gmailFetch({ "/history": () => new Response("upstream boom", { status: 503 }) });
+		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(r.error).toMatch(/503/);
+		const patch = stub.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch.poll_lease_until).toBeNull();
+	});
+
+	it("poll lease (#591): first-run and history-gap early returns release via their state patch", async () => {
+		// First run (cursor anchor).
+		const stub1 = makeStub(freshState(null));
+		gmailFetch({ "/profile": () => new Response(JSON.stringify({ emailAddress: "u@t", historyId: "500" }), { status: 200 }) });
+		await pollWorkspaceMailbox(makeEnv(stub1), ctx, "user@tenant.example", CFG);
+		expect(stub1.putSidecarState.mock.calls.at(-1)![0].poll_lease_until).toBeNull();
+
+		// History-gap re-anchor.
+		const stub2 = makeStub(freshState("1"));
+		gmailFetch({
+			"/history": () => new Response("Not Found", { status: 404 }),
+			"/profile": () => new Response(JSON.stringify({ emailAddress: "u@t", historyId: "900" }), { status: 200 }),
+		});
+		await pollWorkspaceMailbox(makeEnv(stub2), ctx, "user@tenant.example", CFG);
+		expect(stub2.putSidecarState.mock.calls.at(-1)![0].poll_lease_until).toBeNull();
 	});
 
 	it("caps at MAX_MESSAGES_PER_POLL PROCESSED messages and freezes the cursor when capped", async () => {

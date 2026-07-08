@@ -22,6 +22,7 @@ import type { SqlLike } from "./catchall-intel";
 import {
 	_getSidecarStateImpl,
 	_putSidecarStateImpl,
+	_acquirePollLeaseImpl,
 	_appendSidecarAuditImpl,
 	_appendSidecarEventImpl,
 	_listSidecarEventsImpl,
@@ -760,6 +761,10 @@ export class MailboxDO extends DurableObject<Env> {
 
 	async putSidecarState(patch: Partial<SidecarStateRow>) {
 		_putSidecarStateImpl(this.ctx.storage.sql as SqlLike, patch);
+	}
+
+	async acquirePollLease(nowMs: number, ttlMs: number) {
+		return _acquirePollLeaseImpl(this.ctx.storage.sql as SqlLike, nowMs, ttlMs);
 	}
 
 	async appendSidecarAudit(row: { ts: string; gmail_message_id: string; email_id: string; action: string; score: number | null; labels_applied: string; mode: string }) {

@@ -15,6 +15,7 @@ import type { SqlLike } from "../../workers/durableObject/catchall-intel";
 import {
 	_getSidecarStateImpl,
 	_putSidecarStateImpl,
+	_acquirePollLeaseImpl,
 	_appendSidecarAuditImpl,
 	_appendSidecarEventImpl,
 	_listSidecarEventsImpl,
@@ -41,7 +42,8 @@ function makeSqlLike(): SqlLike {
             label_ids TEXT,
             last_poll_at INTEGER,
             last_error TEXT,
-            consecutive_failures INTEGER NOT NULL DEFAULT 0
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            poll_lease_until INTEGER
         );
 
         CREATE TABLE sidecar_audit (
@@ -113,6 +115,44 @@ describe("sidecar_state singleton", () => {
 		expect(s.history_cursor).toBe("100"); // untouched by the second patch
 		expect(s.consecutive_failures).toBe(2);
 		expect(s.last_error).toBe("boom");
+	});
+});
+
+describe("poll lease (#591)", () => {
+	const T0 = 1_800_000_000_000;
+	const TTL = 5 * 60 * 1000;
+
+	it("acquires on a fresh DB (no state row yet) and blocks a second acquire inside the TTL", () => {
+		const sql = makeSqlLike();
+		expect(_acquirePollLeaseImpl(sql, T0, TTL)).toBe(true);
+		// Overlapping tick, one minute later: the lease is held → refused.
+		expect(_acquirePollLeaseImpl(sql, T0 + 60_000, TTL)).toBe(false);
+	});
+
+	it("an expired lease is stealable — a crashed poller never wedges the mailbox past the TTL", () => {
+		const sql = makeSqlLike();
+		expect(_acquirePollLeaseImpl(sql, T0, TTL)).toBe(true);
+		// Poller crashed without releasing. At exactly now >= lease_until the
+		// next tick steals the lease and re-arms it.
+		expect(_acquirePollLeaseImpl(sql, T0 + TTL, TTL)).toBe(true);
+		// ...and the stolen lease is itself held again.
+		expect(_acquirePollLeaseImpl(sql, T0 + TTL + 60_000, TTL)).toBe(false);
+	});
+
+	it("release via the putSidecarState patch (poll_lease_until: null) frees the lease immediately", () => {
+		const sql = makeSqlLike();
+		expect(_acquirePollLeaseImpl(sql, T0, TTL)).toBe(true);
+		// Success/failure paths release by patching the column to null.
+		_putSidecarStateImpl(sql, { poll_lease_until: null });
+		expect(_acquirePollLeaseImpl(sql, T0 + 1_000, TTL)).toBe(true);
+	});
+
+	it("patch-only semantics: a state patch WITHOUT poll_lease_until leaves a held lease intact", () => {
+		const sql = makeSqlLike();
+		expect(_acquirePollLeaseImpl(sql, T0, TTL)).toBe(true);
+		_putSidecarStateImpl(sql, { history_cursor: "200", last_error: null });
+		expect(_acquirePollLeaseImpl(sql, T0 + 1_000, TTL)).toBe(false);
+		expect(_getSidecarStateImpl(sql)?.history_cursor).toBe("200");
 	});
 });
 

@@ -27,11 +27,13 @@ export interface SidecarStateRow {
 	last_poll_at: number | null;
 	last_error: string | null;
 	consecutive_failures: number;
+	poll_lease_until: number | null;
 }
 
 const STATE_COLUMNS = [
 	"history_cursor", "access_token", "token_expires_at",
 	"label_ids", "last_poll_at", "last_error", "consecutive_failures",
+	"poll_lease_until",
 ] as const;
 
 export function _getSidecarStateImpl(sql: SqlLike): SidecarStateRow | null {
@@ -48,6 +50,26 @@ export function _putSidecarStateImpl(sql: SqlLike, patch: Partial<SidecarStateRo
 	const sets = keys.map((k) => `${k} = ?`).join(", ");
 	const values = keys.map((k) => patch[k] as unknown);
 	sql.exec(`UPDATE sidecar_state SET ${sets} WHERE id = 1`, ...values);
+}
+
+/**
+ * Poll lease (issue #591): atomic check-and-set so overlapping cron ticks
+ * cannot double-process a mailbox. Returns true when the lease was acquired
+ * (armed to `nowMs + ttlMs`), false when another poller holds an unexpired
+ * lease. The read and the write are synchronous SQL inside one DO method —
+ * the DO's single-threaded execution serializes concurrent callers, which
+ * is the whole point (a Worker-side read-then-write would race). An expired
+ * lease is stealable, so a crashed poller never wedges the mailbox past the
+ * TTL; release is `putSidecarState({ poll_lease_until: null })`, riding the
+ * state patch the poll already writes.
+ */
+export function _acquirePollLeaseImpl(sql: SqlLike, nowMs: number, ttlMs: number): boolean {
+	sql.exec(`INSERT OR IGNORE INTO sidecar_state (id) VALUES (1)`);
+	const rows = [...sql.exec(`SELECT poll_lease_until FROM sidecar_state WHERE id = 1`)] as Array<{ poll_lease_until: number | null }>;
+	const until = rows[0]?.poll_lease_until ?? null;
+	if (until !== null && until > nowMs) return false;
+	sql.exec(`UPDATE sidecar_state SET poll_lease_until = ? WHERE id = 1`, nowMs + ttlMs);
+	return true;
 }
 
 export function _appendSidecarAuditImpl(
