@@ -28,12 +28,18 @@ export interface SidecarStateRow {
 	last_error: string | null;
 	consecutive_failures: number;
 	poll_lease_until: number | null;
+	/** Durable label-failure signal (#590): most recent label-write error.
+	 * Unlike `last_error` it is NOT reset by a clean poll — only a successful
+	 * label write clears it (poller patches it to null). */
+	label_error: string | null;
+	/** Failed label writes accumulated since the last successful one (#590). */
+	label_failure_count: number;
 }
 
 const STATE_COLUMNS = [
 	"history_cursor", "access_token", "token_expires_at",
 	"label_ids", "last_poll_at", "last_error", "consecutive_failures",
-	"poll_lease_until",
+	"poll_lease_until", "label_error", "label_failure_count",
 ] as const;
 
 export function _getSidecarStateImpl(sql: SqlLike): SidecarStateRow | null {
@@ -81,6 +87,39 @@ export function _appendSidecarAuditImpl(
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		row.ts, row.gmail_message_id, row.email_id, row.action, row.score, row.labels_applied, row.mode,
 	);
+}
+
+export interface SidecarAuditPendingRow { id: number; action: string }
+
+/**
+ * Latest ACTIVE-mode audit row for a Gmail message whose label write never
+ * landed (`labels_applied: "[]"`), or null. Drives the dedupe-path label
+ * backfill (#590): a replayed message that dedupes gets its missing label
+ * retried without re-running ingest. Observe-mode rows are excluded by
+ * contract — they record `"[]"` by design (no write was ever attempted), so
+ * backfilling them would retroactively label mail the operator chose not to
+ * touch. Rows with labels applied need no repair. The
+ * `idx_sidecar_audit_gmail_message_id` index (migration 31) keeps this probe
+ * off a table scan.
+ */
+export function _findSidecarAuditPendingLabelsImpl(sql: SqlLike, gmailMessageId: string): SidecarAuditPendingRow | null {
+	const rows = [...sql.exec(
+		`SELECT id, action FROM sidecar_audit
+          WHERE gmail_message_id = ? AND mode = 'active' AND labels_applied = '[]'
+          ORDER BY id DESC LIMIT 1`,
+		gmailMessageId,
+	)];
+	return rows.length > 0 ? (rows[0] as unknown as SidecarAuditPendingRow) : null;
+}
+
+/**
+ * Record a successful backfill (#590): update ONE existing audit row's
+ * `labels_applied` in place. Deliberately an UPDATE, never an INSERT — the
+ * at-least-once invariant (exactly one audit row per verdict decision, no
+ * duplicate rows/Cases on replay) is preserved by construction.
+ */
+export function _updateSidecarAuditLabelsImpl(sql: SqlLike, id: number, labelsApplied: string): void {
+	sql.exec(`UPDATE sidecar_audit SET labels_applied = ? WHERE id = ?`, labelsApplied, id);
 }
 
 export interface SidecarEventRow {

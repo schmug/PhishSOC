@@ -74,7 +74,7 @@ One secret can serve many monitored mailboxes in the same tenant.
 | --- | --- |
 | Test connection: stage `secret` | Secret unset, or value isn't the service-account JSON |
 | Test connection: stage `auth` (401) | DWD grant missing/wrong client ID, or scope not granted |
-| Label writes fail with 403, reads fine | Grant is `gmail.readonly`; widen to `gmail.modify` |
+| Label writes fail with 403, reads fine | Grant is `gmail.readonly`; widen to `gmail.modify`. The failure is recorded durably (`sidecar_health.label_error`, backed by `sidecar_state.label_error` / `label_failure_count`) and keeps health unhealthy until a label write succeeds — a quiet poll cannot flap it back to green. Ingest is unaffected: audit rows and Cases still land. Once the grant is widened, messages that missed their label are labeled retroactively when the poller re-encounters them (dedupe-path backfill; the existing audit row is updated in place, never duplicated) |
 | Settings warning: "history gap" | Poll cursor expired (Gmail retains history ~1 week); monitoring reinitialized from now — mail during the gap was not scored. The warning text itself clears on the next clean poll, but the gap is recorded durably: an append-only `history-gap` row in the mailbox's `sidecar_events` table (with the old→new cursor jump bounding the unscored window), surfaced as `sidecar_health.last_gap` on the mailbox API until a newer gap supersedes it |
-| Health: unhealthy (`consecutive_failures` ≥ 3, or last poll > 15 min ago) | Fix the recorded `last_error`; the next successful poll resets the counters |
+| Health: unhealthy (`consecutive_failures` ≥ 3, last poll > 15 min ago, or `label_error` set) | Fix the recorded `last_error` / `label_error`; the next successful poll resets the counters, and the next successful label write clears `label_error` |
 | Failures reach ≥ 5 | Poller backs off to 15-minute retries until a success |

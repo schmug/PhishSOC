@@ -637,6 +637,25 @@ export const mailboxMigrations: Migration[] = [
 		name: "30_poll_lease",
 		sql: `ALTER TABLE sidecar_state ADD COLUMN poll_lease_until INTEGER;`,
 	},
+	{
+		// Durable label-failure signal (issue #590). `last_error` /
+		// `consecutive_failures` are transient — the next clean poll resets
+		// them — so a persistent wrong-scope DWD grant (e.g. gmail.readonly
+		// in active mode) flapped health back to healthy while every label
+		// write kept failing. `label_error` holds the most recent label-write
+		// error and `label_failure_count` the failed writes accumulated since
+		// the last success; both clear ONLY when a label write succeeds.
+		// The index backs the dedupe-path backfill probe
+		// (`findSidecarAuditPendingLabels`) so it never table-scans — same
+		// rationale as migration 29's provider-id index. Forward-only ALTER,
+		// same pattern as 27/29/30.
+		name: "31_label_failure",
+		sql: `
+            ALTER TABLE sidecar_state ADD COLUMN label_error TEXT;
+            ALTER TABLE sidecar_state ADD COLUMN label_failure_count INTEGER NOT NULL DEFAULT 0;
+            CREATE INDEX IF NOT EXISTS idx_sidecar_audit_gmail_message_id ON sidecar_audit(gmail_message_id);
+        `,
+	},
 ];
 
 /**

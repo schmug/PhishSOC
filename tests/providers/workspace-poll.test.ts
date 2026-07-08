@@ -42,6 +42,8 @@ function makeStub(state: Record<string, unknown> | null) {
 		appendSidecarEvent: vi.fn().mockResolvedValue(undefined),
 		findEmailIdByMessageId: vi.fn().mockResolvedValue(null),
 		findEmailIdByProviderMessageId: vi.fn().mockResolvedValue(null),
+		findSidecarAuditPendingLabels: vi.fn().mockResolvedValue(null),
+		updateSidecarAuditLabels: vi.fn().mockResolvedValue(undefined),
 		createCase: vi.fn().mockResolvedValue({ id: "case-1" }),
 	};
 }
@@ -72,6 +74,8 @@ function freshState(cursor: string | null) {
 		last_error: null,
 		consecutive_failures: 0,
 		poll_lease_until: null,
+		label_error: null,
+		label_failure_count: 0,
 	};
 }
 
@@ -172,7 +176,8 @@ describe("pollWorkspaceMailbox", () => {
 		}));
 	});
 
-	it("active mode label 403: audit row + case survive, cursor advances, failure surfaces in health", async () => {
+	it("active mode label 403 across polls (#590): containment + a durable failure signal that a label-clean poll cannot flap back to healthy", async () => {
+		// -- Poll 1: the wrong-scope grant (gmail.readonly) 403s the label write. --
 		const stub = makeStub(freshState("100"));
 		mockedReceive.mockResolvedValue({ messageId: "local-1", verdict: { action: "quarantine", score: 90, confidence: 0.9, explanation: "", signals: [] } as never });
 		gmailFetch({
@@ -198,6 +203,120 @@ describe("pollWorkspaceMailbox", () => {
 		// But the wrong-scope grant surfaces in health, not silently reset.
 		expect(patch.consecutive_failures).toBe(1);
 		expect(patch.last_error).toMatch(/label write failed/);
+		// ...and durably (#590): decoupled from the transient counters.
+		expect(patch.label_error).toMatch(/label write failed/);
+		expect(patch.label_failure_count).toBe(1);
+
+		// -- Poll 2 (label-clean: nothing flagged, nothing labeled): the
+		// transient counters reset — the pre-#590 flap — but the patch must NOT
+		// touch label_error/label_failure_count, so putSidecarState's patch-only
+		// semantics keep the persisted signal raised until a write SUCCEEDS. --
+		vi.clearAllMocks();
+		mockedReceive.mockResolvedValue({ messageId: "local-2", verdict: null });
+		const stub2 = makeStub({
+			...freshState("200"),
+			label_error: "label write failed for 1 message(s): gmail modify 403", label_failure_count: 1,
+		});
+		gmailFetch({
+			"/history": () => new Response(JSON.stringify({ historyId: "300", history: [{ messagesAdded: [{ message: { id: "g2", labelIds: ["INBOX"] } }] }] }), { status: 200 }),
+			"/messages/g2": () => new Response(JSON.stringify({ id: "g2", raw: rawMessage("m2@x", "benign") }), { status: 200 }),
+		});
+		const r2 = await pollWorkspaceMailbox(makeEnv(stub2), ctx, "user@tenant.example", { ...CFG, mode: "active" });
+		expect(r2).toMatchObject({ processed: 1, error: null });
+		const patch2 = stub2.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch2.last_error).toBeNull();
+		expect(patch2.consecutive_failures).toBe(0);
+		expect("label_error" in patch2).toBe(false);
+		expect("label_failure_count" in patch2).toBe(false);
+	});
+
+	it("label backfill on dedupe (#590): 403 batch then fixed-grant replay → message labeled, exactly one audit row, signal cleared", async () => {
+		const history = () => new Response(JSON.stringify({ historyId: "200", history: [{ messagesAdded: [{ message: { id: "g1", labelIds: ["INBOX"] } }] }] }), { status: 200 });
+		const labels = () => new Response(JSON.stringify({ labels: [{ id: "LQ", name: "PhishPilot/Quarantine" }, { id: "LS", name: "PhishPilot/Suspicious" }, { id: "LA", name: "PhishPilot/Allow" }] }), { status: 200 });
+
+		// -- Poll 1: ingest lands, label write 403s (wrong-scope grant). --
+		const stub1 = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-1", verdict: { action: "quarantine", score: 90, confidence: 0.9, explanation: "", signals: [] } as never });
+		gmailFetch({
+			"/history": history,
+			"/messages/g1/modify": () => new Response("insufficient scope", { status: 403 }),
+			"/messages/g1": () => new Response(JSON.stringify({ id: "g1", raw: rawMessage("m1@x", "phish!") }), { status: 200 }),
+			"/labels": labels,
+		});
+		await pollWorkspaceMailbox(makeEnv(stub1), ctx, "user@tenant.example", { ...CFG, mode: "active" });
+		expect(stub1.appendSidecarAudit).toHaveBeenCalledTimes(1);
+		expect(stub1.putSidecarState.mock.calls.at(-1)![0].label_failure_count).toBe(1);
+
+		// -- Poll 2: grant fixed; the same id is re-listed (at-least-once) and
+		// dedupes. The audit row shows the label never landed → retry the label
+		// write ONLY: no receiveEmail, no new audit row, no new Case. --
+		vi.clearAllMocks();
+		const stub2 = makeStub({
+			...freshState("100"),
+			label_error: "label write failed for 1 message(s): gmail modify 403", label_failure_count: 1,
+		});
+		stub2.findEmailIdByMessageId.mockResolvedValue("local-1"); // dedupe hit
+		stub2.findSidecarAuditPendingLabels.mockResolvedValue({ id: 7, action: "quarantine" });
+		let modified: unknown = null;
+		gmailFetch({
+			"/history": history,
+			"/messages/g1/modify": (_u, init) => { modified = JSON.parse(String(init?.body)); return new Response("{}", { status: 200 }); },
+			"/messages/g1": () => new Response(JSON.stringify({ id: "g1", raw: rawMessage("m1@x", "phish!") }), { status: 200 }),
+			"/labels": labels,
+		});
+		const r2 = await pollWorkspaceMailbox(makeEnv(stub2), ctx, "user@tenant.example", { ...CFG, mode: "active" });
+		expect(r2).toMatchObject({ processed: 0, deduped: 1, error: null });
+		// At-least-once preserved: the backfill never re-ingests or re-audits.
+		expect(mockedReceive).not.toHaveBeenCalled();
+		expect(stub2.appendSidecarAudit).not.toHaveBeenCalled();
+		expect(stub2.createCase).not.toHaveBeenCalled();
+		// The label write itself landed, quarantine label only...
+		expect(modified).toEqual({ addLabelIds: ["LQ"], removeLabelIds: [] });
+		// ...and the ONE existing audit row was updated in place.
+		expect(stub2.findSidecarAuditPendingLabels).toHaveBeenCalledWith("g1");
+		expect(stub2.updateSidecarAuditLabels).toHaveBeenCalledTimes(1);
+		expect(stub2.updateSidecarAuditLabels).toHaveBeenCalledWith(7, JSON.stringify(["PhishPilot/Quarantine"]));
+		// A successful label write clears the durable signal.
+		const patch2 = stub2.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch2.label_error).toBeNull();
+		expect(patch2.label_failure_count).toBe(0);
+	});
+
+	it("label backfill retry that still 403s keeps the durable signal raised and accumulates the count", async () => {
+		const stub = makeStub({
+			...freshState("100"),
+			label_error: "label write failed for 1 message(s): gmail modify 403", label_failure_count: 1,
+		});
+		stub.findEmailIdByMessageId.mockResolvedValue("local-1"); // dedupe hit
+		stub.findSidecarAuditPendingLabels.mockResolvedValue({ id: 7, action: "quarantine" });
+		gmailFetch({
+			"/history": () => new Response(JSON.stringify({ historyId: "200", history: [{ messagesAdded: [{ message: { id: "g1", labelIds: ["INBOX"] } }] }] }), { status: 200 }),
+			"/messages/g1/modify": () => new Response("insufficient scope", { status: 403 }),
+			"/messages/g1": () => new Response(JSON.stringify({ id: "g1", raw: rawMessage("m1@x", "phish!") }), { status: 200 }),
+			"/labels": () => new Response(JSON.stringify({ labels: [{ id: "LQ", name: "PhishPilot/Quarantine" }, { id: "LS", name: "PhishPilot/Suspicious" }, { id: "LA", name: "PhishPilot/Allow" }] }), { status: 200 }),
+		});
+		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", { ...CFG, mode: "active" });
+		// Still contained: the failed retry is not a batch error.
+		expect(r).toMatchObject({ processed: 0, deduped: 1, error: null });
+		expect(stub.updateSidecarAuditLabels).not.toHaveBeenCalled();
+		const patch = stub.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch.label_error).toMatch(/label write failed/);
+		expect(patch.label_failure_count).toBe(2); // 1 persisted + 1 new failure
+	});
+
+	it("observe mode never backfills labels on dedupe hits (writes nothing, by design)", async () => {
+		const stub = makeStub(freshState("100"));
+		stub.findEmailIdByMessageId.mockResolvedValue("local-1"); // dedupe hit
+		gmailFetch({
+			"/history": () => new Response(JSON.stringify({ historyId: "200", history: [{ messagesAdded: [{ message: { id: "g1", labelIds: ["INBOX"] } }] }] }), { status: 200 }),
+			"/messages/g1": () => new Response(JSON.stringify({ id: "g1", raw: rawMessage("m1@x", "phish!") }), { status: 200 }),
+		});
+		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG); // observe
+		expect(r).toMatchObject({ processed: 0, deduped: 1, error: null });
+		// Not even the audit probe runs: observe mode must never touch Gmail,
+		// and the probe would be a wasted DO round-trip.
+		expect(stub.findSidecarAuditPendingLabels).not.toHaveBeenCalled();
+		expect(stub.updateSidecarAuditLabels).not.toHaveBeenCalled();
 	});
 
 	it("null verdict: no audit row, no case, no label", async () => {

@@ -108,6 +108,12 @@ export function SidecarSettingsCard(props: {
 						? ` — last poll ${new Date(health.last_poll_at).toLocaleString()}`
 						: " — not polled yet"}
 					{health.last_error ? ` — ${health.last_error}` : ""}
+					{/* Durable label-failure signal (#590): survives the clean polls
+					    that null last_error, so it must render on its own. Skip it
+					    only when last_error already shows the identical text. */}
+					{health.label_error && health.label_error !== health.last_error
+						? ` — ${health.label_error}`
+						: ""}
 				</p>
 			)}
 

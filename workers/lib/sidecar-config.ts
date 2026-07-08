@@ -42,11 +42,14 @@ export function sidecarConfigOf(raw: unknown): SidecarConfig | null {
 }
 
 /** Poll-health fields the DO's `getSidecarState()` RPC returns — only the
- * subset `sidecarHealthOf` needs. */
+ * subset `sidecarHealthOf` needs. `label_error` (#590) is optional so
+ * callers holding a pre-migration-31 row shape still typecheck; absent
+ * reads as null (no persisted label failure). */
 export interface SidecarHealthState {
 	consecutive_failures: number;
 	last_poll_at: number | null;
 	last_error: string | null;
+	label_error?: string | null;
 }
 
 /** The durable history-gap surface (#594): when the Gmail history cursor
@@ -63,6 +66,10 @@ export interface SidecarHealth {
 	healthy: boolean;
 	last_poll_at: number | null;
 	last_error: string | null;
+	/** Durable label-failure signal (#590): the most recent label-write error,
+	 * persisted in `sidecar_state.label_error`. Unlike `last_error` it survives
+	 * label-clean polls and clears only when a label write succeeds. */
+	label_error: string | null;
 	last_gap: SidecarGapEvent | null;
 }
 
@@ -83,16 +90,26 @@ export const SIDECAR_HEALTH_STALE_MS = 15 * 60 * 1000;
  * is not a failure (the poller recovered by re-anchoring, and there is no
  * acknowledge flow that could ever clear an unhealthy-forever flag). The
  * field itself is the persistent operator notice.
+ *
+ * `label_error` (#590) DOES flip `healthy` — the asymmetry with `last_gap`
+ * is deliberate: a persisted label failure is a LIVE misconfiguration (e.g.
+ * a gmail.readonly DWD grant in active mode) an operator must fix, and it
+ * self-clears the moment a label write succeeds, so it can never become an
+ * unclearable unhealthy-forever flag. It is decoupled from the transient
+ * `consecutive_failures` counter precisely so a label-clean poll cannot
+ * flap health back to green while labels keep failing.
  */
 export function sidecarHealthOf(
 	state: SidecarHealthState | null,
 	lastGap: SidecarGapEvent | null = null,
 ): SidecarHealth {
 	const stale = state?.last_poll_at != null && Date.now() - state.last_poll_at > SIDECAR_HEALTH_STALE_MS;
+	const labelError = state?.label_error ?? null;
 	return {
-		healthy: (state?.consecutive_failures ?? 0) < 3 && !stale,
+		healthy: (state?.consecutive_failures ?? 0) < 3 && !stale && labelError === null,
 		last_poll_at: state?.last_poll_at ?? null,
 		last_error: state?.last_error ?? null,
+		label_error: labelError,
 		// Re-pick the fields so extra DO-row columns (kind, detail) never leak
 		// into the API payload shape.
 		last_gap: lastGap
