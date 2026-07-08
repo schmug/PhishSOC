@@ -23,10 +23,14 @@ import {
 	_getSidecarStateImpl,
 	_putSidecarStateImpl,
 	_appendSidecarAuditImpl,
+	_appendSidecarEventImpl,
+	_listSidecarEventsImpl,
+	_latestSidecarGapImpl,
 	_findEmailIdByMessageIdImpl,
 	_listReapableEmailsImpl,
 	_markBodiesReapedImpl,
 	type SidecarStateRow,
+	type SidecarEventRow,
 } from "./sidecar-state";
 
 /**
@@ -752,6 +756,18 @@ export class MailboxDO extends DurableObject<Env> {
 
 	async appendSidecarAudit(row: { ts: string; gmail_message_id: string; email_id: string; action: string; score: number | null; labels_applied: string; mode: string }) {
 		_appendSidecarAuditImpl(this.ctx.storage.sql as SqlLike, row);
+	}
+
+	async appendSidecarEvent(row: SidecarEventRow) {
+		_appendSidecarEventImpl(this.ctx.storage.sql as SqlLike, row);
+	}
+
+	async listSidecarEvents(limit = 50) {
+		return _listSidecarEventsImpl(this.ctx.storage.sql as SqlLike, limit);
+	}
+
+	async getLatestSidecarGap() {
+		return _latestSidecarGapImpl(this.ctx.storage.sql as SqlLike);
 	}
 
 	async findEmailIdByMessageId(messageId: string) {

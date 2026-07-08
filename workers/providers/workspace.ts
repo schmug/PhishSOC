@@ -134,6 +134,7 @@ interface SidecarStub {
 	} | null>;
 	putSidecarState(patch: Record<string, unknown>): Promise<void>;
 	appendSidecarAudit(row: Record<string, unknown>): Promise<void>;
+	appendSidecarEvent(row: Record<string, unknown>): Promise<void>;
 	findEmailIdByMessageId(messageId: string): Promise<string | null>;
 	createCase(input: Record<string, unknown>): Promise<{ id: string }>;
 }
@@ -211,6 +212,19 @@ export async function pollWorkspaceMailbox(
 			// Rule 5: cursor older than Gmail's history retention. Re-anchor and
 			// record the gap — informational, NOT a failure (failures gate backoff).
 			const profile = await getProfile(token);
+			// Durable record (#594) BEFORE the state write: `last_error` is
+			// transient (the next clean poll nulls it), so the gap evidence —
+			// including the cursor jump that bounds the unscored window — must
+			// land in the append-only sidecar_events log. Ordering gives
+			// at-least-once: if this append throws, the cursor stays frozen and
+			// the next poll retries the whole re-anchor branch.
+			await stub.appendSidecarEvent({
+				ts: new Date().toISOString(),
+				kind: "history-gap",
+				old_cursor: state.history_cursor,
+				new_cursor: profile.historyId,
+				detail: "cursor expired past Gmail history retention; mail arriving in the gap was never scored",
+			});
 			patch.history_cursor = profile.historyId;
 			patch.last_error = "history gap: cursor expired; monitoring reinitialized from current historyId";
 			await stub.putSidecarState(patch);

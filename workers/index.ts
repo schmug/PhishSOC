@@ -300,10 +300,12 @@ app.get("/api/v1/mailboxes", async (c) => {
 			if (!flags[i].sidecar) return null;
 			try {
 				const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(m.id));
-				const state = await stub.getSidecarState();
-				return sidecarHealthOf(state);
+				// Latest durable history-gap event (#594) rides along so the
+				// gap stays operator-visible after last_error resets to null.
+				const [state, lastGap] = await Promise.all([stub.getSidecarState(), stub.getLatestSidecarGap()]);
+				return sidecarHealthOf(state, lastGap);
 			} catch {
-				return { healthy: false, last_poll_at: null, last_error: "state unavailable" };
+				return { healthy: false, last_poll_at: null, last_error: "state unavailable", last_gap: null };
 			}
 		}),
 	);
@@ -1079,10 +1081,15 @@ app.get("/api/v1/mailboxes/:mailboxId", async (c: AppContext) => {
 		// error must surface as unhealthy, not masquerade as "healthy / not
 		// polled yet" (which sidecarHealthOf(null) would report).
 		try {
-			const state = await c.var.mailboxStub.getSidecarState();
-			sidecar_health = sidecarHealthOf(state);
+			// Latest durable history-gap event (#594) rides along so the gap
+			// stays operator-visible after last_error resets to null.
+			const [state, lastGap] = await Promise.all([
+				c.var.mailboxStub.getSidecarState(),
+				c.var.mailboxStub.getLatestSidecarGap(),
+			]);
+			sidecar_health = sidecarHealthOf(state, lastGap);
 		} catch {
-			sidecar_health = { healthy: false, last_poll_at: null, last_error: "state unavailable" };
+			sidecar_health = { healthy: false, last_poll_at: null, last_error: "state unavailable", last_gap: null };
 		}
 	}
 

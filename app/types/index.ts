@@ -132,6 +132,11 @@ export interface SidecarHealth {
 	healthy: boolean;
 	last_poll_at: number | null;
 	last_error: string | null;
+	/** Most recent durable history-gap record (issue #594): when the Gmail
+	 * history cursor expired and the cursor jump that bounds the window of
+	 * unscored mail. Survives the clean polls that null `last_error`; null
+	 * when no gap has ever occurred. */
+	last_gap?: { ts: string; old_cursor: string | null; new_cursor: string | null } | null;
 }
 
 export interface MailboxSettings {

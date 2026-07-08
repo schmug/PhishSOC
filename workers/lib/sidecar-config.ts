@@ -49,10 +49,21 @@ export interface SidecarHealthState {
 	last_error: string | null;
 }
 
+/** The durable history-gap surface (#594): when the Gmail history cursor
+ * expired and where it re-anchored, bounding the window of unscored mail.
+ * Sourced from the DO's append-only `sidecar_events` log, so it survives
+ * the clean polls that reset `last_error` to null. */
+export interface SidecarGapEvent {
+	ts: string;
+	old_cursor: string | null;
+	new_cursor: string | null;
+}
+
 export interface SidecarHealth {
 	healthy: boolean;
 	last_poll_at: number | null;
 	last_error: string | null;
+	last_gap: SidecarGapEvent | null;
 }
 
 /** Staleness threshold: a poll cursor older than this counts as unhealthy
@@ -66,12 +77,26 @@ export const SIDECAR_HEALTH_STALE_MS = 15 * 60 * 1000;
  * window. `state` is null when the DO has no sidecar_state row yet (before
  * the first poll) — that still resolves to healthy (never-polled counts
  * as healthy, not stale).
+ *
+ * `lastGap` (#594) is the most recent durable history-gap event, or null.
+ * It is surfaced verbatim but deliberately does NOT flip `healthy`: a gap
+ * is not a failure (the poller recovered by re-anchoring, and there is no
+ * acknowledge flow that could ever clear an unhealthy-forever flag). The
+ * field itself is the persistent operator notice.
  */
-export function sidecarHealthOf(state: SidecarHealthState | null): SidecarHealth {
+export function sidecarHealthOf(
+	state: SidecarHealthState | null,
+	lastGap: SidecarGapEvent | null = null,
+): SidecarHealth {
 	const stale = state?.last_poll_at != null && Date.now() - state.last_poll_at > SIDECAR_HEALTH_STALE_MS;
 	return {
 		healthy: (state?.consecutive_failures ?? 0) < 3 && !stale,
 		last_poll_at: state?.last_poll_at ?? null,
 		last_error: state?.last_error ?? null,
+		// Re-pick the fields so extra DO-row columns (kind, detail) never leak
+		// into the API payload shape.
+		last_gap: lastGap
+			? { ts: lastGap.ts, old_cursor: lastGap.old_cursor, new_cursor: lastGap.new_cursor }
+			: null,
 	};
 }
