@@ -66,7 +66,13 @@ export const RelaySettings = z
 			.passthrough()
 			.optional(),
 		/** Name of the Worker Secret holding `{"user":"...","pass":"..."}` JSON. */
-		credentialsSecret: z.string().optional(),
+		credentialsSecret: z
+			.string()
+			.min(1)
+			.startsWith("RELAY_CREDS_", {
+				message: "Secret name must start with RELAY_CREDS_",
+			})
+			.optional(),
 		actions: z
 			.object({
 				allow: RelayActionBehavior.optional(),
@@ -130,5 +136,24 @@ export type DomainSettings = z.infer<typeof DomainSettings>;
  */
 export function parseDomainSettings(raw: unknown): DomainSettings | null {
 	const result = DomainSettings.safeParse(raw ?? {});
-	return result.success ? result.data : null;
+	if (result.success) return result.data;
+
+	if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+		const rec = raw as Record<string, unknown>;
+		const dropRelay =
+			"relay" in rec && result.error.issues.some((i) => i.path[0] === "relay");
+		if (dropRelay) {
+			const salvaged = { ...rec };
+			delete salvaged.relay;
+			const retry = DomainSettings.safeParse(salvaged);
+			if (retry.success) {
+				console.warn(
+					"parseDomainSettings: dropped invalid relay on read; preserved the rest of the tier",
+				);
+				return retry.data;
+			}
+		}
+	}
+
+	return null;
 }

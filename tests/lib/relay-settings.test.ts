@@ -13,7 +13,9 @@ describe("RelaySettings schema", () => {
 			},
 		});
 		expect(parsed.success).toBe(true);
-		expect(parsed.success && parsed.data.relay?.target?.host).toBe("smtp-relay.gmail.com");
+		expect(parsed.success && parsed.data.relay?.target?.host).toBe(
+			"smtp-relay.gmail.com",
+		);
 	});
 
 	it("accepts an empty object (all fields optional)", () => {
@@ -21,9 +23,53 @@ describe("RelaySettings schema", () => {
 	});
 
 	it("rejects invalid action behaviors and ports", () => {
-		expect(RelaySettings.safeParse({ actions: { allow: "bounce" } }).success).toBe(false);
-		expect(RelaySettings.safeParse({ target: { host: "h", port: 0 } }).success).toBe(false);
-		expect(RelaySettings.safeParse({ target: { host: "h", port: 70000 } }).success).toBe(false);
+		expect(
+			RelaySettings.safeParse({ actions: { allow: "bounce" } }).success,
+		).toBe(false);
+		expect(
+			RelaySettings.safeParse({ target: { host: "h", port: 0 } }).success,
+		).toBe(false);
+		expect(
+			RelaySettings.safeParse({ target: { host: "h", port: 70000 } }).success,
+		).toBe(false);
+	});
+
+	it("rejects invalid credentialsSecret prefix", () => {
+		const parsed = RelaySettings.safeParse({
+			credentialsSecret: "BAD_PREFIX_X",
+		});
+		expect(parsed.success).toBe(false);
+		if (!parsed.success) {
+			expect(parsed.error.issues[0].message).toBe(
+				"Secret name must start with RELAY_CREDS_",
+			);
+		}
+	});
+});
+
+describe("parseDomainSettings: relay", () => {
+	it("drops an invalid relay block but preserves the rest of the settings", async () => {
+		const parsed = DomainSettings.safeParse({
+			agentModel: "custom-model",
+			relay: {
+				credentialsSecret: "BAD_PREFIX_X",
+			},
+		});
+		expect(parsed.success).toBe(false);
+
+		// parseDomainSettings should salvage the agentModel
+		const { parseDomainSettings } = await import(
+			"../../shared/domain-settings"
+		);
+		const salvaged = parseDomainSettings({
+			agentModel: "custom-model",
+			relay: {
+				credentialsSecret: "BAD_PREFIX_X",
+			},
+		});
+		expect(salvaged).not.toBeNull();
+		expect(salvaged?.agentModel).toBe("custom-model");
+		expect(salvaged?.relay).toBeUndefined();
 	});
 });
 
@@ -34,7 +80,9 @@ describe("stripDefaultEqual: relay", () => {
 	});
 
 	it("keeps an enabled relay block", () => {
-		const v = { relay: { enabled: true, target: { host: "smtp-relay.gmail.com" } } };
+		const v = {
+			relay: { enabled: true, target: { host: "smtp-relay.gmail.com" } },
+		};
 		expect(stripDefaultEqual(v)).toEqual(v);
 	});
 });
