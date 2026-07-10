@@ -24,3 +24,7 @@
 ## 2026-06-29 - Optimize D1 Queries by Batching
 **Learning:** Found N+1 query pattern on the hub stats page (`hub/src/routes/admin/stats.ts`) when iterating over the list of inbound peers to query `events_pulled_24h` for each peer sequentially using `.first()`. This introduces significant roundtrip latency and resource overhead as the number of peers grows. D1 supports batching queries, which can collapse N queries into a single HTTP roundtrip. D1's returned `batch` types can be peculiar, particularly when running against tests using Miniflare or test shims where row result structure might differ across platforms.
 **Action:** Replaced sequential queries in `Promise.all` with `db.batch()` to combine the multiple `db.prepare(...).bind(...)` calls into a single execution, and normalized the output structure parsing. This significantly reduces N+1 overhead and improves performance scaling as the peer count increases.
+
+## 2026-07-10 - Memoize JSON.parse in verdict parsers
+**Learning:** Repeatedly parsing small JSON blobs (`JSON.parse`) like `security_verdict` in render loops and hot aggregation paths generates significant overhead and object allocation.
+**Action:** Implemented bounded `Map` caches combined with `Object.freeze` for `parseVerdictAction` and `parseVerdict` in `workers/lib/dashboard-aggregation.ts` and `app/types/index.ts`, eliminating redundant parsing and avoiding potential mutation bugs.

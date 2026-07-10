@@ -41,7 +41,8 @@ export function bucketThreatPressure(
 		if (!row.date || !row.security_verdict) continue;
 
 		const action = parseVerdictAction(row.security_verdict);
-		if (action !== "tag" && action !== "quarantine" && action !== "block") continue;
+		if (action !== "tag" && action !== "quarantine" && action !== "block")
+			continue;
 
 		const t = Date.parse(row.date);
 		if (Number.isNaN(t)) continue;
@@ -57,13 +58,28 @@ export function bucketThreatPressure(
 	return buckets;
 }
 
+const VERDICT_ACTION_CACHE = new Map<string, string | null>();
+const MAX_CACHE_SIZE = 1000;
+
 function parseVerdictAction(json: string): string | null {
+	const cached = VERDICT_ACTION_CACHE.get(json);
+	if (cached !== undefined) return cached;
+
+	let result: string | null = null;
 	try {
 		const parsed = JSON.parse(json) as { action?: unknown };
-		return typeof parsed.action === "string" ? parsed.action : null;
+		result = typeof parsed.action === "string" ? parsed.action : null;
 	} catch {
-		return null;
+		// return null
 	}
+
+	if (VERDICT_ACTION_CACHE.size >= MAX_CACHE_SIZE) {
+		VERDICT_ACTION_CACHE.delete(
+			VERDICT_ACTION_CACHE.keys().next().value as string,
+		);
+	}
+	VERDICT_ACTION_CACHE.set(json, result);
+	return result;
 }
 
 interface ParsedVerdict {
@@ -71,12 +87,25 @@ interface ParsedVerdict {
 	classification?: { label?: string };
 }
 
+const VERDICT_CACHE = new Map<string, ParsedVerdict | null>();
+
 function parseVerdict(json: string): ParsedVerdict | null {
+	const cached = VERDICT_CACHE.get(json);
+	if (cached !== undefined) return cached;
+
+	let result: ParsedVerdict | null = null;
 	try {
-		return JSON.parse(json) as ParsedVerdict;
+		const parsed = Object.freeze(JSON.parse(json) as ParsedVerdict);
+		result = parsed;
 	} catch {
-		return null;
+		// return null
 	}
+
+	if (VERDICT_CACHE.size >= MAX_CACHE_SIZE) {
+		VERDICT_CACHE.delete(VERDICT_CACHE.keys().next().value as string);
+	}
+	VERDICT_CACHE.set(json, result);
+	return result;
 }
 
 export interface PipelineSuccessInput {
@@ -89,7 +118,9 @@ export interface PipelineSuccessInput {
  * `null` when there's no data to report (UI surfaces an "—" placeholder rather
  * than a misleading 0%).
  */
-export function pipelineSuccessRate(input: PipelineSuccessInput): number | null {
+export function pipelineSuccessRate(
+	input: PipelineSuccessInput,
+): number | null {
 	const total = input.completed + input.failed;
 	if (total === 0) return null;
 	return input.completed / total;
@@ -311,7 +342,10 @@ export function aggregateOrgOverview(
 			const parsed = parseVerdict(row.security_verdict);
 			if (!parsed) continue;
 			const label = parsed.classification?.label;
-			if (typeof label === "string" && (VERDICT_MIX_KEYS as readonly string[]).includes(label)) {
+			if (
+				typeof label === "string" &&
+				(VERDICT_MIX_KEYS as readonly string[]).includes(label)
+			) {
 				verdictMix[label as keyof VerdictMix] += 1;
 			}
 			// Top-threats: count tag/quarantine/block by classification label.

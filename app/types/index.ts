@@ -141,7 +141,11 @@ export interface SidecarHealth {
 	 * history cursor expired and the cursor jump that bounds the window of
 	 * unscored mail. Survives the clean polls that null `last_error`; null
 	 * when no gap has ever occurred. */
-	last_gap?: { ts: string; old_cursor: string | null; new_cursor: string | null } | null;
+	last_gap?: {
+		ts: string;
+		old_cursor: string | null;
+		new_cursor: string | null;
+	} | null;
 }
 
 export interface MailboxSettings {
@@ -225,13 +229,30 @@ export interface SecurityVerdict {
 	triage?: "hard_allow" | "hard_block" | "attachment_block" | "folder_bypass";
 }
 
-export function parseVerdict(raw: string | null | undefined): SecurityVerdict | null {
+const VERDICT_CACHE = new Map<string, SecurityVerdict | null>();
+const MAX_CACHE_SIZE = 1000;
+
+export function parseVerdict(
+	raw: string | null | undefined,
+): SecurityVerdict | null {
 	if (!raw) return null;
+
+	const cached = VERDICT_CACHE.get(raw);
+	if (cached !== undefined) return cached;
+
+	let result: SecurityVerdict | null = null;
 	try {
-		return JSON.parse(raw) as SecurityVerdict;
+		const parsed = Object.freeze(JSON.parse(raw) as SecurityVerdict);
+		result = parsed;
 	} catch {
-		return null;
+		// return null
 	}
+
+	if (VERDICT_CACHE.size >= MAX_CACHE_SIZE) {
+		VERDICT_CACHE.delete(VERDICT_CACHE.keys().next().value as string);
+	}
+	VERDICT_CACHE.set(raw, result);
+	return result;
 }
 
 export interface Attachment {
@@ -478,7 +499,11 @@ export interface CatchallRecentSample {
 /** Shape returned by `GET /api/v1/domains/:domain/catchall-intel` (#427, #548). */
 export interface CatchallSummary {
 	enabled: boolean;
-	totals: { probe_count: number; distinct_sources: number; distinct_localparts: number };
+	totals: {
+		probe_count: number;
+		distinct_sources: number;
+		distinct_localparts: number;
+	};
 	topSources: CatchallSourceRollup[];
 	recent: CatchallRecentSample[];
 }
@@ -504,11 +529,18 @@ export interface HubSharingGroup {
  * normal state for a mailbox without `intel.hub` set; the UI renders one
  * "Configure hub credentials" panel and stops querying.
  */
-export type HubEnvelope<T> = { configured: true; data: T } | { configured: false };
+export type HubEnvelope<T> =
+	| { configured: true; data: T }
+	| { configured: false };
 
 export type HubContributionsResponse = HubEnvelope<HubContribution[]>;
-export type HubDestroylistResponse = HubEnvelope<{ values: string[]; count: number }>;
-export type HubSharingGroupsResponse = HubEnvelope<{ groups: HubSharingGroup[] }>;
+export type HubDestroylistResponse = HubEnvelope<{
+	values: string[];
+	count: number;
+}>;
+export type HubSharingGroupsResponse = HubEnvelope<{
+	groups: HubSharingGroup[];
+}>;
 
 /**
  * Hub invite request — mirrors the hub `POST /orgs/invite` zod schema. All
