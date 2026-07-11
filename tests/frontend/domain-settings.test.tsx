@@ -15,8 +15,13 @@ const updateDomainMock = {
 	isPending: false,
 };
 
-let domainSettingsFixture: { domain: string; settings: Record<string, unknown> };
-let orgSettingsFixture: { settings: Record<string, unknown> } = { settings: {} };
+let domainSettingsFixture: {
+	domain: string;
+	settings: Record<string, unknown>;
+};
+let orgSettingsFixture: { settings: Record<string, unknown> } = {
+	settings: {},
+};
 
 vi.mock("~/queries/domain-settings", () => ({
 	useDomainSettings: () => ({ data: domainSettingsFixture, isLoading: false }),
@@ -28,7 +33,9 @@ vi.mock("~/queries/org-settings", () => ({
 }));
 
 vi.mock("~/queries/text-models", () => ({
-	useTextModels: () => ({ models: ["@cf/meta/llama-3.3-70b-instruct-fp8-fast"] }),
+	useTextModels: () => ({
+		models: ["@cf/meta/llama-3.3-70b-instruct-fp8-fast"],
+	}),
 }));
 
 // SecuritySettingsPanel and HubSettingsPanel are heavy — stub them so the
@@ -48,7 +55,10 @@ import { renderWithProviders } from "./test-utils";
 function renderDomainSettings(domain = "acme.com") {
 	return renderWithProviders(
 		<Routes>
-			<Route path="/domains/:domain/settings" element={<DomainSettingsRoute />} />
+			<Route
+				path="/domains/:domain/settings"
+				element={<DomainSettingsRoute />}
+			/>
 		</Routes>,
 		{ initialEntries: [`/domains/${encodeURIComponent(domain)}/settings`] },
 	);
@@ -133,7 +143,9 @@ describe("DomainSettings · Catch-all intel toggle (#521)", () => {
 		// autoDraft is preserved from the loaded settings
 		expect(payload.autoDraft).toEqual({ enabled: false });
 		// agentModel is preserved
-		expect((payload.agentModel as string)).toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+		expect(payload.agentModel as string).toBe(
+			"@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+		);
 	});
 
 	it("omits catchall_intel from the payload when the toggle is never touched", async () => {
@@ -141,7 +153,9 @@ describe("DomainSettings · Catch-all intel toggle (#521)", () => {
 		domainSettingsFixture = { domain: "acme.com", settings: {} };
 		renderDomainSettings();
 
-		await screen.findByRole("checkbox", { name: /enable catch-all probe capture/i });
+		await screen.findByRole("checkbox", {
+			name: /enable catch-all probe capture/i,
+		});
 		await user.click(screen.getByRole("button", { name: /save changes/i }));
 		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
 
@@ -160,7 +174,9 @@ describe("DomainSettings · Catch-all intel toggle (#521)", () => {
 		};
 		renderDomainSettings();
 
-		await screen.findByRole("checkbox", { name: /enable catch-all probe capture/i });
+		await screen.findByRole("checkbox", {
+			name: /enable catch-all probe capture/i,
+		});
 		await user.click(screen.getByRole("button", { name: /save changes/i }));
 		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
 
@@ -170,6 +186,30 @@ describe("DomainSettings · Catch-all intel toggle (#521)", () => {
 			retention_days: 14,
 			sample_limit: 25,
 		});
+	});
+
+	it("displays an error and marks invalid if credentialsSecret doesn't start with RELAY_CREDS_", async () => {
+		const user = userEvent.setup();
+		domainSettingsFixture = {
+			domain: "acme.com",
+			settings: { relay: { enabled: true } },
+		};
+		renderDomainSettings();
+
+		const secretInput = await screen.findByLabelText(
+			/credentials secret name/i,
+		);
+		await user.type(secretInput, "BAD_SECRET");
+
+		expect(secretInput).toHaveAttribute("aria-invalid", "true");
+		expect(screen.getByRole("alert")).toHaveTextContent(
+			/must start with RELAY_CREDS_/i,
+		);
+
+		await user.clear(secretInput);
+		await user.type(secretInput, "RELAY_CREDS_GOOD");
+		expect(secretInput).not.toHaveAttribute("aria-invalid");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
 	it("preserves intel.feeds when saving without a hub override", async () => {
@@ -260,9 +300,13 @@ describe("DomainSettings · Inline gateway relay card (#32 task 13)", () => {
 	it("renders the relay toggle unchecked and hides fields when relay is absent", async () => {
 		domainSettingsFixture = { domain: "acme.com", settings: {} };
 		renderDomainSettings();
-		const toggle = await screen.findByRole("checkbox", { name: /inline gateway relay/i });
+		const toggle = await screen.findByRole("checkbox", {
+			name: /inline gateway relay/i,
+		});
 		expect(toggle).not.toBeChecked();
-		expect(screen.queryByLabelText(/relay target host/i)).not.toBeInTheDocument();
+		expect(
+			screen.queryByLabelText(/relay target host/i),
+		).not.toBeInTheDocument();
 	});
 
 	it("loads existing relay settings and shows the fields populated", async () => {
@@ -271,7 +315,11 @@ describe("DomainSettings · Inline gateway relay card (#32 task 13)", () => {
 			settings: {
 				relay: {
 					enabled: true,
-					target: { host: "smtp-relay.gmail.com", port: 465, implicitTls: true },
+					target: {
+						host: "smtp-relay.gmail.com",
+						port: 465,
+						implicitTls: true,
+					},
 					credentialsSecret: "RELAY_CREDS_ACME_COM",
 					actions: { quarantine: "relay" },
 				},
@@ -279,12 +327,18 @@ describe("DomainSettings · Inline gateway relay card (#32 task 13)", () => {
 		};
 		renderDomainSettings();
 
-		const toggle = await screen.findByRole("checkbox", { name: /inline gateway relay/i });
+		const toggle = await screen.findByRole("checkbox", {
+			name: /inline gateway relay/i,
+		});
 		expect(toggle).toBeChecked();
-		expect(screen.getByLabelText(/relay target host/i)).toHaveValue("smtp-relay.gmail.com");
+		expect(screen.getByLabelText(/relay target host/i)).toHaveValue(
+			"smtp-relay.gmail.com",
+		);
 		expect(screen.getByLabelText(/^port$/i)).toHaveValue("465");
 		expect(screen.getByLabelText(/implicit tls/i)).toBeChecked();
-		expect(screen.getByLabelText(/credentials secret name/i)).toHaveValue("RELAY_CREDS_ACME_COM");
+		expect(screen.getByLabelText(/credentials secret name/i)).toHaveValue(
+			"RELAY_CREDS_ACME_COM",
+		);
 		expect(screen.getByLabelText(/quarantine verdict/i)).toHaveValue("relay");
 	});
 
@@ -293,8 +347,13 @@ describe("DomainSettings · Inline gateway relay card (#32 task 13)", () => {
 		domainSettingsFixture = { domain: "acme.com", settings: {} };
 		renderDomainSettings();
 
-		await user.click(await screen.findByRole("checkbox", { name: /inline gateway relay/i }));
-		await user.type(screen.getByLabelText(/relay target host/i), "smtp-relay.gmail.com");
+		await user.click(
+			await screen.findByRole("checkbox", { name: /inline gateway relay/i }),
+		);
+		await user.type(
+			screen.getByLabelText(/relay target host/i),
+			"smtp-relay.gmail.com",
+		);
 
 		await user.click(screen.getByRole("button", { name: /save changes/i }));
 		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
@@ -323,7 +382,9 @@ describe("DomainSettings · Inline gateway relay card (#32 task 13)", () => {
 		const user = userEvent.setup();
 		domainSettingsFixture = {
 			domain: "acme.com",
-			settings: { relay: { enabled: true, target: { host: "relay.example.com" } } },
+			settings: {
+				relay: { enabled: true, target: { host: "relay.example.com" } },
+			},
 		};
 		renderDomainSettings();
 
