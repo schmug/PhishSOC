@@ -41,7 +41,8 @@ export function bucketThreatPressure(
 		if (!row.date || !row.security_verdict) continue;
 
 		const action = parseVerdictAction(row.security_verdict);
-		if (action !== "tag" && action !== "quarantine" && action !== "block") continue;
+		if (action !== "tag" && action !== "quarantine" && action !== "block")
+			continue;
 
 		const t = Date.parse(row.date);
 		if (Number.isNaN(t)) continue;
@@ -57,13 +58,11 @@ export function bucketThreatPressure(
 	return buckets;
 }
 
+const verdictCache = new Map<string, ParsedVerdict | null>();
+
 function parseVerdictAction(json: string): string | null {
-	try {
-		const parsed = JSON.parse(json) as { action?: unknown };
-		return typeof parsed.action === "string" ? parsed.action : null;
-	} catch {
-		return null;
-	}
+	const parsed = parseVerdict(json);
+	return typeof parsed?.action === "string" ? parsed.action : null;
 }
 
 interface ParsedVerdict {
@@ -72,11 +71,27 @@ interface ParsedVerdict {
 }
 
 function parseVerdict(json: string): ParsedVerdict | null {
+	const cached = verdictCache.get(json);
+	if (cached !== undefined) return cached;
+
+	let parsed: ParsedVerdict | null = null;
 	try {
-		return JSON.parse(json) as ParsedVerdict;
+		parsed = JSON.parse(json) as ParsedVerdict;
+		if (parsed) {
+			Object.freeze(parsed);
+			if (parsed.classification) Object.freeze(parsed.classification);
+		}
 	} catch {
-		return null;
+		parsed = null;
 	}
+
+	// ⚡ Bolt: Cache parsed JSON objects to avoid JSON.parse overhead in aggregation loops.
+	// Verdict strings are highly repetitive, so a small bounded cache is very effective.
+	if (verdictCache.size >= 1000) {
+		verdictCache.clear();
+	}
+	verdictCache.set(json, parsed);
+	return parsed;
 }
 
 export interface PipelineSuccessInput {
@@ -89,7 +104,9 @@ export interface PipelineSuccessInput {
  * `null` when there's no data to report (UI surfaces an "—" placeholder rather
  * than a misleading 0%).
  */
-export function pipelineSuccessRate(input: PipelineSuccessInput): number | null {
+export function pipelineSuccessRate(
+	input: PipelineSuccessInput,
+): number | null {
 	const total = input.completed + input.failed;
 	if (total === 0) return null;
 	return input.completed / total;
@@ -311,7 +328,10 @@ export function aggregateOrgOverview(
 			const parsed = parseVerdict(row.security_verdict);
 			if (!parsed) continue;
 			const label = parsed.classification?.label;
-			if (typeof label === "string" && (VERDICT_MIX_KEYS as readonly string[]).includes(label)) {
+			if (
+				typeof label === "string" &&
+				(VERDICT_MIX_KEYS as readonly string[]).includes(label)
+			) {
 				verdictMix[label as keyof VerdictMix] += 1;
 			}
 			// Top-threats: count tag/quarantine/block by classification label.
