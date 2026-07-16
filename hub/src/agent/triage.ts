@@ -34,15 +34,24 @@ export async function consumeTriageBatch(
 }
 
 async function triageEvent(env: Env, uuid: string) {
-	const event = await env.DB
-		.prepare(`SELECT event_json FROM events WHERE uuid = ?1`)
+	const event = await env.DB.prepare(
+		`SELECT event_json FROM events WHERE uuid = ?1`,
+	)
 		.bind(uuid)
 		.first<{ event_json: string }>();
 	if (!event) return;
-	const parsed = JSON.parse(event.event_json) as { Event: { info?: string; Attribute?: Array<{ type: string; value: string }> } };
+	const parsed = JSON.parse(event.event_json) as {
+		Event: {
+			info?: string;
+			Attribute?: Array<{ type: string; value: string }>;
+		};
+	};
 	const info = parsed.Event?.info ?? "";
 	const attrs = parsed.Event?.Attribute ?? [];
-	const summary = `info="${info}" attrs=${attrs.slice(0, 10).map((a) => `${a.type}:${a.value}`).join(",")}`;
+	const summary = `info="${info}" attrs=${attrs
+		.slice(0, 10)
+		.map((a) => `${a.type}:${a.value}`)
+		.join(",")}`;
 
 	let tags: string[] = [];
 	try {
@@ -60,17 +69,27 @@ async function triageEvent(env: Env, uuid: string) {
 		const match = response?.response?.match(/\[[\s\S]*\]/);
 		if (match) {
 			const arr = JSON.parse(match[0]);
-			if (Array.isArray(arr)) tags = arr.filter((t) => typeof t === "string").slice(0, 5);
+			if (Array.isArray(arr))
+				tags = arr.filter((t) => typeof t === "string").slice(0, 5);
 		}
 	} catch (e) {
 		console.error("tag generation failed:", (e as Error).message);
 	}
 
-	for (const t of tags) {
-		await env.DB.prepare(`INSERT OR IGNORE INTO tags (name) VALUES (?1)`).bind(t).run();
-		await env.DB
-			.prepare(`INSERT OR IGNORE INTO event_tags (event_uuid, tag_name) VALUES (?1, ?2)`)
-			.bind(uuid, t)
-			.run();
+	if (tags.length > 0) {
+		// ⚡ Bolt: Batch D1 queries for tag insertions to eliminate N+1 latency
+		// when an event is assigned multiple tags by the triage agent.
+		const tagStatements: D1PreparedStatement[] = [];
+		for (const t of tags) {
+			tagStatements.push(
+				env.DB.prepare(`INSERT OR IGNORE INTO tags (name) VALUES (?1)`).bind(t),
+			);
+			tagStatements.push(
+				env.DB.prepare(
+					`INSERT OR IGNORE INTO event_tags (event_uuid, tag_name) VALUES (?1, ?2)`,
+				).bind(uuid, t),
+			);
+		}
+		await env.DB.batch(tagStatements);
 	}
 }

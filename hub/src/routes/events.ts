@@ -12,8 +12,8 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { requireOrg, type HubContext } from "../lib/auth";
 import { applyCorroboration } from "../lib/aggregate";
+import { type HubContext, requireOrg } from "../lib/auth";
 
 export const eventRoutes = new Hono<HubContext>();
 
@@ -57,21 +57,21 @@ eventRoutes.post("/", async (c) => {
 	}
 	// If a sharing group is specified, the org must belong to it.
 	if (incoming.sharing_group_uuid) {
-		const mem = await c.env.DB
-			.prepare(`SELECT 1 FROM sharing_group_orgs WHERE sharing_group_uuid = ?1 AND org_uuid = ?2`)
+		const mem = await c.env.DB.prepare(
+			`SELECT 1 FROM sharing_group_orgs WHERE sharing_group_uuid = ?1 AND org_uuid = ?2`,
+		)
 			.bind(incoming.sharing_group_uuid, org.uuid)
 			.first();
 		if (!mem) return c.json({ error: "org not in sharing_group" }, 403);
 	}
 
 	const eventUuid = incoming.uuid ?? crypto.randomUUID();
-	await c.env.DB
-		.prepare(
-			`INSERT INTO events
+	await c.env.DB.prepare(
+		`INSERT INTO events
 			 (uuid, orgc_uuid, sharing_group_uuid, info, date, timestamp,
 			  distribution, analysis, threat_level_id, event_json)
 			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
-		)
+	)
 		.bind(
 			eventUuid,
 			org.uuid,
@@ -88,29 +88,39 @@ eventRoutes.post("/", async (c) => {
 
 	// Insert attributes and tags in batches where possible.
 	const attrStatements = incoming.Attribute.map((a) =>
-		c.env.DB
-			.prepare(
-				`INSERT INTO attributes (uuid, event_uuid, type, category, value, to_ids, comment)
+		c.env.DB.prepare(
+			`INSERT INTO attributes (uuid, event_uuid, type, category, value, to_ids, comment)
 				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-			)
-			.bind(
-				a.uuid ?? crypto.randomUUID(),
-				eventUuid,
-				a.type,
-				a.category,
-				a.value,
-				a.to_ids === true || a.to_ids === 1 ? 1 : 0,
-				a.comment ?? null,
-			),
+		).bind(
+			a.uuid ?? crypto.randomUUID(),
+			eventUuid,
+			a.type,
+			a.category,
+			a.value,
+			a.to_ids === true || a.to_ids === 1 ? 1 : 0,
+			a.comment ?? null,
+		),
 	);
 	if (attrStatements.length > 0) await c.env.DB.batch(attrStatements);
 
-	for (const t of incoming.Tag ?? []) {
-		await c.env.DB.prepare(`INSERT OR IGNORE INTO tags (name) VALUES (?1)`).bind(t.name).run();
-		await c.env.DB
-			.prepare(`INSERT OR IGNORE INTO event_tags (event_uuid, tag_name) VALUES (?1, ?2)`)
-			.bind(eventUuid, t.name)
-			.run();
+	const tags = incoming.Tag ?? [];
+	if (tags.length > 0) {
+		// ⚡ Bolt: Batch D1 queries for tag insertions to eliminate N+1 latency
+		// when an event carries multiple tags.
+		const tagStatements: D1PreparedStatement[] = [];
+		for (const t of tags) {
+			tagStatements.push(
+				c.env.DB.prepare(`INSERT OR IGNORE INTO tags (name) VALUES (?1)`).bind(
+					t.name,
+				),
+			);
+			tagStatements.push(
+				c.env.DB.prepare(
+					`INSERT OR IGNORE INTO event_tags (event_uuid, tag_name) VALUES (?1, ?2)`,
+				).bind(eventUuid, t.name),
+			);
+		}
+		await c.env.DB.batch(tagStatements);
 	}
 
 	// Corroboration update (sync — keeps feed generation consistent; a Queue
@@ -119,11 +129,14 @@ eventRoutes.post("/", async (c) => {
 		event_uuid: eventUuid,
 		orgc_uuid: org.uuid,
 		sharing_group_uuid: incoming.sharing_group_uuid ?? null,
-		attributes: incoming.Attribute.map((a) => ({ type: a.type, value: a.value })),
+		attributes: incoming.Attribute.map((a) => ({
+			type: a.type,
+			value: a.value,
+		})),
 	});
 
-	await c.env.TRIAGE_QUEUE.send({ kind: "event", event_uuid: eventUuid }).catch((e) =>
-		console.error("triage enqueue failed:", (e as Error).message),
+	await c.env.TRIAGE_QUEUE.send({ kind: "event", event_uuid: eventUuid }).catch(
+		(e) => console.error("triage enqueue failed:", (e as Error).message),
 	);
 
 	return c.json({ Event: { uuid: eventUuid } }, 201);
@@ -131,16 +144,22 @@ eventRoutes.post("/", async (c) => {
 
 eventRoutes.get("/:uuid", async (c) => {
 	const uuid = c.req.param("uuid");
-	const event = await c.env.DB
-		.prepare(`SELECT event_json, orgc_uuid, sharing_group_uuid FROM events WHERE uuid = ?1`)
+	const event = await c.env.DB.prepare(
+		`SELECT event_json, orgc_uuid, sharing_group_uuid FROM events WHERE uuid = ?1`,
+	)
 		.bind(uuid)
-		.first<{ event_json: string; orgc_uuid: string; sharing_group_uuid: string | null }>();
+		.first<{
+			event_json: string;
+			orgc_uuid: string;
+			sharing_group_uuid: string | null;
+		}>();
 	if (!event) return c.json({ error: "not found" }, 404);
 	// Visibility: own org, or member of the event's sharing group.
 	if (event.orgc_uuid !== c.var.org.uuid) {
 		if (!event.sharing_group_uuid) return c.json({ error: "forbidden" }, 403);
-		const mem = await c.env.DB
-			.prepare(`SELECT 1 FROM sharing_group_orgs WHERE sharing_group_uuid = ?1 AND org_uuid = ?2`)
+		const mem = await c.env.DB.prepare(
+			`SELECT 1 FROM sharing_group_orgs WHERE sharing_group_uuid = ?1 AND org_uuid = ?2`,
+		)
 			.bind(event.sharing_group_uuid, c.var.org.uuid)
 			.first();
 		if (!mem) return c.json({ error: "forbidden" }, 403);
@@ -158,18 +177,23 @@ const RestSearchSchema = z.object({
 });
 
 eventRoutes.post("/restSearch", async (c) => {
-	const parsed = RestSearchSchema.safeParse(await c.req.json().catch(() => ({})));
+	const parsed = RestSearchSchema.safeParse(
+		await c.req.json().catch(() => ({})),
+	);
 	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 	const { type, value, limit = 100, page = 1 } = parsed.data;
 	const offset = (page - 1) * limit;
 
 	// Visibility-aware — include own events plus events in any sharing group
 	// the org belongs to.
-	const membershipRows = await c.env.DB
-		.prepare(`SELECT sharing_group_uuid FROM sharing_group_orgs WHERE org_uuid = ?1`)
+	const membershipRows = await c.env.DB.prepare(
+		`SELECT sharing_group_uuid FROM sharing_group_orgs WHERE org_uuid = ?1`,
+	)
 		.bind(c.var.org.uuid)
 		.all<{ sharing_group_uuid: string }>();
-	const visibleGroups = (membershipRows.results ?? []).map((r) => r.sharing_group_uuid);
+	const visibleGroups = (membershipRows.results ?? []).map(
+		(r) => r.sharing_group_uuid,
+	);
 
 	// Build WHERE via parameters.
 	const whereParts: string[] = [
@@ -177,10 +201,17 @@ eventRoutes.post("/restSearch", async (c) => {
 	];
 	const params: (string | number)[] = [c.var.org.uuid, ...visibleGroups];
 
-	if (type) { whereParts.push(`a.type = ?${params.length + 1}`); params.push(type); }
-	if (value) { whereParts.push(`a.value = ?${params.length + 1}`); params.push(value); }
+	if (type) {
+		whereParts.push(`a.type = ?${params.length + 1}`);
+		params.push(type);
+	}
+	if (value) {
+		whereParts.push(`a.value = ?${params.length + 1}`);
+		params.push(value);
+	}
 
-	const join = (type || value) ? `JOIN attributes a ON a.event_uuid = e.uuid` : ``;
+	const join =
+		type || value ? `JOIN attributes a ON a.event_uuid = e.uuid` : ``;
 	params.push(limit, offset);
 
 	const sql = `SELECT DISTINCT e.event_json FROM events e ${join}
@@ -188,7 +219,9 @@ eventRoutes.post("/restSearch", async (c) => {
 		ORDER BY e.timestamp DESC
 		LIMIT ?${params.length - 1} OFFSET ?${params.length}`;
 
-	const rows = await c.env.DB.prepare(sql).bind(...params).all<{ event_json: string }>();
+	const rows = await c.env.DB.prepare(sql)
+		.bind(...params)
+		.all<{ event_json: string }>();
 	const events = (rows.results ?? []).map((r) => JSON.parse(r.event_json));
 	return c.json({ response: events });
 });
