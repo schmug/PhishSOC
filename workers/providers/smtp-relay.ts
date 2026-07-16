@@ -33,6 +33,11 @@ export class SmtpRelayProvider {
 	): Promise<void> {
 		let auth: { user: string; pass: string } | undefined;
 		if (policy.credentialsSecret) {
+			if (!policy.credentialsSecret.startsWith("RELAY_CREDS_")) {
+				throw new SmtpPermanentError(
+					`relay credentials secret ${policy.credentialsSecret} must start with RELAY_CREDS_`,
+				);
+			}
 			const secret = (env as unknown as Record<string, unknown>)[policy.credentialsSecret];
 			if (typeof secret !== "string" || secret.length === 0) {
 				throw new SmtpPermanentError(

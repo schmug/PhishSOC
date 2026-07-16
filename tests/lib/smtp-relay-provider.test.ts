@@ -50,6 +50,14 @@ describe("SmtpRelayProvider.relayRaw", () => {
 		expect(submitRaw).not.toHaveBeenCalled();
 	});
 
+	it("throws SmtpPermanentError when credentialsSecret lacks the RELAY_CREDS_ prefix", async () => {
+		const p = { ...policy, credentialsSecret: "SIDECAR_SECRET_acme" };
+		await expect(
+			smtpRelayProvider.relayRaw({} as Env, raw, envelope, p),
+		).rejects.toBeInstanceOf(SmtpPermanentError);
+		expect(submitRaw).not.toHaveBeenCalled();
+	});
+
 	it("relays unauthenticated when the policy names no secret", async () => {
 		const p = { ...policy, credentialsSecret: undefined };
 		await smtpRelayProvider.relayRaw({} as Env, raw, envelope, p);
