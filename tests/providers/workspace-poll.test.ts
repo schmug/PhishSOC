@@ -430,8 +430,8 @@ describe("pollWorkspaceMailbox", () => {
 		expect(stub.acquirePollLease).toHaveBeenCalledTimes(1);
 		expect(stub.acquirePollLease).toHaveBeenCalledWith(expect.any(Number), POLL_LEASE_TTL_MS);
 		expect(POLL_LEASE_TTL_MS).toBe(5 * 60 * 1000);
-		// Release rides the existing success state patch — no extra DO call.
-		expect(stub.putSidecarState).toHaveBeenCalledTimes(1);
+		// One in-loop heartbeat + one success patch that releases the lease.
+		expect(stub.putSidecarState).toHaveBeenCalledTimes(2);
 		expect(stub.putSidecarState.mock.calls.at(-1)![0].poll_lease_until).toBeNull();
 	});
 
@@ -459,6 +459,28 @@ describe("pollWorkspaceMailbox", () => {
 		});
 		await pollWorkspaceMailbox(makeEnv(stub2), ctx, "user@tenant.example", CFG);
 		expect(stub2.putSidecarState.mock.calls.at(-1)![0].poll_lease_until).toBeNull();
+	});
+
+	it("poll lease (#591): heartbeat renewed once per listed message so long batches cannot expire mid-loop", async () => {
+		const stub = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-x", verdict: null });
+		const three = Array.from({ length: 3 }, (_, i) => ({ message: { id: `g${i}`, labelIds: ["INBOX"] } }));
+		gmailFetch({
+			"/history": () => new Response(JSON.stringify({
+				historyId: "200",
+				history: [{ messagesAdded: three }],
+			}), { status: 200 }),
+			"/messages/": (u) => {
+				const id = u.pathname.split("/").pop()!;
+				return new Response(JSON.stringify({ id, raw: rawMessage(`${id}@x`, "s") }), { status: 200 });
+			},
+		});
+		await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		const heartbeats = stub.putSidecarState.mock.calls.filter(
+			(c) => Object.keys(c[0]).length === 1 && c[0].poll_lease_until != null,
+		);
+		expect(heartbeats).toHaveLength(3);
+		expect(stub.putSidecarState.mock.calls.at(-1)![0].poll_lease_until).toBeNull();
 	});
 
 	it("caps at MAX_MESSAGES_PER_POLL PROCESSED messages and freezes the cursor when capped", async () => {
