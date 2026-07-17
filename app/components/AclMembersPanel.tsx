@@ -1,6 +1,6 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { Button, Input, Loader } from "@cloudflare/kumo";
+import { Button, Input, Loader, Tooltip } from "@cloudflare/kumo";
 import { LockIcon, UserIcon, XIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import {
@@ -89,6 +89,7 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleRemove = async (email: string) => {
+		if (!window.confirm(`Are you sure you want to remove ${email}?`)) return;
 		setRemoveError(null);
 		try {
 			await removeMember.mutateAsync(email);
@@ -100,6 +101,7 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleTransfer = async (email: string) => {
+		if (!window.confirm(`Are you sure you want to make ${email} the owner?`)) return;
 		setTransferError(null);
 		try {
 			await transferOwnership.mutateAsync(email);
@@ -125,6 +127,7 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleRemoveGroup = async (group: string) => {
+		if (!window.confirm(`Are you sure you want to remove group ${group}?`)) return;
 		setRemoveGroupError(null);
 		try {
 			await removeGroup.mutateAsync(group);
@@ -170,16 +173,18 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 									>
 										Make owner
 									</button>
-									<button
-										type="button"
-										aria-label={`Remove ${member}`}
-										data-testid={`remove-member-${member}`}
-										className="text-ink-3 hover:text-red-600"
-										disabled={removeMember.isPending}
-										onClick={() => handleRemove(member)}
-									>
-										<XIcon size={14} />
-									</button>
+									<Tooltip content="Remove member" side="bottom" asChild>
+										<button
+											type="button"
+											aria-label={`Remove ${member}`}
+											data-testid={`remove-member-${member}`}
+											className="text-ink-3 hover:text-red-600"
+											disabled={removeMember.isPending}
+											onClick={() => handleRemove(member)}
+										>
+											<XIcon size={14} />
+										</button>
+									</Tooltip>
 								</div>
 							)}
 						</li>
@@ -234,16 +239,18 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 					{acl.groups.map((group) => (
 						<li key={group} className="flex items-center justify-between gap-2">
 							<span className="text-sm text-ink truncate">{group}</span>
-							<button
-								type="button"
-								aria-label={`Remove group ${group}`}
-								data-testid={`remove-group-${group}`}
-								className="text-ink-3 hover:text-red-600 shrink-0"
-								disabled={removeGroup.isPending}
-								onClick={() => handleRemoveGroup(group)}
-							>
-								<XIcon size={14} />
-							</button>
+							<Tooltip content="Remove group" side="bottom" asChild>
+								<button
+									type="button"
+									aria-label={`Remove group ${group}`}
+									data-testid={`remove-group-${group}`}
+									className="text-ink-3 hover:text-red-600 shrink-0"
+									disabled={removeGroup.isPending}
+									onClick={() => handleRemoveGroup(group)}
+								>
+									<XIcon size={14} />
+								</button>
+							</Tooltip>
 						</li>
 					))}
 				</ul>
