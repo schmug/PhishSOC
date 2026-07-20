@@ -140,7 +140,7 @@ export async function getProfile(token: string): Promise<{ emailAddress: string;
 }
 
 export type HistoryResult =
-	| { ok: true; messageIds: string[]; historyId: string; truncated: boolean }
+	| { ok: true; messageIds: string[]; historyId: string; truncated: boolean; nextPageToken?: string }
 	| { ok: false; expired: true };
 
 /** Gmail-internal labels that mark non-inbound messages we must never score. */
@@ -152,15 +152,20 @@ const MAX_HISTORY_PAGES = 3;
  * cursor is older than Gmail's history retention — the caller must
  * re-initialize from getProfile() and accept the gap.
  */
-export async function listNewMessageIds(token: string, startHistoryId: string): Promise<HistoryResult> {
+export async function listNewMessageIds(
+	token: string,
+	startHistoryId: string,
+	opts?: { startPageToken?: string },
+): Promise<HistoryResult> {
 	const ids: string[] = [];
 	const seen = new Set<string>();
 	let latestHistoryId = startHistoryId;
-	let pageToken: string | undefined;
+	let pageToken: string | undefined = opts?.startPageToken;
 	// truncated = we stopped on the page cap with more pages still pending, so
 	// the listing is INCOMPLETE. The caller must NOT advance the cursor on a
 	// truncated result — otherwise the un-fetched tail is skipped forever.
 	let truncated = false;
+	let danglingPageToken: string | undefined;
 	for (let page = 0; page < MAX_HISTORY_PAGES; page++) {
 		const qs = new URLSearchParams({
 			startHistoryId,
@@ -190,9 +195,18 @@ export async function listNewMessageIds(token: string, startHistoryId: string): 
 		pageToken = data.nextPageToken;
 		// If this was the last iteration the loop allows but a page still
 		// dangles, the listing is truncated by the page cap.
-		if (page === MAX_HISTORY_PAGES - 1) truncated = true;
+		if (page === MAX_HISTORY_PAGES - 1) {
+			truncated = true;
+			danglingPageToken = data.nextPageToken;
+		}
 	}
-	return { ok: true, messageIds: ids, historyId: latestHistoryId, truncated };
+	return {
+		ok: true,
+		messageIds: ids,
+		historyId: latestHistoryId,
+		truncated,
+		...(truncated && danglingPageToken ? { nextPageToken: danglingPageToken } : {}),
+	};
 }
 
 export async function getRawMessage(token: string, id: string): Promise<Uint8Array> {
