@@ -212,6 +212,13 @@ export function parseSettingsLenient<T extends z.ZodTypeAny>(
       droppedLabels.push("sidecar");
     }
 
+    const dropRelay =
+      "relay" in rec && issues.some((i) => i.path[0] === "relay");
+    if (dropRelay) {
+      delete salvaged.relay;
+      droppedLabels.push("relay");
+    }
+
     if (droppedLabels.length > 0) {
       const retry = schema.safeParse(salvaged);
       if (retry.success) {
