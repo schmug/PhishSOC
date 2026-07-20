@@ -13,7 +13,9 @@ describe("RelaySettings schema", () => {
 			},
 		});
 		expect(parsed.success).toBe(true);
-		expect(parsed.success && parsed.data.relay?.target?.host).toBe("smtp-relay.gmail.com");
+		expect(parsed.success && parsed.data.relay?.target?.host).toBe(
+			"smtp-relay.gmail.com",
+		);
 	});
 
 	it("accepts an empty object (all fields optional)", () => {
@@ -21,9 +23,27 @@ describe("RelaySettings schema", () => {
 	});
 
 	it("rejects invalid action behaviors and ports", () => {
-		expect(RelaySettings.safeParse({ actions: { allow: "bounce" } }).success).toBe(false);
-		expect(RelaySettings.safeParse({ target: { host: "h", port: 0 } }).success).toBe(false);
-		expect(RelaySettings.safeParse({ target: { host: "h", port: 70000 } }).success).toBe(false);
+		expect(
+			RelaySettings.safeParse({ actions: { allow: "bounce" } }).success,
+		).toBe(false);
+		expect(
+			RelaySettings.safeParse({ target: { host: "h", port: 0 } }).success,
+		).toBe(false);
+		expect(
+			RelaySettings.safeParse({ target: { host: "h", port: 70000 } }).success,
+		).toBe(false);
+	});
+
+	it("rejects a secret name without the RELAY_CREDS_ prefix", () => {
+		const parsed = RelaySettings.safeParse({
+			credentialsSecret: "MASTER_DB_PASSWORD",
+		});
+		expect(parsed.success).toBe(false);
+		if (!parsed.success) {
+			expect(parsed.error.issues[0]?.message).toMatch(
+				/must start with RELAY_CREDS_/,
+			);
+		}
 	});
 
 	it("rejects credentialsSecret without the RELAY_CREDS_ prefix", () => {
@@ -62,7 +82,9 @@ describe("stripDefaultEqual: relay", () => {
 	});
 
 	it("keeps an enabled relay block", () => {
-		const v = { relay: { enabled: true, target: { host: "smtp-relay.gmail.com" } } };
+		const v = {
+			relay: { enabled: true, target: { host: "smtp-relay.gmail.com" } },
+		};
 		expect(stripDefaultEqual(v)).toEqual(v);
 	});
 });
