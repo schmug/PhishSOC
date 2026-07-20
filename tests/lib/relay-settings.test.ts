@@ -45,6 +45,34 @@ describe("RelaySettings schema", () => {
 			);
 		}
 	});
+
+	it("rejects credentialsSecret without the RELAY_CREDS_ prefix", () => {
+		const parsed = RelaySettings.safeParse({
+			credentialsSecret: "SIDECAR_SECRET_acme",
+		});
+		expect(parsed.success).toBe(false);
+		if (!parsed.success) {
+			expect(parsed.error.issues[0].message).toBe(
+				"Secret name must start with RELAY_CREDS_",
+			);
+		}
+	});
+});
+
+describe("parseSettingsLenient — relay salvage", () => {
+	it("drops an invalid relay block but preserves the rest of the domain tier", async () => {
+		const { parseSettingsLenient } = await import("../../shared/mailbox-settings");
+		const parsed = parseSettingsLenient(DomainSettings, {
+			agentModel: "custom-model",
+			relay: {
+				enabled: true,
+				target: { host: "smtp-relay.gmail.com" },
+				credentialsSecret: "SIDECAR_SECRET_acme",
+			},
+		});
+		expect(parsed.agentModel).toBe("custom-model");
+		expect(parsed.relay).toBeUndefined();
+	});
 });
 
 describe("stripDefaultEqual: relay", () => {

@@ -212,6 +212,16 @@ export function parseSettingsLenient<T extends z.ZodTypeAny>(
       droppedLabels.push("sidecar");
     }
 
+    // Invalid `relay` block (bad `RELAY_CREDS_` prefix, manual R2 edit) is
+    // dropped wholesale so it degrades to "relay disabled" on read instead of
+    // wiping the whole domain tier.
+    const dropRelay =
+      "relay" in rec && issues.some((i) => i.path[0] === "relay");
+    if (dropRelay) {
+      delete salvaged.relay;
+      droppedLabels.push("relay");
+    }
+
     if (droppedLabels.length > 0) {
       const retry = schema.safeParse(salvaged);
       if (retry.success) {
