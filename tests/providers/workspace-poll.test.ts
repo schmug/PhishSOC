@@ -76,6 +76,7 @@ function freshState(cursor: string | null) {
 		poll_lease_until: null,
 		label_error: null,
 		label_failure_count: 0,
+		history_page_token: null,
 	};
 }
 
@@ -643,5 +644,63 @@ describe("pollWorkspaceMailbox", () => {
 		expect(r.processed).toBeLessThan(MAX_MESSAGES_PER_POLL);
 		expect(r.processed).toBeGreaterThan(0);
 		expect(stub.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBeUndefined();
+	});
+
+	it("truncated history deadlock (#595): all deduped pages save page token, next poll resumes and advances cursor", async () => {
+		// Poll 1: pages 1–3 are already ingested (deduped); page 4 has fresh mail.
+		// Without a continuation token the poller would re-list pages 1–3 forever.
+		const stub1 = makeStub(freshState("100"));
+		stub1.findEmailIdByMessageId.mockImplementation(async (mid: string) =>
+			(["g1@x", "g2@x", "g3@x"].includes(mid) ? "already" : null),
+		);
+		let pages1 = 0;
+		gmailFetch({
+			"/history": () => {
+				pages1 += 1;
+				return new Response(JSON.stringify({
+					historyId: "999",
+					nextPageToken: `p${pages1}`,
+					history: [{ messagesAdded: [{ message: { id: `g${pages1}`, labelIds: ["INBOX"] } }] }],
+				}), { status: 200 });
+			},
+			"/messages/": (u) => {
+				const id = u.pathname.split("/").pop()!;
+				return new Response(JSON.stringify({ id, raw: rawMessage(`${id}@x`, "s") }), { status: 200 });
+			},
+		});
+		const r1 = await pollWorkspaceMailbox(makeEnv(stub1), ctx, "user@tenant.example", CFG);
+		expect(r1).toMatchObject({ processed: 0, deduped: 3, error: null });
+		const patch1 = stub1.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch1.history_cursor).toBeUndefined();
+		expect(patch1.history_page_token).toBe("p3");
+
+		// Poll 2: resume from p3 — only g4 is fresh; listing completes.
+		const stub2 = makeStub({ ...freshState("100"), history_page_token: "p3" });
+		stub2.findEmailIdByMessageId.mockImplementation(async (mid: string) =>
+			(["g1@x", "g2@x", "g3@x"].includes(mid) ? "already" : null),
+		);
+		mockedReceive.mockResolvedValue({ messageId: "local-g4", verdict: null });
+		let pages2 = 0;
+		gmailFetch({
+			"/history": (u) => {
+				pages2 += 1;
+				const token = u.searchParams.get("pageToken");
+				expect(token).toBe(pages2 === 1 ? "p3" : `tail${pages2}`);
+				if (pages2 === 1) {
+					return new Response(JSON.stringify({
+						historyId: "999",
+						nextPageToken: "tail2",
+						history: [{ messagesAdded: [{ message: { id: "g4", labelIds: ["INBOX"] } }] }],
+					}), { status: 200 });
+				}
+				return new Response(JSON.stringify({ historyId: "1000", history: [] }), { status: 200 });
+			},
+			"/messages/g4": () => new Response(JSON.stringify({ id: "g4", raw: rawMessage("g4@x", "fresh") }), { status: 200 }),
+		});
+		const r2 = await pollWorkspaceMailbox(makeEnv(stub2), ctx, "user@tenant.example", CFG);
+		expect(r2).toMatchObject({ processed: 1, deduped: 0, error: null });
+		const patch2 = stub2.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch2.history_page_token).toBeNull();
+		expect(patch2.history_cursor).toBe("1000");
 	});
 });
