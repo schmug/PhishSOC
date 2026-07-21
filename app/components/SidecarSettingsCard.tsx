@@ -2,6 +2,7 @@
 
 import { Badge, Button, Input } from "@cloudflare/kumo";
 import { useState } from "react";
+import { formatStandardDate } from "shared/dates";
 import type { SidecarHealth, SidecarSettings } from "~/types";
 
 export type SidecarFormValue = SidecarSettings;
@@ -28,16 +29,22 @@ export function SidecarSettingsCard(props: {
 	mailboxId: string;
 }) {
 	const { value, onChange, health, savedConfigExists, mailboxId } = props;
-	const [testResult, setTestResult] = useState<null | { ok: boolean; detail: string }>(null);
+	const [testResult, setTestResult] = useState<null | {
+		ok: boolean;
+		detail: string;
+	}>(null);
 	const [testing, setTesting] = useState(false);
 
 	const runTest = async () => {
 		setTesting(true);
 		setTestResult(null);
 		try {
-			const res = await fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/sidecar/test`, {
-				method: "POST",
-			});
+			const res = await fetch(
+				`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/sidecar/test`,
+				{
+					method: "POST",
+				},
+			);
 			const data = (await res.json()) as {
 				ok: boolean;
 				emailAddress?: string;
@@ -56,16 +63,20 @@ export function SidecarSettingsCard(props: {
 		}
 	};
 
-	const secretValid = !value || value.credentials_secret_name.startsWith(SECRET_NAME_PREFIX);
+	const secretValid =
+		!value || value.credentials_secret_name.startsWith(SECRET_NAME_PREFIX);
 
 	if (!value) {
 		return (
 			<div className="pp-card p-5">
-				<div className="text-sm font-medium text-ink mb-2">Workspace sidecar</div>
+				<div className="text-sm font-medium text-ink mb-2">
+					Workspace sidecar
+				</div>
 				<p className="text-xs text-ink-3 mb-4">
 					Score this mailbox's Google Workspace inbox via the Gmail API — no MX
-					change. See <code className="pp-mono">docs/sidecar-credentials.md</code>{" "}
-					for the service-account setup.
+					change. See{" "}
+					<code className="pp-mono">docs/sidecar-credentials.md</code> for the
+					service-account setup.
 				</p>
 				<Button
 					variant="secondary"
@@ -105,7 +116,7 @@ export function SidecarSettingsCard(props: {
 				<p role="status" className="text-xs text-ink-3 mb-3">
 					{health.healthy ? "● Healthy" : "▲ Attention needed"}
 					{health.last_poll_at
-						? ` — last poll ${new Date(health.last_poll_at).toLocaleString()}`
+						? ` — last poll ${formatStandardDate(health.last_poll_at)}`
 						: " — not polled yet"}
 					{health.last_error ? ` — ${health.last_error}` : ""}
 					{/* Durable label-failure signal (#590): survives the clean polls
@@ -121,7 +132,9 @@ export function SidecarSettingsCard(props: {
 				<Input
 					label="Service-account secret name"
 					value={value.credentials_secret_name}
-					onChange={(e) => onChange({ ...value, credentials_secret_name: e.target.value })}
+					onChange={(e) =>
+						onChange({ ...value, credentials_secret_name: e.target.value })
+					}
 					placeholder="SIDECAR_SECRET_yourorg"
 					aria-invalid={!secretValid}
 				/>
@@ -132,12 +145,15 @@ export function SidecarSettingsCard(props: {
 				)}
 				<p className="text-xs text-ink-3">
 					The service-account JSON itself lives in a Worker secret (
-					<code className="pp-mono">wrangler secret put &lt;name&gt;</code>), never
-					in settings.
+					<code className="pp-mono">wrangler secret put &lt;name&gt;</code>),
+					never in settings.
 				</p>
 
 				<div>
-					<label htmlFor="sidecar-mode-select" className="block text-sm text-ink mb-1.5">
+					<label
+						htmlFor="sidecar-mode-select"
+						className="block text-sm text-ink mb-1.5"
+					>
 						Mode
 					</label>
 					<select
@@ -145,23 +161,33 @@ export function SidecarSettingsCard(props: {
 						value={value.mode ?? "observe"}
 						disabled={!savedConfigExists}
 						onChange={(e) =>
-							onChange({ ...value, mode: e.target.value as "observe" | "active" })
+							onChange({
+								...value,
+								mode: e.target.value as "observe" | "active",
+							})
 						}
 						className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
 					>
-						<option value="observe">Observe only (record verdicts, write nothing)</option>
-						<option value="active">Active (write PhishPilot labels to the inbox)</option>
+						<option value="observe">
+							Observe only (record verdicts, write nothing)
+						</option>
+						<option value="active">
+							Active (write PhishPilot labels to the inbox)
+						</option>
 					</select>
 					{!savedConfigExists && (
 						<p className="text-xs text-ink-3 mt-2">
-							New sidecar mailboxes start in observe mode. Save first, review the
-							verdict mix, then promote.
+							New sidecar mailboxes start in observe mode. Save first, review
+							the verdict mix, then promote.
 						</p>
 					)}
 				</div>
 
 				<div>
-					<label htmlFor="sidecar-quarantine-select" className="block text-sm text-ink mb-1.5">
+					<label
+						htmlFor="sidecar-quarantine-select"
+						className="block text-sm text-ink mb-1.5"
+					>
 						Quarantine behavior
 					</label>
 					<select
@@ -170,13 +196,17 @@ export function SidecarSettingsCard(props: {
 						onChange={(e) =>
 							onChange({
 								...value,
-								quarantine_behavior: e.target.value as "label-only" | "label-and-archive",
+								quarantine_behavior: e.target.value as
+									| "label-only"
+									| "label-and-archive",
 							})
 						}
 						className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
 					>
 						<option value="label-only">Label only</option>
-						<option value="label-and-archive">Label and archive (remove from Inbox)</option>
+						<option value="label-and-archive">
+							Label and archive (remove from Inbox)
+						</option>
 					</select>
 				</div>
 
@@ -186,7 +216,10 @@ export function SidecarSettingsCard(props: {
 					min={0}
 					value={value.retention_days ?? 7}
 					onChange={(e) =>
-						onChange({ ...value, retention_days: Math.max(0, Number(e.target.value) || 0) })
+						onChange({
+							...value,
+							retention_days: Math.max(0, Number(e.target.value) || 0),
+						})
 					}
 				/>
 
@@ -211,7 +244,12 @@ export function SidecarSettingsCard(props: {
 							</span>
 						)}
 					</div>
-					<Button variant="ghost" size="sm" type="button" onClick={() => onChange(null)}>
+					<Button
+						variant="ghost"
+						size="sm"
+						type="button"
+						onClick={() => onChange(null)}
+					>
 						Remove sidecar config
 					</Button>
 				</div>
