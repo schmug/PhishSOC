@@ -4,9 +4,15 @@
 
 import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
+import { secureHeaders } from "hono/secure-headers";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
-import { app as apiApp, receiveEmail, receiveCatchall, reapExpiredHoneypots } from "./index";
+import {
+	app as apiApp,
+	receiveEmail,
+	receiveCatchall,
+	reapExpiredHoneypots,
+} from "./index";
 import { normalizeInbound } from "./providers/cf-routing";
 import { receiveGatewayPassthrough } from "./lib/gateway-receive";
 import { EmailMCP } from "./mcp";
@@ -14,7 +20,10 @@ import { refreshAllFeeds } from "./intel/feeds";
 import { pollSidecarMailboxes, reapSidecarBodies } from "./providers/workspace";
 import { deleteExpiredChallenges } from "./lib/webauthn-store";
 import { webauthnRoute } from "./routes/webauthn";
-import { callerAllowedForMailbox, emailAgentMailboxIdFromPath } from "./lib/mailbox-acl";
+import {
+	callerAllowedForMailbox,
+	emailAgentMailboxIdFromPath,
+} from "./lib/mailbox-acl";
 import {
 	identityFromAccessPayload,
 	type AccessVariables,
@@ -56,13 +65,15 @@ function getAccessUrls(teamDomain: string) {
 const app = new Hono<{ Bindings: Env; Variables: AccessVariables }>();
 
 // Global security headers
-app.use("*", async (c, next) => {
-	await next();
-	c.header("X-Frame-Options", "DENY");
-	c.header("X-Content-Type-Options", "nosniff");
-	c.header("Referrer-Policy", "strict-origin-when-cross-origin");
-	c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-});
+app.use(
+	"*",
+	secureHeaders({
+		referrerPolicy: "strict-origin-when-cross-origin",
+		strictTransportSecurity: "max-age=31536000; includeSubDomains",
+		xFrameOptions: "DENY",
+		xContentTypeOptions: "nosniff",
+	}),
+);
 
 // Cloudflare Access JWT validation middleware (production only)
 app.use("*", async (c, next) => {
@@ -185,17 +196,17 @@ export default {
 				await receiveEmail(normalized, env, ctx);
 			}
 		} catch (e) {
-			console.error("Failed to process incoming email:", (e as Error).message, (e as Error).stack);
+			console.error(
+				"Failed to process incoming email:",
+				(e as Error).message,
+				(e as Error).stack,
+			);
 			// Re-throw so Cloudflare's email routing can retry delivery or bounce the message.
 			// Swallowing the error would silently drop the email.
 			throw e;
 		}
 	},
-	async scheduled(
-		event: ScheduledController,
-		env: Env,
-		ctx: ExecutionContext,
-	) {
+	async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
 		// Minutely tick (issue #31): sidecar mailbox polling ONLY. Everything
 		// else stays on the hourly tick. An unknown cron string falls through
 		// to the hourly branch so `wrangler dev --test-scheduled` and future
@@ -204,7 +215,10 @@ export default {
 			ctx.waitUntil(
 				pollSidecarMailboxes(env, ctx).then(
 					(r) => {
-						if (r.polled > 0) console.log(`sidecar: polled ${r.polled} mailboxes, ${r.processed} messages, ${r.failures} failures`);
+						if (r.polled > 0)
+							console.log(
+								`sidecar: polled ${r.polled} mailboxes, ${r.processed} messages, ${r.failures} failures`,
+							);
 					},
 					(e) => console.error("sidecar poll failed:", (e as Error).message),
 				),
@@ -214,8 +228,12 @@ export default {
 
 		ctx.waitUntil(
 			refreshAllFeeds(env).then(
-				(r) => console.log(`intel: refreshed ${r.feeds} feeds, ${r.entries} entries`),
-				(e) => console.error("intel feed refresh failed:", (e as Error).message),
+				(r) =>
+					console.log(
+						`intel: refreshed ${r.feeds} feeds, ${r.entries} entries`,
+					),
+				(e) =>
+					console.error("intel feed refresh failed:", (e as Error).message),
 			),
 		);
 
@@ -231,7 +249,11 @@ export default {
 					(n) => {
 						if (n > 0) console.log(`webauthn: reaped ${n} expired challenges`);
 					},
-					(e) => console.error("webauthn challenge reap failed:", (e as Error).message),
+					(e) =>
+						console.error(
+							"webauthn challenge reap failed:",
+							(e as Error).message,
+						),
 				),
 			);
 		}
@@ -242,7 +264,8 @@ export default {
 		ctx.waitUntil(
 			reapExpiredHoneypots(env).then(
 				(r) => {
-					if (r.reaped > 0) console.log(`honeypots: reaped ${r.reaped} expired`);
+					if (r.reaped > 0)
+						console.log(`honeypots: reaped ${r.reaped} expired`);
 				},
 				(e) => console.error("honeypot reap failed:", (e as Error).message),
 			),
@@ -253,7 +276,10 @@ export default {
 		ctx.waitUntil(
 			reapSidecarBodies(env).then(
 				(r) => {
-					if (r.reaped > 0) console.log(`sidecar: reaped ${r.reaped} bodies across ${r.mailboxes} mailboxes`);
+					if (r.reaped > 0)
+						console.log(
+							`sidecar: reaped ${r.reaped} bodies across ${r.mailboxes} mailboxes`,
+						);
 				},
 				(e) => console.error("sidecar body reap failed:", (e as Error).message),
 			),
