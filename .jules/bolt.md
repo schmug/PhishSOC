@@ -24,3 +24,6 @@
 ## 2026-06-29 - Optimize D1 Queries by Batching
 **Learning:** Found N+1 query pattern on the hub stats page (`hub/src/routes/admin/stats.ts`) when iterating over the list of inbound peers to query `events_pulled_24h` for each peer sequentially using `.first()`. This introduces significant roundtrip latency and resource overhead as the number of peers grows. D1 supports batching queries, which can collapse N queries into a single HTTP roundtrip. D1's returned `batch` types can be peculiar, particularly when running against tests using Miniflare or test shims where row result structure might differ across platforms.
 **Action:** Replaced sequential queries in `Promise.all` with `db.batch()` to combine the multiple `db.prepare(...).bind(...)` calls into a single execution, and normalized the output structure parsing. This significantly reduces N+1 overhead and improves performance scaling as the peer count increases.
+## 2026-07-22 - Optimize Agent Thread Context Fetching
+**Learning:** The agent was making an initial list query for thread emails, followed by N getEmail queries (N+1 problem) when constructing the thread context. This degrades performance as thread sizes grow.
+**Action:** Replaced the N+1 pattern in `workers/agent/index.ts` with a single `getFullThread` call which executes an optimized 2-query fetch (emails + attachments).
