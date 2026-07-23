@@ -276,6 +276,7 @@ export async function pollWorkspaceMailbox(
 				detail: "cursor expired past Gmail history retention; mail arriving in the gap was never scored",
 			});
 			patch.history_cursor = profile.historyId;
+			patch.history_page_token = null;
 			patch.last_error = "history gap: cursor expired; monitoring reinitialized from current historyId";
 			await stub.putSidecarState(patch);
 			return { processed: 0, deduped: 0, error: null };
