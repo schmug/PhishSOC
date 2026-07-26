@@ -656,6 +656,16 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_sidecar_audit_gmail_message_id ON sidecar_audit(gmail_message_id);
         `,
 	},
+	{
+		// Gmail history page continuation (issue #595). `listNewMessageIds` caps
+		// at MAX_HISTORY_PAGES; when the listing is truncated the cursor must NOT
+		// advance, but if pages 1–3 are already deduped the poller would otherwise
+		// re-fetch them forever and never reach page 4+. `history_page_token`
+		// stores the dangling `nextPageToken` once the current slice is fully
+		// worked; the next poll resumes from that token with the same cursor.
+		name: "32_history_page_token",
+		sql: `ALTER TABLE sidecar_state ADD COLUMN history_page_token TEXT;`,
+	},
 ];
 
 /**
