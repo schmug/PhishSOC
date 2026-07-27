@@ -47,7 +47,8 @@ function makeSqlLike(): SqlLike {
             consecutive_failures INTEGER NOT NULL DEFAULT 0,
             poll_lease_until INTEGER,
             label_error TEXT,
-            label_failure_count INTEGER NOT NULL DEFAULT 0
+            label_failure_count INTEGER NOT NULL DEFAULT 0,
+            history_page_token TEXT
         );
 
         CREATE TABLE sidecar_audit (
