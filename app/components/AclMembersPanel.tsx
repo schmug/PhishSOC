@@ -89,6 +89,12 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleRemove = async (email: string) => {
+		if (
+			!window.confirm(
+				`Are you sure you want to remove ${email} from the mailbox?`,
+			)
+		)
+			return;
 		setRemoveError(null);
 		try {
 			await removeMember.mutateAsync(email);
@@ -100,6 +106,12 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleTransfer = async (email: string) => {
+		if (
+			!window.confirm(
+				`Are you sure you want to transfer ownership to ${email}? You will lose owner privileges.`,
+			)
+		)
+			return;
 		setTransferError(null);
 		try {
 			await transferOwnership.mutateAsync(email);
@@ -125,6 +137,8 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleRemoveGroup = async (group: string) => {
+		if (!window.confirm(`Are you sure you want to remove the group ${group}?`))
+			return;
 		setRemoveGroupError(null);
 		try {
 			await removeGroup.mutateAsync(group);
