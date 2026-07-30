@@ -1,3 +1,3 @@
-## 2025-02-18 - Tab Accessibility on Verdict-mix Window
-**Learning:** Even small custom UI elements like inline tab switchers need full ARIA attributes (`role`, `aria-selected`, `aria-controls`, `aria-labelledby`, `tabIndex`) and keyboard navigation support (`ArrowLeft`/`ArrowRight` handlers and `focus()`) to ensure screen reader users and keyboard power users can interact with them properly.
-**Action:** Always implement full ARIA mappings and `onKeyDown` navigation handlers when creating `role="tablist"` and `role="tab"` components.
+## 2026-11-20 - Add confirmation dialogs to destructive ACL actions
+**Learning:** Destructive actions like removing ACL members/groups or transferring ownership should always prompt for user confirmation to prevent accidental data loss or lockouts.
+**Action:** Use native `window.confirm()` before executing mutation requests for these actions.
