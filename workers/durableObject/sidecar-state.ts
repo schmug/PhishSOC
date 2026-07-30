@@ -34,12 +34,15 @@ export interface SidecarStateRow {
 	label_error: string | null;
 	/** Failed label writes accumulated since the last successful one (#590). */
 	label_failure_count: number;
+	/** Gmail history `nextPageToken` when a listing hit the page cap (#595). */
+	history_page_token: string | null;
 }
 
 const STATE_COLUMNS = [
 	"history_cursor", "access_token", "token_expires_at",
 	"label_ids", "last_poll_at", "last_error", "consecutive_failures",
 	"poll_lease_until", "label_error", "label_failure_count",
+	"history_page_token",
 ] as const;
 
 export function _getSidecarStateImpl(sql: SqlLike): SidecarStateRow | null {
