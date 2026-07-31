@@ -18,6 +18,7 @@ import {
 } from "../../shared/folders";
 import { isPromptInjection, verifyDraft } from "../lib/ai";
 import {
+	getFullThread,
 	getMailboxStub,
 	stripHtmlToText,
 	textToHtml,
@@ -437,24 +438,8 @@ export class EmailAgent extends AIChatAgent<any> {
 				thread_id: emailData.threadId,
 			})) as EmailMetadata[];
 			if (threadEmails.length > 1) {
-				const fullThread = await Promise.all(
-					threadEmails.map(async (e) => {
-						const full = (await stub.getEmail(e.id)) as EmailFull | null;
-						const text = full?.body ? stripHtmlToText(full.body) : "";
-						return {
-							id: e.id,
-							sender: e.sender,
-							recipient: e.recipient,
-							subject: e.subject,
-							date: e.date,
-							folder_id: e.folder_id,
-							body_text: text,
-						};
-					}),
-				);
-				// ⚡ Bolt: Optimize sorting by replacing `new Date(b.date).getTime()` with `Date.parse(b.date)`
-				fullThread.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
-				threadContext = fullThread
+				const threadData = await getFullThread(stub, emailData.threadId);
+				threadContext = threadData.messages
 					.map(
 						(e) =>
 							`[${e.date}] ${e.sender} → ${e.recipient} (${e.folder_id}): ${e.body_text.substring(0, 500)}`,
