@@ -21,6 +21,8 @@ import type { SqlLike } from "./catchall-intel";
 
 export interface SidecarStateRow {
 	history_cursor: string | null;
+	/** Gmail history list pagination resume token when the page cap truncates. */
+	history_page_token: string | null;
 	access_token: string | null;
 	token_expires_at: number | null;
 	label_ids: string | null;
@@ -37,7 +39,7 @@ export interface SidecarStateRow {
 }
 
 const STATE_COLUMNS = [
-	"history_cursor", "access_token", "token_expires_at",
+	"history_cursor", "history_page_token", "access_token", "token_expires_at",
 	"label_ids", "last_poll_at", "last_error", "consecutive_failures",
 	"poll_lease_until", "label_error", "label_failure_count",
 ] as const;

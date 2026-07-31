@@ -656,6 +656,16 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_sidecar_audit_gmail_message_id ON sidecar_audit(gmail_message_id);
         `,
 	},
+	{
+		// History page-token resume — when a Gmail history listing hits the
+		// page cap (MAX_HISTORY_PAGES) with a dangling nextPageToken, the
+		// poller must persist that token so the next tick resumes past the
+		// already-fetched pages. Without it, a listing whose first N pages
+		// are entirely deduped (processed=0) never advances and mail on
+		// later pages is skipped forever.
+		name: "32_history_page_token",
+		sql: `ALTER TABLE sidecar_state ADD COLUMN history_page_token TEXT;`,
+	},
 ];
 
 /**

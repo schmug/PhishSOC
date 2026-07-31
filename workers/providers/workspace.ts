@@ -149,7 +149,8 @@ export interface PollResult { processed: number; deduped: number; error: string 
 
 interface SidecarStub {
 	getSidecarState(): Promise<{
-		history_cursor: string | null; access_token: string | null; token_expires_at: number | null;
+		history_cursor: string | null; history_page_token: string | null;
+		access_token: string | null; token_expires_at: number | null;
 		label_ids: string | null; last_poll_at: number | null; last_error: string | null; consecutive_failures: number;
 		poll_lease_until: number | null; label_error: string | null; label_failure_count: number;
 	} | null>;
@@ -192,7 +193,7 @@ export async function pollWorkspaceMailbox(
 ): Promise<PollResult> {
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId)) as unknown as SidecarStub;
 	const state = (await stub.getSidecarState()) ?? {
-		history_cursor: null, access_token: null, token_expires_at: null,
+		history_cursor: null, history_page_token: null, access_token: null, token_expires_at: null,
 		label_ids: null, last_poll_at: null, last_error: null, consecutive_failures: 0,
 		poll_lease_until: null, label_error: null, label_failure_count: 0,
 	};
@@ -253,7 +254,11 @@ export async function pollWorkspaceMailbox(
 			return { processed: 0, deduped: 0, error: null };
 		}
 
-		const history = await listNewMessageIds(token, state.history_cursor);
+		const history = await listNewMessageIds(
+			token,
+			state.history_cursor,
+			state.history_page_token ?? undefined,
+		);
 		if (!history.ok) {
 			// Rule 5: cursor older than Gmail's history retention. Re-anchor and
 			// record the gap — informational, NOT a failure (failures gate backoff).
@@ -272,6 +277,7 @@ export async function pollWorkspaceMailbox(
 				detail: "cursor expired past Gmail history retention; mail arriving in the gap was never scored",
 			});
 			patch.history_cursor = profile.historyId;
+			patch.history_page_token = null;
 			patch.last_error = "history gap: cursor expired; monitoring reinitialized from current historyId";
 			await stub.putSidecarState(patch);
 			return { processed: 0, deduped: 0, error: null };
@@ -378,7 +384,16 @@ export async function pollWorkspaceMailbox(
 
 		// Rule 6: advance the cursor ONLY when the listing was complete (not
 		// page-cap truncated) AND we worked through all of it (not batch-capped).
-		if (!hitCap && !history.truncated) patch.history_cursor = history.historyId;
+		// When truncated but the batch is drained, persist history_page_token so
+		// the next poll resumes past already-fetched pages — otherwise a listing
+		// whose first N pages are entirely deduped never advances and mail on
+		// later pages is skipped forever.
+		if (!hitCap && !history.truncated) {
+			patch.history_cursor = history.historyId;
+			patch.history_page_token = null;
+		} else if (!hitCap && history.truncated && history.nextPageToken) {
+			patch.history_page_token = history.nextPageToken;
+		}
 		if (labelIds) patch.label_ids = JSON.stringify(labelIds);
 		// Label failures don't freeze the cursor (ingest succeeded — the cursor
 		// rules above stand), but they DO surface in health so a wrong-scope
