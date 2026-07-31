@@ -1,0 +1,26 @@
+--- workers/routes/yaramail-callback.ts
++++ workers/routes/yaramail-callback.ts
+@@ -19,6 +19,7 @@
+ import {
+	computeYaraScoreDelta,
+	type YaraMatchResult,
+ } from "../security/yaramail-signal";
++import { timingSafeEqual } from "hono/utils/buffer";
+
+ /** Compute HMAC-SHA256 of `message` with `secret` and return hex string. */
+@@ -63,15 +64,7 @@
+
+	// Constant-time comparison: XOR all bytes so the result doesn't
+	// short-circuit on the first mismatch (timing-safe comparison).
+-	const enc = new TextEncoder();
+-	const sigBytes = enc.encode(signature);
+-	const expBytes = enc.encode(expected);
+-	let mismatch = sigBytes.length !== expBytes.length ? 1 : 0;
+-	const maxLen = Math.max(sigBytes.length, expBytes.length);
+-	for (let i = 0; i < maxLen; i++) {
+-		mismatch |= (sigBytes[i] ?? 0) ^ (expBytes[i] ?? 0);
+-	}
+-	if (mismatch !== 0) {
++	if (!(await timingSafeEqual(signature, expected))) {
+		return c.json({ error: "invalid signature" }, 401);
+	}

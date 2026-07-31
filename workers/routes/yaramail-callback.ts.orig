@@ -21,13 +21,9 @@ import {
 	computeYaraScoreDelta,
 	type YaraMatchResult,
 } from "../security/yaramail-signal";
-import { timingSafeEqual } from "hono/utils/buffer";
 
 /** Compute HMAC-SHA256 of `message` with `secret` and return hex string. */
-export async function hmacSha256Hex(
-	secret: string,
-	message: string,
-): Promise<string> {
+export async function hmacSha256Hex(secret: string, message: string): Promise<string> {
 	const enc = new TextEncoder();
 	const key = await crypto.subtle.importKey(
 		"raw",
@@ -69,7 +65,15 @@ yaramailCallbackRoute.post("/", async (c) => {
 
 	// Constant-time comparison: XOR all bytes so the result doesn't
 	// short-circuit on the first mismatch (timing-safe comparison).
-	if (!(await timingSafeEqual(signature, expected))) {
+	const enc = new TextEncoder();
+	const sigBytes = enc.encode(signature);
+	const expBytes = enc.encode(expected);
+	let mismatch = sigBytes.length !== expBytes.length ? 1 : 0;
+	const maxLen = Math.max(sigBytes.length, expBytes.length);
+	for (let i = 0; i < maxLen; i++) {
+		mismatch |= (sigBytes[i] ?? 0) ^ (expBytes[i] ?? 0);
+	}
+	if (mismatch !== 0) {
 		return c.json({ error: "invalid signature" }, 401);
 	}
 
