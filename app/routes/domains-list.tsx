@@ -1,12 +1,16 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { Button, Dialog } from "@cloudflare/kumo";
-import { Loader } from "@cloudflare/kumo";
-import { BuildingsIcon, PlusIcon, TrashIcon, WarningIcon } from "@phosphor-icons/react";
+import { Button, Dialog, Loader, Tooltip } from "@cloudflare/kumo";
+import {
+	BuildingsIcon,
+	PlusIcon,
+	TrashIcon,
+	WarningIcon,
+} from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router";
-import { useFeedback } from "~/lib/feedback";
 import Shell from "~/components/phishsoc/Shell";
+import { useFeedback } from "~/lib/feedback";
 import { useAddDomain, useDomains, useRemoveDomain } from "~/queries/domains";
 import type { DomainListEntry } from "~/types";
 
@@ -23,7 +27,10 @@ const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
 	{ value: "mailboxesCount", label: "Mailboxes" },
 ];
 
-function sortDomains(domains: DomainListEntry[], key: SortKey): DomainListEntry[] {
+function sortDomains(
+	domains: DomainListEntry[],
+	key: SortKey,
+): DomainListEntry[] {
 	const next = [...domains];
 	if (key === "name") {
 		next.sort((a, b) => a.domain.localeCompare(b.domain));
@@ -33,7 +40,10 @@ function sortDomains(domains: DomainListEntry[], key: SortKey): DomainListEntry[
 	return next;
 }
 
-function filterDomains(domains: DomainListEntry[], query: string): DomainListEntry[] {
+function filterDomains(
+	domains: DomainListEntry[],
+	query: string,
+): DomainListEntry[] {
 	const q = query.trim().toLowerCase();
 	if (q === "") return domains;
 	return domains.filter((d) => d.domain.toLowerCase().includes(q));
@@ -42,7 +52,13 @@ function filterDomains(domains: DomainListEntry[], query: string): DomainListEnt
 /** Inline validator — rejects empty, protocol-prefixed, path/@ inputs, single-label. */
 function isValidRegistrableDomain(d: string): boolean {
 	if (!d || d.length > 253) return false;
-	if (d.includes("://") || d.includes("/") || d.includes("@") || d.includes(" ")) return false;
+	if (
+		d.includes("://") ||
+		d.includes("/") ||
+		d.includes("@") ||
+		d.includes(" ")
+	)
+		return false;
 	const labels = d.split(".");
 	if (labels.length < 2) return false;
 	return labels.every((l) => l.length > 0 && /^[a-zA-Z0-9-]+$/.test(l));
@@ -89,7 +105,10 @@ export default function DomainsListRoute() {
 	return (
 		<Shell>
 			<div className="px-6 md:px-10 py-8 max-w-[1280px] space-y-6">
-				<DomainsHeader count={data?.length ?? 0} onAddDomain={() => setIsAddOpen(true)} />
+				<DomainsHeader
+					count={data?.length ?? 0}
+					onAddDomain={() => setIsAddOpen(true)}
+				/>
 
 				{isLoading ? (
 					<div className="flex justify-center py-20">
@@ -111,7 +130,10 @@ export default function DomainsListRoute() {
 							{visible.length === 0 ? (
 								<NoDomainsMatch query={filter} onClear={() => setFilter("")} />
 							) : (
-								<DomainsTable domains={visible} onRemoveDomain={setDomainToDelete} />
+								<DomainsTable
+									domains={visible}
+									onRemoveDomain={setDomainToDelete}
+								/>
 							)}
 						</>
 					)
@@ -133,7 +155,13 @@ export default function DomainsListRoute() {
 	);
 }
 
-function DomainsHeader({ count, onAddDomain }: { count: number; onAddDomain: () => void }) {
+function DomainsHeader({
+	count,
+	onAddDomain,
+}: {
+	count: number;
+	onAddDomain: () => void;
+}) {
 	return (
 		<div className="flex items-start justify-between gap-4">
 			<div>
@@ -198,11 +226,17 @@ function EmptyDomains({ onAddDomain }: { onAddDomain: () => void }) {
 					No domains yet
 				</h3>
 				<p className="text-sm text-ink-3 max-w-sm mb-2">
-					Add a receiving domain, then provision a mailbox on it. Domains appear here once a mailbox is active.
+					Add a receiving domain, then provision a mailbox on it. Domains appear
+					here once a mailbox is active.
 				</p>
 				<DomainPrepChecklist className="mb-5 text-left max-w-sm" />
 				<div className="flex gap-3">
-					<Button variant="primary" size="sm" icon={<PlusIcon size={14} />} onClick={onAddDomain}>
+					<Button
+						variant="primary"
+						size="sm"
+						icon={<PlusIcon size={14} />}
+						onClick={onAddDomain}
+					>
 						Add domain
 					</Button>
 					<RouterLink
@@ -225,9 +259,20 @@ function DomainPrepChecklist({ className }: { className?: string }) {
 				Before mail arrives, complete these steps:
 			</p>
 			<ol className="space-y-1 text-[12.5px] text-ink-3 list-decimal list-inside">
-				<li>Enable <strong className="text-ink">Email Routing</strong> on the domain in the Cloudflare dashboard and add a catch-all rule forwarding to this Worker.</li>
-				<li>Verify or add the <strong className="text-ink">MX records</strong> that Cloudflare Email Routing requires.</li>
-				<li>Publish a <strong className="text-ink">DMARC TXT record</strong> at <code className="text-[11px]">_dmarc.&lt;domain&gt;</code> (at minimum <code className="text-[11px]">v=DMARC1; p=none</code>).</li>
+				<li>
+					Enable <strong className="text-ink">Email Routing</strong> on the
+					domain in the Cloudflare dashboard and add a catch-all rule forwarding
+					to this Worker.
+				</li>
+				<li>
+					Verify or add the <strong className="text-ink">MX records</strong>{" "}
+					that Cloudflare Email Routing requires.
+				</li>
+				<li>
+					Publish a <strong className="text-ink">DMARC TXT record</strong> at{" "}
+					<code className="text-[11px]">_dmarc.&lt;domain&gt;</code> (at minimum{" "}
+					<code className="text-[11px]">v=DMARC1; p=none</code>).
+				</li>
 			</ol>
 			<a
 				href="https://github.com/schmug/PhishSOC/blob/main/README.md#to-set-up"
@@ -241,7 +286,13 @@ function DomainPrepChecklist({ className }: { className?: string }) {
 	);
 }
 
-function NoDomainsMatch({ query, onClear }: { query: string; onClear: () => void }) {
+function NoDomainsMatch({
+	query,
+	onClear,
+}: {
+	query: string;
+	onClear: () => void;
+}) {
 	return (
 		<div className="pp-card p-6 flex items-start gap-3">
 			<span className="flex h-8 w-8 items-center justify-center rounded-full bg-paper-2 text-ink-3 shrink-0">
@@ -294,9 +345,7 @@ function DomainsControls({
 				/>
 			</label>
 			<label className="flex items-center gap-2 text-[12px] text-ink-3 sm:ml-auto">
-				<span className="uppercase tracking-[0.06em] text-[10.5px]">
-					Sort
-				</span>
+				<span className="uppercase tracking-[0.06em] text-[10.5px]">Sort</span>
 				<select
 					value={sortKey}
 					onChange={(e) => onSortKeyChange(e.target.value as SortKey)}
@@ -359,14 +408,19 @@ function DomainsTable({
 								{d.openCases}
 							</td>
 							<td className="px-4 py-3 text-right">
-								<button
-									type="button"
-									title={`Remove ${d.domain} from available domains`}
-									onClick={() => onRemoveDomain(d.domain)}
-									className="opacity-0 group-hover:opacity-100 transition-opacity text-ink-3 hover:text-red-500"
+								<Tooltip
+									content={`Remove ${d.domain} from available domains`}
+									asChild
 								>
-									<TrashIcon size={14} />
-								</button>
+									<button
+										type="button"
+										aria-label={`Remove ${d.domain} from available domains`}
+										onClick={() => onRemoveDomain(d.domain)}
+										className="opacity-0 group-hover:opacity-100 transition-opacity text-ink-3 hover:text-red-500"
+									>
+										<TrashIcon size={14} />
+									</button>
+								</Tooltip>
 							</td>
 						</tr>
 					))}
@@ -389,7 +443,11 @@ function AddDomainDialog({
 	const [error, setError] = useState<string | null>(null);
 	const [adding, setAdding] = useState(false);
 
-	const reset = () => { setValue(""); setError(null); setAdding(false); };
+	const reset = () => {
+		setValue("");
+		setError(null);
+		setAdding(false);
+	};
 
 	const handleOpenChange = (next: boolean) => {
 		if (!next) reset();
@@ -412,7 +470,11 @@ function AddDomainDialog({
 			reset();
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "Failed to add domain";
-			setError(msg.includes("already") ? "This domain is already in the available list." : msg);
+			setError(
+				msg.includes("already")
+					? "This domain is already in the available list."
+					: msg,
+			);
 			setAdding(false);
 		}
 	};
@@ -424,12 +486,17 @@ function AddDomainDialog({
 					Add domain
 				</Dialog.Title>
 				<Dialog.Description className="text-ink-3 text-sm mb-4">
-					Adds the domain to the <strong className="text-ink">New Mailbox</strong> dropdown. The domain will appear in this list once a mailbox is provisioned on it.
+					Adds the domain to the{" "}
+					<strong className="text-ink">New Mailbox</strong> dropdown. The domain
+					will appear in this list once a mailbox is provisioned on it.
 				</Dialog.Description>
 
 				<form onSubmit={handleSubmit} className="space-y-4">
 					<div>
-						<label htmlFor="add-domain-input" className="block text-xs text-ink mb-1">
+						<label
+							htmlFor="add-domain-input"
+							className="block text-xs text-ink mb-1"
+						>
 							Domain
 						</label>
 						<input
@@ -437,20 +504,26 @@ function AddDomainDialog({
 							type="text"
 							placeholder="acme.example"
 							value={value}
-							onChange={(e) => { setValue(e.target.value); setError(null); }}
+							onChange={(e) => {
+								setValue(e.target.value);
+								setError(null);
+							}}
 							className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
 							autoComplete="off"
 							spellCheck={false}
 						/>
-						{error && (
-							<p className="text-[12px] text-red-500 mt-1">{error}</p>
-						)}
+						{error && <p className="text-[12px] text-red-500 mt-1">{error}</p>}
 					</div>
 
 					<DomainPrepChecklist />
 
 					<div className="flex justify-end gap-2 pt-1">
-						<Button variant="secondary" size="sm" type="button" onClick={() => handleOpenChange(false)}>
+						<Button
+							variant="secondary"
+							size="sm"
+							type="button"
+							onClick={() => handleOpenChange(false)}
+						>
 							Cancel
 						</Button>
 						<Button variant="primary" size="sm" type="submit" loading={adding}>
@@ -473,13 +546,19 @@ function DeleteDomainConfirmDialog({
 	onCancel: () => void;
 }) {
 	return (
-		<Dialog.Root open={domain !== null} onOpenChange={(open) => !open && onCancel()}>
+		<Dialog.Root
+			open={domain !== null}
+			onOpenChange={(open) => !open && onCancel()}
+		>
 			<Dialog size="sm" className="p-6">
 				<Dialog.Title className="text-base font-semibold mb-1">
 					Remove domain
 				</Dialog.Title>
 				<Dialog.Description className="text-ink-3 text-sm mb-5">
-					Remove <strong className="text-ink">{domain}</strong> from the available domain list? Existing mailboxes on this domain are not affected — only the domain will no longer appear in the <strong className="text-ink">New Mailbox</strong> dropdown.
+					Remove <strong className="text-ink">{domain}</strong> from the
+					available domain list? Existing mailboxes on this domain are not
+					affected — only the domain will no longer appear in the{" "}
+					<strong className="text-ink">New Mailbox</strong> dropdown.
 				</Dialog.Description>
 				<div className="flex justify-end gap-2">
 					<Button variant="secondary" size="sm" onClick={onCancel}>
