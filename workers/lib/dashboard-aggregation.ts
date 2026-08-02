@@ -41,7 +41,8 @@ export function bucketThreatPressure(
 		if (!row.date || !row.security_verdict) continue;
 
 		const action = parseVerdictAction(row.security_verdict);
-		if (action !== "tag" && action !== "quarantine" && action !== "block") continue;
+		if (action !== "tag" && action !== "quarantine" && action !== "block")
+			continue;
 
 		const t = Date.parse(row.date);
 		if (Number.isNaN(t)) continue;
@@ -57,26 +58,43 @@ export function bucketThreatPressure(
 	return buckets;
 }
 
-function parseVerdictAction(json: string): string | null {
-	try {
-		const parsed = JSON.parse(json) as { action?: unknown };
-		return typeof parsed.action === "string" ? parsed.action : null;
-	} catch {
-		return null;
-	}
-}
-
 interface ParsedVerdict {
 	action?: string;
 	classification?: { label?: string };
 }
 
+// ⚡ Bolt: Cache parsed verdicts to prevent expensive JSON.parse calls in aggregation loops.
+// Bounded to 100 to prevent unbounded memory growth while capturing the most frequent JSON strings.
+const parseVerdictCache = new Map<string, ParsedVerdict | null>();
+
 function parseVerdict(json: string): ParsedVerdict | null {
+	if (parseVerdictCache.has(json)) {
+		return parseVerdictCache.get(json) as ParsedVerdict | null;
+	}
+
+	if (parseVerdictCache.size >= 100) {
+		const firstKey = parseVerdictCache.keys().next().value;
+		if (firstKey !== undefined) parseVerdictCache.delete(firstKey);
+	}
+
 	try {
-		return JSON.parse(json) as ParsedVerdict;
+		const parsed = JSON.parse(json) as ParsedVerdict;
+		Object.freeze(parsed);
+		if (parsed.classification) Object.freeze(parsed.classification);
+		parseVerdictCache.set(json, parsed);
+		return parsed;
 	} catch {
+		parseVerdictCache.set(json, null);
 		return null;
 	}
+}
+
+function parseVerdictAction(json: string): string | null {
+	const parsed = parseVerdict(json);
+	if (parsed && typeof parsed.action === "string") {
+		return parsed.action;
+	}
+	return null;
 }
 
 export interface PipelineSuccessInput {
@@ -89,7 +107,9 @@ export interface PipelineSuccessInput {
  * `null` when there's no data to report (UI surfaces an "—" placeholder rather
  * than a misleading 0%).
  */
-export function pipelineSuccessRate(input: PipelineSuccessInput): number | null {
+export function pipelineSuccessRate(
+	input: PipelineSuccessInput,
+): number | null {
 	const total = input.completed + input.failed;
 	if (total === 0) return null;
 	return input.completed / total;
@@ -311,7 +331,10 @@ export function aggregateOrgOverview(
 			const parsed = parseVerdict(row.security_verdict);
 			if (!parsed) continue;
 			const label = parsed.classification?.label;
-			if (typeof label === "string" && (VERDICT_MIX_KEYS as readonly string[]).includes(label)) {
+			if (
+				typeof label === "string" &&
+				(VERDICT_MIX_KEYS as readonly string[]).includes(label)
+			) {
 				verdictMix[label as keyof VerdictMix] += 1;
 			}
 			// Top-threats: count tag/quarantine/block by classification label.
