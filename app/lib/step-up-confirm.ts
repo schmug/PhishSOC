@@ -33,7 +33,7 @@ export interface StepUpPayload {
 	cc?: string | string[];
 	bcc?: string | string[];
 	subject: string;
-	/** Exactly `html || text || ""` of the outgoing message. */
+	/** Combined `html` + `text` via `combinedSendBodyForRisk` — must match the server send-risk gate. */
 	body: string;
 	attachmentIds: string[];
 }

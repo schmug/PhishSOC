@@ -18,6 +18,7 @@ import { parseSendEmailRequest } from "../lib/schemas";
 import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
 import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
 import { Folders } from "../../shared/folders";
+import { combinedSendBodyForRisk } from "../../shared/send-risk-body";
 import type { MailboxContext } from "../lib/mailbox";
 
 type AppContext = Context<MailboxContext>;
@@ -32,6 +33,7 @@ export async function handleReplyEmail(c: AppContext) {
 
 	const stub = c.var.mailboxStub;
 	const createdBy = await resolveCreatedByFromDraft(stub, draft_id);
+	const riskBody = combinedSendBodyForRisk(html, text);
 	const gate = await enforceSendRiskConfirmation(
 		c.env,
 		c.req.header("x-confirmation-token"),
@@ -41,7 +43,7 @@ export async function handleReplyEmail(c: AppContext) {
 			cc,
 			bcc,
 			subject,
-			body: html || text || "",
+			body: riskBody,
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
 			createdBy,
 		},
@@ -141,6 +143,7 @@ export async function handleForwardEmail(c: AppContext) {
 
 	const stub = c.var.mailboxStub;
 	const createdBy = await resolveCreatedByFromDraft(stub, draft_id);
+	const riskBody = combinedSendBodyForRisk(html, text);
 	const gate = await enforceSendRiskConfirmation(
 		c.env,
 		c.req.header("x-confirmation-token"),
@@ -150,7 +153,7 @@ export async function handleForwardEmail(c: AppContext) {
 			cc,
 			bcc,
 			subject,
-			body: html || text || "",
+			body: riskBody,
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
 			createdBy,
 		},

@@ -20,6 +20,7 @@ import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
 import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
 import { requireMailbox, type MailboxContext } from "../lib/mailbox";
 import { Folders } from "../../shared/folders";
+import { combinedSendBodyForRisk } from "../../shared/send-risk-body";
 
 export const sendEmailRoutes = new Hono<MailboxContext>();
 
@@ -31,9 +32,10 @@ sendEmailRoutes.post("/emails/preflight", async (c) => {
 	if (!parsed.ok) return c.json({ error: parsed.error }, 400);
 	const { to, cc, bcc, subject, html, text, attachments, draft_id } = parsed.data;
 	const createdBy = await resolveCreatedByFromDraft(c.var.mailboxStub, draft_id);
+	const riskBody = combinedSendBodyForRisk(html, text);
 	const risk = classifySend({
 		to, cc, bcc, subject,
-		body: html || text || "",
+		body: riskBody,
 		attachments: attachments?.map((a) => ({ filename: a.filename })),
 		mailboxId,
 		createdBy,
@@ -56,6 +58,7 @@ sendEmailRoutes.post("/emails", async (c) => {
 	}
 
 	const createdBy = await resolveCreatedByFromDraft(c.var.mailboxStub, draft_id);
+	const riskBody = combinedSendBodyForRisk(html, text);
 	const gate = await enforceSendRiskConfirmation(
 		c.env,
 		c.req.header("x-confirmation-token"),
@@ -65,7 +68,7 @@ sendEmailRoutes.post("/emails", async (c) => {
 			cc,
 			bcc,
 			subject,
-			body: html || text || "",
+			body: riskBody,
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
 			createdBy,
 		},
