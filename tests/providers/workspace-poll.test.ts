@@ -64,9 +64,10 @@ function makeEnv(stub: ReturnType<typeof makeStub>) {
 const ctx = { waitUntil: vi.fn() } as never;
 
 /** Cached-token state so no token minting happens in most tests. */
-function freshState(cursor: string | null) {
+function freshState(cursor: string | null, pageToken: string | null = null) {
 	return {
 		history_cursor: cursor,
+		history_page_token: pageToken,
 		access_token: "cached-tok",
 		token_expires_at: Date.now() + 3600_000,
 		label_ids: null,
@@ -665,5 +666,69 @@ describe("pollWorkspaceMailbox", () => {
 		expect(r.processed).toBeLessThan(MAX_MESSAGES_PER_POLL);
 		expect(r.processed).toBeGreaterThan(0);
 		expect(stub.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBeUndefined();
+	});
+
+	it("truncated history with all pages deduped saves history_page_token to resume past the cap (#667)", async () => {
+		// Deadlock scenario: pages 1–3 fully deduped, page 4+ never fetched.
+		// Poll 1: truncated listing, all ids deduped → save resume token.
+		// Poll 2: resume from saved token, tail id ingested, cursor advances.
+		const stub = makeStub(freshState("100"));
+		mockedReceive.mockResolvedValue({ messageId: "local-tail", verdict: null });
+		let historyCalls = 0;
+		gmailFetch({
+			"/history": (u) => {
+				historyCalls += 1;
+				const pageToken = u.searchParams.get("pageToken");
+				if (!pageToken) {
+					return new Response(JSON.stringify({
+						historyId: "200",
+						nextPageToken: "p2",
+						history: [{ messagesAdded: [{ message: { id: "g1", labelIds: ["INBOX"] } }] }],
+					}), { status: 200 });
+				}
+				if (pageToken === "p2") {
+					return new Response(JSON.stringify({
+						historyId: "250",
+						nextPageToken: "p3",
+						history: [{ messagesAdded: [{ message: { id: "g2", labelIds: ["INBOX"] } }] }],
+					}), { status: 200 });
+				}
+				if (pageToken === "p3") {
+					return new Response(JSON.stringify({
+						historyId: "280",
+						nextPageToken: "p4",
+						history: [{ messagesAdded: [{ message: { id: "g3", labelIds: ["INBOX"] } }] }],
+					}), { status: 200 });
+				}
+				if (pageToken === "p4") {
+					return new Response(JSON.stringify({
+						historyId: "300",
+						history: [{ messagesAdded: [{ message: { id: "g-tail", labelIds: ["INBOX"] } }] }],
+					}), { status: 200 });
+				}
+				throw new Error(`unexpected pageToken ${pageToken}`);
+			},
+			"/messages/": (u) => {
+				const id = u.pathname.split("/").pop()!;
+				return new Response(JSON.stringify({ id, raw: rawMessage(`${id}@x`, "s") }), { status: 200 });
+			},
+		});
+		stub.findEmailIdByMessageId.mockImplementation(async (msgId: string) =>
+			["g1@x", "g2@x", "g3@x"].includes(msgId) ? `existing-${msgId}` : null,
+		);
+
+		const r1 = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(r1).toEqual({ processed: 0, deduped: 3, error: null });
+		const patch1 = stub.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch1.history_cursor).toBeUndefined();
+		expect(patch1.history_page_token).toBe("p4");
+
+		stub.getSidecarState.mockResolvedValue(freshState("100", "p4"));
+		const r2 = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
+		expect(r2).toEqual({ processed: 1, deduped: 0, error: null });
+		expect(historyCalls).toBe(4); // 3 pages on poll 1 + 1 resumed page on poll 2
+		const patch2 = stub.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch2.history_cursor).toBe("300");
+		expect(patch2.history_page_token).toBeNull();
 	});
 });
