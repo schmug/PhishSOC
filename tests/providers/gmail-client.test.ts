@@ -153,8 +153,33 @@ describe("listNewMessageIds", () => {
 		}));
 		const { listNewMessageIds } = await import("../../workers/providers/gmail-client");
 		const r = await listNewMessageIds("tok", "100");
-		expect(r).toEqual({ ok: true, messageIds: ["m1", "m2", "m3"], historyId: "300", truncated: true });
+		expect(r).toEqual({ ok: true, messageIds: ["m1", "m2", "m3"], historyId: "300", truncated: true, resumePageToken: "p3" });
 		expect(pages).toBe(3); // MAX_HISTORY_PAGES — the 4th page is never fetched
+	});
+
+	it("resumes from a stored pageToken instead of restarting at page 1", async () => {
+		const seenPageTokens: Array<string | undefined> = [];
+		vi.stubGlobal("fetch", gmailDispatcher({
+			"/history": (u) => {
+				const pageToken = u.searchParams.get("pageToken") ?? undefined;
+				seenPageTokens.push(pageToken);
+				if (!pageToken) {
+					return new Response(JSON.stringify({
+						historyId: "200",
+						nextPageToken: "p2",
+						history: [{ messagesAdded: [{ message: { id: "m1", labelIds: ["INBOX"] } }] }],
+					}), { status: 200 });
+				}
+				return new Response(JSON.stringify({
+					historyId: "250",
+					history: [{ messagesAdded: [{ message: { id: "m4", labelIds: ["INBOX"] } }] }],
+				}), { status: 200 });
+			},
+		}));
+		const { listNewMessageIds } = await import("../../workers/providers/gmail-client");
+		const r = await listNewMessageIds("tok", "100", "p2");
+		expect(r).toEqual({ ok: true, messageIds: ["m4"], historyId: "250", truncated: false });
+		expect(seenPageTokens).toEqual(["p2"]);
 	});
 
 	it("returns { ok: false, expired: true } on a 404 (cursor too old)", async () => {
