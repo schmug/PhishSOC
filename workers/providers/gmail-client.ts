@@ -140,7 +140,7 @@ export async function getProfile(token: string): Promise<{ emailAddress: string;
 }
 
 export type HistoryResult =
-	| { ok: true; messageIds: string[]; historyId: string; truncated: boolean }
+	| { ok: true; messageIds: string[]; historyId: string; truncated: boolean; resumePageToken?: string }
 	| { ok: false; expired: true };
 
 /** Gmail-internal labels that mark non-inbound messages we must never score. */
@@ -152,11 +152,15 @@ const MAX_HISTORY_PAGES = 3;
  * cursor is older than Gmail's history retention — the caller must
  * re-initialize from getProfile() and accept the gap.
  */
-export async function listNewMessageIds(token: string, startHistoryId: string): Promise<HistoryResult> {
+export async function listNewMessageIds(
+	token: string,
+	startHistoryId: string,
+	resumePageToken?: string,
+): Promise<HistoryResult> {
 	const ids: string[] = [];
 	const seen = new Set<string>();
 	let latestHistoryId = startHistoryId;
-	let pageToken: string | undefined;
+	let pageToken: string | undefined = resumePageToken;
 	// truncated = we stopped on the page cap with more pages still pending, so
 	// the listing is INCOMPLETE. The caller must NOT advance the cursor on a
 	// truncated result — otherwise the un-fetched tail is skipped forever.
@@ -192,7 +196,13 @@ export async function listNewMessageIds(token: string, startHistoryId: string): 
 		// dangles, the listing is truncated by the page cap.
 		if (page === MAX_HISTORY_PAGES - 1) truncated = true;
 	}
-	return { ok: true, messageIds: ids, historyId: latestHistoryId, truncated };
+	return {
+		ok: true,
+		messageIds: ids,
+		historyId: latestHistoryId,
+		truncated,
+		...(truncated && pageToken ? { resumePageToken: pageToken } : {}),
+	};
 }
 
 export async function getRawMessage(token: string, id: string): Promise<Uint8Array> {

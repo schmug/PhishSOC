@@ -656,6 +656,15 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_sidecar_audit_gmail_message_id ON sidecar_audit(gmail_message_id);
         `,
 	},
+	{
+		// Gmail history pagination resume token. When `listNewMessageIds` hits the
+		// page cap with more pages pending (`truncated: true`), the poller must
+		// NOT advance `history_cursor` — but without persisting the dangling
+		// `nextPageToken` every poll restarts at page 1 and never reaches the
+		// tail. NULL = start from the first page of the current cursor.
+		name: "32_history_page_token",
+		sql: `ALTER TABLE sidecar_state ADD COLUMN history_page_token TEXT;`,
+	},
 ];
 
 /**
