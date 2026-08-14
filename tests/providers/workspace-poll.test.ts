@@ -665,7 +665,9 @@ describe("pollWorkspaceMailbox", () => {
 		const r = await pollWorkspaceMailbox(makeEnv(stub), ctx, "user@tenant.example", CFG);
 		expect(r.processed).toBeLessThan(MAX_MESSAGES_PER_POLL);
 		expect(r.processed).toBeGreaterThan(0);
-		expect(stub.putSidecarState.mock.calls.at(-1)![0].history_cursor).toBeUndefined();
+		const patch = stub.putSidecarState.mock.calls.at(-1)![0];
+		expect(patch.history_cursor).toBeUndefined();
+		expect(patch.history_page_token).toBe("p3");
 	});
 
 	it("truncated history with all pages deduped saves history_page_token to resume past the cap (#667)", async () => {
