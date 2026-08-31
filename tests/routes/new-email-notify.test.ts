@@ -315,6 +315,24 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
  * Secret takes over from the legacy global `NEW_EMAIL_WEBHOOK_URL`, so an
  * operator can point one mailbox at a bot without clobbering the org channel.
  */
+/**
+ * Match a recorded `fetch` call by parsed hostname.
+ *
+ * Substring checks (`url.includes("grok.example.com")`) trip CodeQL's
+ * js/incomplete-url-substring-sanitization even in test-only code, and PRs
+ * are gated on CodeQL — see the repo CLAUDE.md entry. Parse and compare the
+ * hostname instead.
+ */
+function callsToHost(calls: unknown[][], host: string): unknown[][] {
+	return calls.filter((c) => {
+		try {
+			return new URL(String(c[0])).hostname === host;
+		} catch {
+			return false;
+		}
+	});
+}
+
 describe("receiveEmail — tiered new-mail webhook", () => {
 	const GROK_URL = "https://grok.example.com/hooks/abc?key=k";
 	const ORG_URL = "https://chat.googleapis.com/v1/spaces/ORG/messages?key=k&token=t";
@@ -354,9 +372,9 @@ describe("receiveEmail — tiered new-mail webhook", () => {
 		await receiveEmail(makeNormalized(makeEmail()), envWith(stub), ctx);
 		await settle();
 
-		const calls = fetchSpy.mock.calls.filter((c) => String(c[0]).includes("grok.example.com"));
+		const calls = callsToHost(fetchSpy.mock.calls, "grok.example.com");
 		expect(calls).toHaveLength(1);
-		expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes("chat.googleapis.com"))).toBe(false);
+		expect(callsToHost(fetchSpy.mock.calls, "chat.googleapis.com")).toHaveLength(0);
 	});
 
 	it("falls back to the global URL when no tier configures a webhook", async () => {
@@ -367,7 +385,7 @@ describe("receiveEmail — tiered new-mail webhook", () => {
 		await receiveEmail(makeNormalized(makeEmail()), envWith(stub), ctx);
 		await settle();
 
-		expect(fetchSpy.mock.calls.filter((c) => String(c[0]).includes("chat.googleapis.com"))).toHaveLength(1);
+		expect(callsToHost(fetchSpy.mock.calls, "chat.googleapis.com")).toHaveLength(1);
 	});
 
 	it("sends nothing when the winning tier is muted, without falling back to the global URL", async () => {
@@ -434,6 +452,6 @@ describe("receiveEmail — tiered new-mail webhook", () => {
 		await receiveEmail(makeNormalized(makeEmail()), envWith(stub), ctx);
 		await settle();
 
-		expect(fetchSpy.mock.calls.filter((c) => String(c[0]).includes("grok.example.com"))).toHaveLength(1);
+		expect(callsToHost(fetchSpy.mock.calls, "grok.example.com")).toHaveLength(1);
 	});
 });
