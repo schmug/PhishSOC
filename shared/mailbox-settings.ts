@@ -222,16 +222,22 @@ export function parseSettingsLenient<T extends z.ZodTypeAny>(
       droppedLabels.push("relay");
     }
 
-    // Invalid `newEmailWebhook` block (bad `NEW_EMAIL_WEBHOOK_` prefix, manual
-    // R2 edit) is dropped wholesale so it degrades to "no tier webhook" on read
-    // instead of wiping the tier. Safe against un-muting: a mute is
-    // `{enabled:false}` with no `urlSecret`, so it has nothing to be invalid.
-    const dropNewEmailWebhook =
+    // An invalid `newEmailWebhook` block is MUTED, not deleted — deliberately
+    // unlike `relay`/`sidecar` above.
+    //
+    // Deleting is fail-closed for those, where absent means "off". Here absent
+    // means "inherit from the next tier, else the global NEW_EMAIL_WEBHOOK_URL",
+    // so deleting would be fail-OPEN: a typo'd secret name at the winning tier
+    // would route that scope's mail to the wider channel the tier was
+    // configured to replace. Replacing it with an explicit `{enabled:false}`
+    // makes `resolveNewEmailWebhook` report configured-but-silent, which sends
+    // nothing and suppresses both inheritance and the global fallback.
+    const muteNewEmailWebhook =
       "newEmailWebhook" in rec &&
       issues.some((i) => i.path[0] === "newEmailWebhook");
-    if (dropNewEmailWebhook) {
-      delete salvaged.newEmailWebhook;
-      droppedLabels.push("newEmailWebhook");
+    if (muteNewEmailWebhook) {
+      salvaged.newEmailWebhook = { enabled: false };
+      droppedLabels.push("newEmailWebhook(muted)");
     }
 
     if (droppedLabels.length > 0) {
