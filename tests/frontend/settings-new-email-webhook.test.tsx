@@ -86,8 +86,6 @@ async function lastSavedSettings(): Promise<Record<string, unknown>> {
 
 const save = () => screen.getByRole("button", { name: /save changes/i });
 const inheritRadio = () => screen.getByRole("radio", { name: /inherit/i });
-const muteRadio = () => screen.getByRole("radio", { name: /mute/i });
-const configuredRadio = () => screen.getByRole("radio", { name: /send to a webhook/i });
 const secretInput = () => screen.getByLabelText(/webhook secret name/i);
 
 describe("Settings · New mail webhook section (#694 UI)", () => {
