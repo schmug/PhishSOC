@@ -149,7 +149,9 @@ describe("parseSettingsLenient — newEmailWebhook salvage", () => {
 			newEmailWebhook: { enabled: true, urlSecret: "HUB_API_KEY" },
 		});
 		expect(parsed.agentModel).toBe("custom-model");
-		expect(parsed.newEmailWebhook).toBeUndefined();
+		// Muted, NOT dropped: dropping would read back as "inherit" and fall
+		// through to the wider channel. See the fail-closed tests below.
+		expect(parsed.newEmailWebhook).toEqual({ enabled: false });
 	});
 
 	it("salvages the mailbox tier too", async () => {
@@ -159,7 +161,7 @@ describe("parseSettingsLenient — newEmailWebhook salvage", () => {
 			newEmailWebhook: { enabled: true, urlSecret: "CONFIRMATION_TOKEN_SECRET" },
 		});
 		expect(parsed.agentModel).toBe("custom-model");
-		expect(parsed.newEmailWebhook).toBeUndefined();
+		expect(parsed.newEmailWebhook).toEqual({ enabled: false });
 	});
 });
 
@@ -182,5 +184,48 @@ describe("stripDefaultEqual: newEmailWebhook", () => {
 	it("keeps a configured block", async () => {
 		const v = { newEmailWebhook: { enabled: true, urlSecret: MAILBOX_SECRET } };
 		expect(stripDefaultEqual(v)).toEqual(v);
+	});
+});
+
+describe("salvage + resolve — fail-closed on an invalid tier block", () => {
+	/**
+	 * Regression for the fail-open hole found in review of PR #694.
+	 *
+	 * Dropping an invalid block is fail-CLOSED for `relay`/`sidecar`, where
+	 * absent means "off". It is fail-OPEN here, because absent means "inherit,
+	 * else the global NEW_EMAIL_WEBHOOK_URL". A typo'd secret name at the
+	 * winning tier would therefore route that scope's mail to the wider
+	 * channel the tier was configured to replace.
+	 *
+	 * Exercises the REAL parse → resolve chain. The receiveEmail-level tests
+	 * mock `resolveMailboxSettings` wholesale, so they never touch salvage.
+	 */
+	it("mutes rather than inherits when the winning tier's block was salvaged away", async () => {
+		const { parseSettingsLenient } = await import("../../shared/mailbox-settings");
+		// A hand-edited R2 blob — the Zod write path rejects this name.
+		const mailboxTier = parseSettingsLenient(MailboxSettings, {
+			agentModel: "custom-model",
+			newEmailWebhook: { enabled: true, urlSecret: "NEW_EMAIL_WEBHOK_GROK" },
+		});
+		expect(mailboxTier.agentModel).toBe("custom-model");
+
+		expect(resolveNewEmailWebhook({ raw: mailboxTier })).toEqual({
+			configured: true,
+			secretName: null,
+		});
+	});
+
+	it("does not let a salvaged mailbox tier fall through to a configured org tier", async () => {
+		const { parseSettingsLenient } = await import("../../shared/mailbox-settings");
+		const mailboxTier = parseSettingsLenient(MailboxSettings, {
+			newEmailWebhook: { enabled: true, urlSecret: "HUB_API_KEY" },
+		});
+
+		expect(
+			resolveNewEmailWebhook({
+				raw: mailboxTier,
+				org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET } },
+			}),
+		).toEqual({ configured: true, secretName: null });
 	});
 });
