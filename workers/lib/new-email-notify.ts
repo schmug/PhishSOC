@@ -22,6 +22,10 @@
 
 import type { Env } from "../types";
 import type { AlertExecutionContext } from "./security-alert";
+import {
+	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
+	type ResolvedNewEmailWebhook,
+} from "./new-email-webhook-policy";
 
 /** Webhook request timeout — bounded so a hung endpoint can't pin a request. */
 const NEW_EMAIL_WEBHOOK_TIMEOUT_MS = 10_000;
@@ -99,8 +103,9 @@ export function dispatchNewEmailNotification(
 	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN">,
 	ctx: AlertExecutionContext | undefined,
 	notification: NewEmailNotification,
+	webhook: ResolvedNewEmailWebhook = { configured: false, secretName: null },
 ): void {
-	const url = env.NEW_EMAIL_WEBHOOK_URL;
+	const url = resolveWebhookUrl(env, webhook);
 	if (!url) return;
 
 	try {
@@ -131,4 +136,44 @@ export function dispatchNewEmailNotification(
 			err instanceof Error ? err.message : String(err),
 		);
 	}
+}
+
+/**
+ * Pick the destination URL for this email.
+ *
+ * No tier configured falls back to the legacy global `NEW_EMAIL_WEBHOOK_URL`,
+ * so a deployment that never touches settings keeps working unchanged.
+ *
+ * Once a tier IS configured there is deliberately NO fallback: a muted,
+ * half-written, or invalid tier sends nothing. Falling back would leak the
+ * mail to the wider channel the operator configured that tier to replace.
+ *
+ * The prefix is re-checked here even though the Zod schema enforces it on
+ * write — a hand-edited R2 blob never passes through Zod, and without this
+ * check a settings write could name any secret in `env` (a signing key, an
+ * API token) and have its value POSTed to an operator-chosen endpoint. Same
+ * defense-in-depth as `SmtpRelayProvider` re-checking `RELAY_CREDS_`.
+ */
+function resolveWebhookUrl(
+	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN">,
+	webhook: ResolvedNewEmailWebhook,
+): string | undefined {
+	if (!webhook.configured) return env.NEW_EMAIL_WEBHOOK_URL;
+
+	const name = webhook.secretName;
+	if (!name) return undefined;
+
+	if (!name.startsWith(NEW_EMAIL_WEBHOOK_SECRET_PREFIX)) {
+		console.error(
+			`new-email webhook secret ${name} must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}; sending nothing`,
+		);
+		return undefined;
+	}
+
+	const value = (env as unknown as Record<string, unknown>)[name];
+	if (typeof value !== "string" || value.length === 0) {
+		console.error(`new-email webhook secret ${name} is not configured; sending nothing`);
+		return undefined;
+	}
+	return value;
 }

@@ -90,7 +90,10 @@ function makeMailboxStub() {
 	};
 }
 
-function makeEnv(stub: ReturnType<typeof makeMailboxStub>, envOverrides: Partial<Env> = {}): Env {
+function makeEnv(
+	stub: ReturnType<typeof makeMailboxStub>,
+	envOverrides: Partial<Env> & Record<string, unknown> = {},
+): Env {
 	return {
 		BUCKET: { head: vi.fn().mockResolvedValue({ key: `mailboxes/${MAILBOX_ID}.json` }), put: vi.fn() },
 		MAILBOX: { idFromName: vi.fn().mockReturnValue("do-id"), get: vi.fn().mockReturnValue(stub) },
@@ -115,11 +118,13 @@ function makeCtx() {
 	return { ctx, settle: () => Promise.allSettled(scheduled) };
 }
 
-function makeSettings(overrides: { raw?: unknown } = {}) {
+function makeSettings(overrides: { raw?: unknown; domain?: unknown; org?: unknown } = {}) {
 	return {
 		security: { enabled: true, ruf_ingestion: { enabled: false, retain_raw: false }, thresholds: {} },
 		autoDraft: { enabled: false },
 		raw: overrides.raw,
+		domain: overrides.domain,
+		org: overrides.org,
 	} as unknown as Awaited<ReturnType<typeof resolveMailboxSettings>>;
 }
 
@@ -302,5 +307,133 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
 
 		expect(stub.createEmail).toHaveBeenCalledOnce();
 		expect((stub as Record<string, unknown>).setRelayStatus).toBeUndefined();
+	});
+});
+
+/**
+ * Tiered webhook routing (#563 follow-up). A tier that names its own Worker
+ * Secret takes over from the legacy global `NEW_EMAIL_WEBHOOK_URL`, so an
+ * operator can point one mailbox at a bot without clobbering the org channel.
+ */
+describe("receiveEmail — tiered new-mail webhook", () => {
+	const GROK_URL = "https://grok.example.com/hooks/abc?key=k";
+	const ORG_URL = "https://chat.googleapis.com/v1/spaces/ORG/messages?key=k&token=t";
+
+	let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockedPipeline.mockResolvedValue({
+			verdict: { action: "allow", score: 12, signals: [], explanation: "" },
+			skipped: false,
+		} as never);
+		mockedIsDmarcReport.mockReturnValue(false);
+		mockedIsDmarcRuf.mockReturnValue(false);
+		mockedIsTlsRptReport.mockReturnValue(false);
+		fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function envWith(stub: ReturnType<typeof makeMailboxStub>) {
+		return makeEnv(stub, {
+			NEW_EMAIL_WEBHOOK_URL: ORG_URL,
+			NEW_EMAIL_WEBHOOK_GROK: GROK_URL,
+		});
+	}
+
+	it("posts to the mailbox tier's secret instead of the global URL", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(
+			makeSettings({ raw: { newEmailWebhook: { enabled: true, urlSecret: "NEW_EMAIL_WEBHOOK_GROK" } } }),
+		);
+
+		await receiveEmail(makeNormalized(makeEmail()), envWith(stub), ctx);
+		await settle();
+
+		const calls = fetchSpy.mock.calls.filter((c) => String(c[0]).includes("grok.example.com"));
+		expect(calls).toHaveLength(1);
+		expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes("chat.googleapis.com"))).toBe(false);
+	});
+
+	it("falls back to the global URL when no tier configures a webhook", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(makeSettings());
+
+		await receiveEmail(makeNormalized(makeEmail()), envWith(stub), ctx);
+		await settle();
+
+		expect(fetchSpy.mock.calls.filter((c) => String(c[0]).includes("chat.googleapis.com"))).toHaveLength(1);
+	});
+
+	it("sends nothing when the winning tier is muted, without falling back to the global URL", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(
+			makeSettings({
+				raw: { newEmailWebhook: { enabled: false } },
+				org: { newEmailWebhook: { enabled: true, urlSecret: "NEW_EMAIL_WEBHOOK_GROK" } },
+			}),
+		);
+
+		await receiveEmail(makeNormalized(makeEmail()), envWith(stub), ctx);
+		await settle();
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("refuses a secret name outside the prefix and does NOT fall back to the global URL", async () => {
+		// Reaches dispatch only via a hand-edited R2 blob (the Zod schema rejects
+		// it on write). Falling back here would leak the mail to the global
+		// channel that the tier was configured to replace.
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(
+			makeSettings({ raw: { newEmailWebhook: { enabled: true, urlSecret: "CONFIRMATION_TOKEN_SECRET" } } }),
+		);
+
+		await receiveEmail(
+			makeNormalized(makeEmail()),
+			makeEnv(stub, {
+				NEW_EMAIL_WEBHOOK_URL: ORG_URL,
+				CONFIRMATION_TOKEN_SECRET: "https://attacker.example.com/steal",
+			}),
+			ctx,
+		);
+		await settle();
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("sends nothing when the named secret is not configured in the environment", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(
+			makeSettings({ raw: { newEmailWebhook: { enabled: true, urlSecret: "NEW_EMAIL_WEBHOOK_ABSENT" } } }),
+		);
+
+		await receiveEmail(makeNormalized(makeEmail()), envWith(stub), ctx);
+		await settle();
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("uses the domain tier when the mailbox tier is absent", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(
+			makeSettings({
+				domain: { newEmailWebhook: { enabled: true, urlSecret: "NEW_EMAIL_WEBHOOK_GROK" } },
+			}),
+		);
+
+		await receiveEmail(makeNormalized(makeEmail()), envWith(stub), ctx);
+		await settle();
+
+		expect(fetchSpy.mock.calls.filter((c) => String(c[0]).includes("grok.example.com"))).toHaveLength(1);
 	});
 });

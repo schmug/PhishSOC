@@ -66,11 +66,23 @@ scoped to `/api/v1/confirm` from the Cloudflare dashboard.
 
 | Field | Value |
 | --- | --- |
-| **What it is** | Operator-configured chat webhook for ops-visibility "new mail" notifications (issue #563). When set, every inbound email that lands in a mailbox (except honeypot mail and ingested DMARC/TLS-RPT/RUF reports) POSTs a `{"text": "..."}` message here — the format Google Chat and Slack incoming webhooks both accept — with sender, subject, landing folder, verdict action, and a deep link into the message. This is a **separate, higher-volume** channel from `SECURITY_ALERT_WEBHOOK_URL` (that one is a low-volume security pager; see issue #511). |
+| **What it is** | Deployment-wide **fallback** chat webhook for ops-visibility "new mail" notifications (issue #563). Used only when no settings tier configures a webhook — see `NEW_EMAIL_WEBHOOK_*` below. When it applies, every inbound email that lands in a mailbox (except honeypot mail and ingested DMARC/TLS-RPT/RUF reports) POSTs a `{"text": "..."}` message here — the format Google Chat and Slack incoming webhooks both accept — with sender, subject, landing folder, verdict action, and a deep link into the message. This is a **separate, higher-volume** channel from `SECURITY_ALERT_WEBHOOK_URL` (that one is a low-volume security pager; see issue #511). |
 | **Where stored** | Cloudflare Workers secret — `wrangler secret put NEW_EMAIL_WEBHOOK_URL`. Kept out of `wrangler.jsonc` `vars` because the URL embeds credentials (a Google Chat incoming-webhook URL carries a `key` and `token` query string). |
 | **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role; the operator who created the Google Chat (or Slack) incoming webhook |
 | **Rotation cadence** | Whenever the destination chat space changes, or immediately if the URL is suspected leaked (it is a bearer credential — anyone with it can post to the space). Generate a new incoming webhook URL in Google Chat: space → Apps & integrations → Webhooks, then `wrangler secret put NEW_EMAIL_WEBHOOK_URL`. |
 | **If missing** | The new-mail notification dispatch silently no-ops; email receipt is unaffected. |
+
+### `NEW_EMAIL_WEBHOOK_*` — optional, per-tier
+
+| Field | Value |
+| --- | --- |
+| **What it is** | Per-mailbox / per-domain / per-org new-mail webhooks. A settings tier sets a `newEmailWebhook` block naming one of these secrets, and that tier's webhook replaces the global fallback for mail in its scope — so one mailbox can route to its own bot without clobbering the org-wide channel. |
+| **Where stored** | Cloudflare Workers secrets, one per destination — `wrangler secret put NEW_EMAIL_WEBHOOK_GROK`. The settings blob stores only the secret's **name**; the URL never lands in R2, because the settings GET endpoints return those blobs to any Access-authenticated client and a webhook URL is a bearer credential. |
+| **Naming** | The name MUST start with `NEW_EMAIL_WEBHOOK_`. Enforced by the Zod schema on write and re-checked in `dispatchNewEmailNotification` at use time, so a hand-edited R2 blob cannot point the dispatch at an unrelated secret (`CONFIRMATION_TOKEN_SECRET`, `HUB_API_KEY`) and have its value POSTed off-platform. Same contract as `RELAY_CREDS_` (#615) and `SIDECAR_SECRET_`. |
+| **Resolution** | Override semantics, most specific tier wins: `mailbox > domain > org`, then the global `NEW_EMAIL_WEBHOOK_URL`. `enabled` must be explicitly `true`. Setting `{"enabled": false}` on a tier **mutes** that scope — it does not inherit, and does not fall back to the global. |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role; the operator who created the destination webhook |
+| **Rotation cadence** | Same as the global secret — whenever the destination changes, or immediately if the URL is suspected leaked. |
+| **If missing** | A tier naming a secret that is unset (or outside the prefix) sends nothing for that scope and logs the reason. It deliberately does **not** fall back to the global URL, which would leak the mail to the channel that tier was configured to replace. |
 
 ### `RP_ID` / `RP_ORIGIN` — WebAuthn Relying Party config (wrangler vars, not secrets)
 
