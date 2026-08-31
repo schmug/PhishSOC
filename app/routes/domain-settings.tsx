@@ -20,7 +20,15 @@ import {
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
 import type { HubConfigSettings, SecuritySettings } from "~/types";
-import { TEXT_MODELS } from "shared/mailbox-settings";
+import {
+	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
+	TEXT_MODELS,
+} from "shared/mailbox-settings";
+import type { NewEmailWebhookSettings } from "shared/mailbox-settings";
+import {
+	NewEmailWebhookCard,
+	isNewEmailWebhookValid,
+} from "~/components/NewEmailWebhookCard";
 
 const PROMPT_PLACEHOLDER = `(Leave empty to inherit from org-wide /settings)`;
 
@@ -41,6 +49,7 @@ interface DomainSettingsShape {
 		credentialsSecret?: string;
 		actions?: { quarantine?: "relay" | "hold" | "drop" };
 	};
+	newEmailWebhook?: NewEmailWebhookSettings;
 }
 
 function InheritanceBadge({
@@ -106,6 +115,11 @@ export default function DomainSettingsRoute() {
 	const [relayActionQuarantine, setRelayActionQuarantine] = useState<
 		"relay" | "hold" | "drop"
 	>("hold");
+	// New-mail webhook (#694). undefined = inherit (key omitted on save),
+	// {enabled:false} = muted, {enabled:true, urlSecret} = configured.
+	const [newEmailWebhook, setNewEmailWebhook] = useState<
+		NewEmailWebhookSettings | undefined
+	>(undefined);
 	const [isSaving, setIsSaving] = useState(false);
 
 	// Initialise once per domain (same useRef pattern as the per-mailbox
@@ -143,6 +157,8 @@ export default function DomainSettingsRoute() {
 		setRelayImplicitTls(s.relay?.target?.implicitTls ?? false);
 		setRelayCredentialsSecret(s.relay?.credentialsSecret ?? "");
 		setRelayActionQuarantine(s.relay?.actions?.quarantine ?? "hold");
+		// Absent key is the meaningful "inherit" state — load it through as-is.
+		setNewEmailWebhook(s.newEmailWebhook);
 
 		const m = s.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
 		if (availableModels.includes(m)) {
@@ -186,6 +202,13 @@ export default function DomainSettingsRoute() {
 				feedback.error("Fix the threat-intel hub fields before saving.");
 				return;
 			}
+		}
+
+		if (!isNewEmailWebhookValid(newEmailWebhook)) {
+			feedback.error(
+				`Webhook secret name must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}`,
+			);
+			return;
 		}
 
 		const existing = (data?.settings ?? {}) as DomainSettingsShape;
@@ -237,6 +260,15 @@ export default function DomainSettingsRoute() {
 					}
 				: { enabled: false },
 		};
+
+		// Inherit is expressed by omitting the key entirely; `...existing`
+		// above would otherwise carry a stale block through. A mute
+		// (`{enabled:false}`) is written, and stripDefaultEqual keeps it.
+		if (newEmailWebhook) {
+			settings.newEmailWebhook = newEmailWebhook;
+		} else {
+			delete settings.newEmailWebhook;
+		}
 
 		setIsSaving(true);
 		try {
@@ -617,6 +649,13 @@ export default function DomainSettingsRoute() {
 							</div>
 						)}
 					</div>
+
+					{/* New mail webhook (#694) */}
+					<NewEmailWebhookCard
+						value={newEmailWebhook}
+						onChange={setNewEmailWebhook}
+						tier="domain"
+					/>
 
 					<div className="flex justify-end">
 						<Button variant="primary" onClick={handleSave} loading={isSaving}>
