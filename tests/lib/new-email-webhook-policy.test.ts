@@ -33,17 +33,18 @@ const MAILBOX_SECRET = "NEW_EMAIL_WEBHOOK_GROK";
 
 describe("resolveNewEmailWebhook — tier precedence", () => {
 	it("reports unconfigured when no tier sets a block, so the caller can fall back to the global secret", () => {
-		expect(resolveNewEmailWebhook({})).toEqual({ configured: false, secretName: null });
+		expect(resolveNewEmailWebhook({})).toEqual({ configured: false, secretName: null, format: "chat" });
 		expect(resolveNewEmailWebhook({ raw: {}, domain: {}, org: {} })).toEqual({
 			configured: false,
 			secretName: null,
+			format: "chat",
 		});
 	});
 
 	it("uses the org tier when it is the only one configured", () => {
 		expect(
 			resolveNewEmailWebhook({ org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET } } }),
-		).toEqual({ configured: true, secretName: ORG_SECRET });
+		).toEqual({ configured: true, secretName: ORG_SECRET, format: "chat" });
 	});
 
 	it("prefers domain over org", () => {
@@ -52,7 +53,7 @@ describe("resolveNewEmailWebhook — tier precedence", () => {
 				domain: { newEmailWebhook: { enabled: true, urlSecret: DOMAIN_SECRET } },
 				org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET } },
 			}),
-		).toEqual({ configured: true, secretName: DOMAIN_SECRET });
+		).toEqual({ configured: true, secretName: DOMAIN_SECRET, format: "chat" });
 	});
 
 	it("prefers mailbox over domain and org", () => {
@@ -62,7 +63,7 @@ describe("resolveNewEmailWebhook — tier precedence", () => {
 				domain: { newEmailWebhook: { enabled: true, urlSecret: DOMAIN_SECRET } },
 				org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET } },
 			}),
-		).toEqual({ configured: true, secretName: MAILBOX_SECRET });
+		).toEqual({ configured: true, secretName: MAILBOX_SECRET, format: "chat" });
 	});
 });
 
@@ -76,7 +77,7 @@ describe("resolveNewEmailWebhook — muting", () => {
 				raw: { newEmailWebhook: { enabled: false } },
 				org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET } },
 			}),
-		).toEqual({ configured: true, secretName: null });
+		).toEqual({ configured: true, secretName: null, format: "chat" });
 	});
 
 	it("treats a block with no urlSecret as configured-but-incomplete rather than inheriting", () => {
@@ -85,13 +86,14 @@ describe("resolveNewEmailWebhook — muting", () => {
 				domain: { newEmailWebhook: { enabled: true } },
 				org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET } },
 			}),
-		).toEqual({ configured: true, secretName: null });
+		).toEqual({ configured: true, secretName: null, format: "chat" });
 	});
 
 	it("stays configured (suppressing the global fallback) even when muted at the org tier", () => {
 		expect(resolveNewEmailWebhook({ org: { newEmailWebhook: { enabled: false } } })).toEqual({
 			configured: true,
 			secretName: null,
+			format: "chat",
 		});
 	});
 
@@ -101,7 +103,7 @@ describe("resolveNewEmailWebhook — muting", () => {
 		// start shipping mail metadata off-platform.
 		expect(
 			resolveNewEmailWebhook({ org: { newEmailWebhook: { urlSecret: ORG_SECRET } } }),
-		).toEqual({ configured: true, secretName: null });
+		).toEqual({ configured: true, secretName: null, format: "chat" });
 	});
 });
 
@@ -212,6 +214,7 @@ describe("salvage + resolve — fail-closed on an invalid tier block", () => {
 		expect(resolveNewEmailWebhook({ raw: mailboxTier })).toEqual({
 			configured: true,
 			secretName: null,
+			format: "chat",
 		});
 	});
 
@@ -226,6 +229,45 @@ describe("salvage + resolve — fail-closed on an invalid tier block", () => {
 				raw: mailboxTier,
 				org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET } },
 			}),
-		).toEqual({ configured: true, secretName: null });
+		).toEqual({ configured: true, secretName: null, format: "chat" });
+	});
+});
+
+describe("resolveNewEmailWebhook — payload format", () => {
+	it("defaults to chat so existing deployments are unchanged", () => {
+		expect(
+			resolveNewEmailWebhook({ org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET } } }).format,
+		).toBe("chat");
+		// The global-fallback path has no settings block at all.
+		expect(resolveNewEmailWebhook({}).format).toBe("chat");
+	});
+
+	it("carries the winning tier's format", () => {
+		expect(
+			resolveNewEmailWebhook({
+				org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET, format: "json" } },
+			}).format,
+		).toBe("json");
+	});
+
+	it("takes format from the winning tier only, never merging across tiers", () => {
+		// Whole-object replace: a mailbox block that omits `format` gets the
+		// default, NOT the org's json. Same contract as every other field here.
+		expect(
+			resolveNewEmailWebhook({
+				raw: { newEmailWebhook: { enabled: true, urlSecret: MAILBOX_SECRET } },
+				org: { newEmailWebhook: { enabled: true, urlSecret: ORG_SECRET, format: "json" } },
+			}),
+		).toEqual({ configured: true, secretName: MAILBOX_SECRET, format: "chat" });
+	});
+
+	it("accepts format on every tier schema and rejects an unknown value", () => {
+		const ok = { newEmailWebhook: { enabled: true, urlSecret: MAILBOX_SECRET, format: "json" } };
+		expect(MailboxSettings.safeParse(ok).success).toBe(true);
+		expect(DomainSettings.safeParse(ok).success).toBe(true);
+		expect(OrgSettings.safeParse(ok).success).toBe(true);
+		expect(
+			MailboxSettings.safeParse({ newEmailWebhook: { format: "xml" } }).success,
+		).toBe(false);
 	});
 });

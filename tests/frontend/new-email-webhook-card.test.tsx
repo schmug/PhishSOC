@@ -19,7 +19,7 @@
 // Settings blobs are returned to any Access-authenticated client, and a chat
 // webhook URL is a bearer credential.
 
-import { screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { useState } from "react";
@@ -254,3 +254,58 @@ describe("isNewEmailWebhookValid", () => {
 		expect(isNewEmailWebhookValid({ enabled: true })).toBe(false);
 	});
 });
+
+// `format` (#563 follow-up): `chat` posts Slack/Google-Chat-shaped
+// `{"text": "..."}` prose; `json` posts the structured event for consumers
+// that want fields rather than a sentence to regex.
+describe("NewEmailWebhookCard — payload format", () => {
+	it("offers no format control until the tier is actually configured", () => {
+		render(<Harness initial={{ enabled: false }} />);
+		expect(screen.queryByLabelText(/structured json/i)).not.toBeInTheDocument();
+	});
+
+	it("defaults a newly configured tier to chat, emitting no explicit format", async () => {
+		const user = userEvent.setup();
+		render(<Harness />);
+
+		await user.click(screen.getByRole("radio", { name: /send to a webhook/i }));
+
+		// Absent, not `format: "chat"` — absent-key-inherits keeps stored blobs
+		// minimal and lets the default move later without a migration.
+		expect(emitted()).not.toHaveProperty("format");
+	});
+
+	it("emits format json when the operator picks structured output", async () => {
+		const user = userEvent.setup();
+		render(
+			<Harness initial={{ enabled: true, urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}BOT` }} />,
+		);
+
+		await user.click(screen.getByLabelText(/structured json/i));
+
+		expect(emitted()).toMatchObject({
+			enabled: true,
+			urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}BOT`,
+			format: "json",
+		});
+	});
+
+	it("keeps the chosen format when the secret name is edited afterwards", async () => {
+		const user = userEvent.setup();
+		render(
+			<Harness
+				initial={{
+					enabled: true,
+					urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}BOT`,
+					format: "json",
+				}}
+			/>,
+		);
+
+		await user.type(screen.getByLabelText(/secret name/i), "2");
+
+		// The secret-name handler replaces the whole block; without an explicit
+		// spread it silently drops `format` and the tier reverts to chat prose.
+		expect(emitted()).toMatchObject({ format: "json" });
+	});
+})

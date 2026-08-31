@@ -455,3 +455,118 @@ describe("receiveEmail — tiered new-mail webhook", () => {
 		expect(callsToHost(fetchSpy.mock.calls, "grok.example.com")).toHaveLength(1);
 	});
 });
+
+/**
+ * `format: "json"` (#563 follow-up). The chat payload flattens a structured
+ * event into Slack-shaped prose; a bot consumer wants the fields back.
+ */
+describe("receiveEmail — json payload format", () => {
+	const HOOK = "https://bot.example.com/hooks/abc?key=k";
+
+	let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockedPipeline.mockResolvedValue({
+			verdict: { action: "allow", score: 12, signals: [], explanation: "" },
+			skipped: false,
+		} as never);
+		mockedIsDmarcReport.mockReturnValue(false);
+		mockedIsDmarcRuf.mockReturnValue(false);
+		mockedIsTlsRptReport.mockReturnValue(false);
+		fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function jsonTierEnv(stub: ReturnType<typeof makeMailboxStub>) {
+		return makeEnv(stub, { NEW_EMAIL_WEBHOOK_BOT: HOOK });
+	}
+
+	function jsonSettings() {
+		return makeSettings({
+			raw: { newEmailWebhook: { enabled: true, urlSecret: "NEW_EMAIL_WEBHOOK_BOT", format: "json" } },
+		});
+	}
+
+	/** Parse the body of the single recorded webhook POST. */
+	function postedBody(): Record<string, unknown> {
+		const call = callsToHost(fetchSpy.mock.calls, "bot.example.com")[0];
+		return JSON.parse(String((call[1] as RequestInit).body));
+	}
+
+	it("posts the structured event rather than a {text} blob", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(jsonSettings());
+
+		await receiveEmail(makeNormalized(makeEmail()), jsonTierEnv(stub), ctx);
+		await settle();
+
+		const body = postedBody();
+		expect(body.text).toBeUndefined();
+		expect(body).toMatchObject({
+			mailboxId: MAILBOX_ID,
+			folder: "inbox",
+			sender: "alice@example.com",
+			subject: "Invoice attached",
+			verdictAction: "allow",
+			verdictScore: 12,
+		});
+		expect(String(body.url)).toContain(`${RP_ORIGIN}/mailbox/`);
+	});
+
+	it("sends the subject verbatim — the <>| strip exists only for chat link syntax", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(jsonSettings());
+
+		await receiveEmail(
+			makeNormalized(makeEmail({ subject: "Re: <urgent> | wire transfer" })),
+			jsonTierEnv(stub),
+			ctx,
+		);
+		await settle();
+
+		// JSON.stringify escapes these safely; stripping them would corrupt
+		// legitimate subjects for a structured consumer.
+		expect(postedBody().subject).toBe("Re: <urgent> | wire transfer");
+	});
+
+	it("bounds a hostile subject so the payload can't balloon", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(jsonSettings());
+
+		await receiveEmail(
+			makeNormalized(makeEmail({ subject: "A".repeat(5000) })),
+			jsonTierEnv(stub),
+			ctx,
+		);
+		await settle();
+
+		const body = postedBody();
+		// Assert we are on the JSON path, so this cannot pass merely because
+		// the chat formatter truncates at 120.
+		expect(body.text).toBeUndefined();
+		expect(String(body.subject).length).toBeGreaterThan(120);
+		expect(String(body.subject).length).toBeLessThanOrEqual(1000);
+	});
+
+	it("still sends the chat shape when format is absent", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(
+			makeSettings({ raw: { newEmailWebhook: { enabled: true, urlSecret: "NEW_EMAIL_WEBHOOK_BOT" } } }),
+		);
+
+		await receiveEmail(makeNormalized(makeEmail()), jsonTierEnv(stub), ctx);
+		await settle();
+
+		const body = postedBody();
+		expect(typeof body.text).toBe("string");
+		expect(body.mailboxId).toBeUndefined();
+	});
+});
