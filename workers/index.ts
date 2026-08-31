@@ -25,6 +25,7 @@ import { runSecurityPipeline, type FinalVerdict } from "./security";
 import { resolveRelayPolicy } from "./lib/relay-policy";
 import { relayAfterVerdict } from "./lib/gateway-relay";
 import { dispatchNewEmailNotification } from "./lib/new-email-notify";
+import { resolveNewEmailWebhook } from "./lib/new-email-webhook-policy";
 import { parseAuthResults } from "./security/auth";
 import { runDeepScan } from "./intel/deep-scan";
 import { isDmarcReport, ingestDmarcReport, isDmarcRuf, ingestDmarcRuf } from "./dmarc/ingest";
@@ -1872,15 +1873,31 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	// Quarantined mail DOES notify here (labeled with its folder/verdict) —
 	// an operator watching the deployment wants to see quarantine events,
 	// unlike the desktop-notification suppression above.
-	dispatchNewEmailNotification(env, ctx, {
-		mailboxId,
-		messageId,
-		folder: finalFolder,
-		sender: parsedEmail.from?.address || "",
-		subject: parsedEmail.subject || "",
-		verdictAction: securityVerdict?.action ?? null,
-		verdictScore: securityVerdict?.score ?? null,
+	// Tier resolution (#563 follow-up): a mailbox/domain/org `newEmailWebhook`
+	// block names its own Worker Secret and takes over from the global
+	// NEW_EMAIL_WEBHOOK_URL, so one mailbox can route to its own bot without
+	// clobbering the org channel. Guarded: a settings-read failure degrades to
+	// the global fallback rather than failing receipt. NOTE: this is a separate
+	// resolveMailboxSettings read; consolidating receiveEmail's several reads
+	// into one is tracked as follow-up work.
+	const webhookTiers = await resolveMailboxSettings(env, mailboxId).catch((e) => {
+		console.error("new-email webhook settings resolve failed:", (e as Error).message);
+		return null;
 	});
+	dispatchNewEmailNotification(
+		env,
+		ctx,
+		{
+			mailboxId,
+			messageId,
+			folder: finalFolder,
+			sender: parsedEmail.from?.address || "",
+			subject: parsedEmail.subject || "",
+			verdictAction: securityVerdict?.action ?? null,
+			verdictScore: securityVerdict?.score ?? null,
+		},
+		webhookTiers ? resolveNewEmailWebhook(webhookTiers) : undefined,
+	);
 
 	// Async deep-scan. Runs AFTER the sync pipeline decision and only ever
 	// tightens the verdict (never downgrades). Enqueued via ctx.waitUntil

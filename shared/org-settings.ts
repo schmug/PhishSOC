@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   AutoDraftSettings,
   IntelSettings,
+  NewEmailWebhookSettings,
   SecuritySettings,
 } from "./mailbox-settings";
 
@@ -65,6 +66,7 @@ export const OrgSettings = z
       })
       .passthrough()
       .optional(),
+    newEmailWebhook: NewEmailWebhookSettings.optional(),
   })
   .passthrough();
 
