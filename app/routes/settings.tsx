@@ -21,6 +21,10 @@ import {
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
 import { SidecarSettingsCard, type SidecarFormValue } from "~/components/SidecarSettingsCard";
+import {
+	NewEmailWebhookCard,
+	isNewEmailWebhookValid,
+} from "~/components/NewEmailWebhookCard";
 import type { HubConfigSettings, SecuritySettings, YaraMailScannerSettings } from "~/types";
 import {
 	TEXT_MODELS,
@@ -28,7 +32,9 @@ import {
 	DEFAULT_INJECTION_SCANNER_MODEL,
 	DEFAULT_DRAFT_VERIFIER_MODEL,
 	DEFAULT_CLASSIFIER_MODEL,
+	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
 } from "shared/mailbox-settings";
+import type { NewEmailWebhookSettings } from "shared/mailbox-settings";
 
 // Placeholder shown in the textarea when no custom prompt is set.
 // The authoritative default prompt lives in workers/agent/index.ts (DEFAULT_SYSTEM_PROMPT).
@@ -161,6 +167,13 @@ export default function SettingsRoute() {
 	// can only start in observe, promotion is a second save.
 	const [sidecar, setSidecar] = useState<SidecarFormValue | null>(null);
 	const [savedSidecarExists, setSavedSidecarExists] = useState(false);
+
+	// New-mail webhook (#694). Three-state, unlike every other block here:
+	// undefined = inherit (key omitted on save), {enabled:false} = muted,
+	// {enabled:true, urlSecret} = post to that Worker Secret's endpoint.
+	const [newEmailWebhook, setNewEmailWebhook] = useState<
+		NewEmailWebhookSettings | undefined
+	>(undefined);
 
 	const [isSaving, setIsSaving] = useState(false);
 
@@ -322,6 +335,13 @@ export default function SettingsRoute() {
 				: null,
 		);
 
+		// newEmailWebhook (#694) — an absent key is the meaningful "inherit"
+		// state, so undefined is loaded through as-is rather than defaulted.
+		setNewEmailWebhook(
+			(mailbox.settings as { newEmailWebhook?: NewEmailWebhookSettings } | undefined)
+				?.newEmailWebhook,
+		);
+
 		// availableModels intentionally omitted from deps — see commit
 		// message for the rationale (re-running this effect would clobber
 		// edits when the dynamic models list resolves).
@@ -365,6 +385,13 @@ export default function SettingsRoute() {
 			nextIntel = Object.keys(existingIntel).length > 0 ? existingIntel : undefined;
 		}
 
+		if (!isNewEmailWebhookValid(newEmailWebhook)) {
+			feedback.error(
+				`Webhook secret name must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}`,
+			);
+			return;
+		}
+
 		setIsSaving(true);
 		// Build the PUT payload. Per audit Q5/Q6/Q8: undefined fields get
 		// stripped server-side via stripDefaultEqual (PR1) so the resolver
@@ -388,8 +415,13 @@ export default function SettingsRoute() {
 			intel: nextIntel,
 			yaramail_scanner: nextYaraScanner,
 			...(sidecar ? { sidecar } : {}),
+			...(newEmailWebhook ? { newEmailWebhook } : {}),
 		};
 		if (!sidecar) delete (settings as Record<string, unknown>).sidecar;
+		// Inherit is expressed by omitting the key entirely — the spread of the
+		// persisted blob above would otherwise carry a stale block through.
+		if (!newEmailWebhook)
+			delete (settings as Record<string, unknown>).newEmailWebhook;
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
 			feedback.success("Settings saved!");
@@ -887,6 +919,13 @@ export default function SettingsRoute() {
 					health={mailbox.sidecar_health ?? null}
 					savedConfigExists={savedSidecarExists}
 					mailboxId={mailboxId!}
+				/>
+
+				{/* New mail webhook (#694) */}
+				<NewEmailWebhookCard
+					value={newEmailWebhook}
+					onChange={setNewEmailWebhook}
+					tier="mailbox"
 				/>
 
 				{/* Access / Members — per-mailbox ACL panel (#291). Not part of the
