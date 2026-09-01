@@ -34,14 +34,22 @@ import type { AlertExecutionContext } from "./security-alert";
 import { hmacSha256Hex } from "./hmac";
 import {
 	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
+	type NewEmailWebhookFormat,
 	type ResolvedNewEmailWebhook,
 } from "./new-email-webhook-policy";
 
 /** Webhook request timeout — bounded so a hung endpoint can't pin a request. */
 const NEW_EMAIL_WEBHOOK_TIMEOUT_MS = 10_000;
 
-/** Cap on the subject text included in the outbound message. */
+/** Cap on the subject text included in the outbound chat message. */
 const MAX_SUBJECT_LENGTH = 120;
+
+/**
+ * Cap on the subject in a `json` payload. Far looser than the chat cap — a
+ * structured consumer wants the real subject, not a display-truncated one —
+ * but still bounded so a hostile 100KB subject can't balloon the request.
+ */
+const MAX_JSON_SUBJECT_LENGTH = 1000;
 
 /** Header carrying the outbound signature — see module doc for the format. */
 const SIGNATURE_HEADER = "x-phishsoc-signature";
@@ -97,11 +105,47 @@ function buildMessageText(
 	}
 
 	let text = parts.join(" | ");
-	if (env.RP_ORIGIN) {
-		const link = `${env.RP_ORIGIN}/mailbox/${encodeURIComponent(mailboxId)}/emails/${encodeURIComponent(folder)}?email=${encodeURIComponent(messageId)}`;
-		text += ` | <${link}|open>`;
-	}
+	const link = buildDeepLink(env, notification);
+	if (link) text += ` | <${link}|open>`;
 	return text;
+}
+
+/** Deep link into the message, or undefined when RP_ORIGIN is unset. */
+function buildDeepLink(
+	env: Pick<Env, "RP_ORIGIN">,
+	{ mailboxId, messageId, folder }: NewEmailNotification,
+): string | undefined {
+	if (!env.RP_ORIGIN) return undefined;
+	return `${env.RP_ORIGIN}/mailbox/${encodeURIComponent(mailboxId)}/emails/${encodeURIComponent(folder)}?email=${encodeURIComponent(messageId)}`;
+}
+
+/**
+ * Structured payload for `format: "json"`.
+ *
+ * Deliberately does NOT run `sanitizeField`. That strip exists solely to stop
+ * attacker-controlled text forging chat `<url|text>` link syntax; `JSON.stringify`
+ * escapes safely, and stripping would corrupt legitimate subjects for a consumer
+ * that wants the real value. Rendering this into HTML is the receiver's problem,
+ * the same contract GitHub and Stripe webhooks operate under.
+ */
+function buildJsonPayload(
+	env: Pick<Env, "RP_ORIGIN">,
+	notification: NewEmailNotification,
+): Record<string, unknown> {
+	const subject = notification.subject || "";
+	return {
+		mailboxId: notification.mailboxId,
+		messageId: notification.messageId,
+		folder: notification.folder,
+		sender: notification.sender || "",
+		subject:
+			subject.length > MAX_JSON_SUBJECT_LENGTH
+				? subject.slice(0, MAX_JSON_SUBJECT_LENGTH)
+				: subject,
+		verdictAction: notification.verdictAction ?? null,
+		verdictScore: notification.verdictScore ?? null,
+		url: buildDeepLink(env, notification) ?? null,
+	};
 }
 
 /**
@@ -120,12 +164,12 @@ export function dispatchNewEmailNotification(
 	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN" | "NEW_EMAIL_WEBHOOK_SIGNING_SECRET">,
 	ctx: AlertExecutionContext | undefined,
 	notification: NewEmailNotification,
-	webhook: ResolvedNewEmailWebhook = { configured: false, secretName: null },
+	webhook: ResolvedNewEmailWebhook = { configured: false, secretName: null, format: "chat" },
 ): void {
 	const target = resolveWebhookTarget(env, webhook);
 	if (!target) return;
 
-	const request = sendNotification(env, target, notification).catch((err: unknown) => {
+	const request = sendNotification(env, target, notification, webhook.format).catch((err: unknown) => {
 		// Never log the signing secret or a computed signature — only the
 		// error message.
 		console.error(
@@ -140,9 +184,15 @@ async function sendNotification(
 	env: Pick<Env, "RP_ORIGIN" | "NEW_EMAIL_WEBHOOK_SIGNING_SECRET">,
 	target: WebhookTarget,
 	notification: NewEmailNotification,
+	format: NewEmailWebhookFormat,
 ): Promise<void> {
-	const text = buildMessageText(env, notification);
-	const body = JSON.stringify({ text });
+	// Signing below covers whichever shape this produces: it operates on the
+	// serialized body, not on the payload's structure.
+	const payload =
+		format === "json"
+			? buildJsonPayload(env, notification)
+			: { text: buildMessageText(env, notification) };
+	const body = JSON.stringify(payload);
 	// Envelope headers spread over the default so an operator can set a
 	// destination-specific content-type.
 	const headers: Record<string, string> = {

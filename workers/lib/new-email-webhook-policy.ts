@@ -34,7 +34,14 @@ export interface ResolvedNewEmailWebhook {
 	configured: boolean;
 	/** Worker Secret name holding the URL, or null when muted or incomplete. */
 	secretName: string | null;
+	/**
+	 * Payload shape for the winning tier. Defaults to `chat`, including on the
+	 * global-fallback path, so existing deployments are unchanged.
+	 */
+	format: NewEmailWebhookFormat;
 }
+
+export type NewEmailWebhookFormat = "chat" | "json";
 
 /** The tier blocks `resolveMailboxSettings` already returns. */
 export interface NewEmailWebhookTiers {
@@ -53,7 +60,10 @@ export interface NewEmailWebhookTiers {
 export function resolveNewEmailWebhook(tiers: NewEmailWebhookTiers): ResolvedNewEmailWebhook {
 	const block =
 		tiers.raw?.newEmailWebhook ?? tiers.domain?.newEmailWebhook ?? tiers.org?.newEmailWebhook;
-	if (!block) return { configured: false, secretName: null };
-	if (block.enabled !== true) return { configured: true, secretName: null };
-	return { configured: true, secretName: block.urlSecret ?? null };
+	// Whole-object replace: `format` comes from the winning tier only, never
+	// merged across tiers, matching every other field's contract here.
+	const format: NewEmailWebhookFormat = block?.format === "json" ? "json" : "chat";
+	if (!block) return { configured: false, secretName: null, format };
+	if (block.enabled !== true) return { configured: true, secretName: null, format };
+	return { configured: true, secretName: block.urlSecret ?? null, format };
 }

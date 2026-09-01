@@ -103,6 +103,7 @@ export function NewEmailWebhookCard(props: {
 			return;
 		}
 		onChange({
+			...value,
 			enabled: true,
 			urlSecret: secretDraft || NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
 		});
@@ -165,7 +166,9 @@ export function NewEmailWebhookCard(props: {
 						value={value?.urlSecret ?? ""}
 						onChange={(e) => {
 							setSecretDraft(e.target.value);
-							onChange({ enabled: true, urlSecret: e.target.value });
+							// Spread, don't replace: a bare literal drops `format`
+							// and silently reverts the tier to chat prose.
+							onChange({ ...value, enabled: true, urlSecret: e.target.value });
 						}}
 						placeholder={`${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}SOC`}
 						aria-invalid={secretInvalid || undefined}
@@ -175,6 +178,53 @@ export function NewEmailWebhookCard(props: {
 							Secret name must start with {NEW_EMAIL_WEBHOOK_SECRET_PREFIX}.
 						</p>
 					)}
+					<fieldset className="pt-2">
+						<legend className="text-sm text-ink mb-1">Payload format</legend>
+						{(
+							[
+								[
+									"chat",
+									"Chat message",
+									"A one-line {\"text\"} message — what Slack and Google Chat incoming webhooks render.",
+								],
+								[
+									"json",
+									"Structured JSON",
+									"The event as fields (sender, subject, folder, verdict, url) for a bot or automation to parse.",
+								],
+							] as const
+						).map(([key, title, description]) => (
+							<label
+								key={key}
+								htmlFor={`new-email-webhook-${tier}-format-${key}`}
+								className="flex items-start gap-3 cursor-pointer mt-2"
+							>
+								<input
+									id={`new-email-webhook-${tier}-format-${key}`}
+									type="radio"
+									name={`new-email-webhook-${tier}-format`}
+									checked={(value?.format ?? "chat") === key}
+									onChange={() =>
+										onChange(
+											// Omit the default rather than storing it, so the
+											// blob stays minimal under absent-key-inherits.
+											key === "chat"
+												? { ...value, enabled: true, format: undefined }
+												: { ...value, enabled: true, format: key },
+										)
+									}
+									className="mt-1 h-4 w-4 accent-accent shrink-0"
+								/>
+								<span className="flex flex-col">
+									<span className="text-sm text-ink">{title}</span>
+									<span className="text-xs text-ink-3 mt-0.5 max-w-md">
+										{description}
+									</span>
+								</span>
+							</label>
+						))}
+					</fieldset>
+
 					<p className="text-xs text-ink-3">
 						Name of the Worker Secret holding the endpoint — set it with{" "}
 						<code className="pp-mono">wrangler secret put &lt;name&gt;</code>.

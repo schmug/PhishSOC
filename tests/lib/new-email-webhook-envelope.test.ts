@@ -261,3 +261,48 @@ describe("webhook secret — envelope headers vs the signature header", () => {
 		expect(headers["x-phishsoc-signature"]).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
 	});
 });
+
+/**
+ * All three webhook features at once — an envelope destination (#702), the
+ * json payload shape (#699), and request signing (#701). No single PR could
+ * cover this: each landed without the others present. It is also exactly the
+ * configuration a header-authenticated bot consumer uses.
+ */
+describe("webhook secret — envelope + json format + signing", () => {
+	let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+	});
+	afterEach(() => vi.restoreAllMocks());
+
+	it("delivers a signed json body to the envelope's url with its auth header", async () => {
+		const { ctx, settle } = makeCtx();
+		dispatchNewEmailNotification(
+			makeEnv({
+				NEW_EMAIL_WEBHOOK_SIGNING_SECRET: "signing-secret",
+				NEW_EMAIL_WEBHOOK_BOT: JSON.stringify({
+					url: API_URL,
+					headers: { Authorization: BEARER },
+				}),
+			}),
+			ctx,
+			NOTIFICATION,
+			{ configured: true, secretName: "NEW_EMAIL_WEBHOOK_BOT", format: "json" },
+		);
+		await settle();
+
+		const [url, init] = fetchSpy.mock.calls[0];
+		const headers = (init as RequestInit).headers as Record<string, string>;
+
+		expect(url).toBe(API_URL);
+		expect(headers.Authorization).toBe(BEARER);
+		expect(headers["x-phishsoc-signature"]).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
+
+		// The signed body really is the structured shape, not chat prose.
+		const parsed = JSON.parse(String((init as RequestInit).body));
+		expect(parsed.text).toBeUndefined();
+		expect(parsed.sender).toBe("alice@example.com");
+		expect(parsed.verdictAction).toBe("allow");
+	});
+});

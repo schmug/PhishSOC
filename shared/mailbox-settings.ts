@@ -362,6 +362,12 @@ export const NewEmailWebhookSettings = z
         message: `Secret name must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}`,
       })
       .optional(),
+    /**
+     * Payload shape. `chat` (the default) posts Slack/Google-Chat-compatible
+     * `{"text": "..."}` prose. `json` posts the structured event instead, for
+     * consumers that want fields rather than a sentence to regex.
+     */
+    format: z.enum(["chat", "json"]).optional(),
   })
   .passthrough();
 
