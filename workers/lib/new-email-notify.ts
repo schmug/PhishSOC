@@ -18,12 +18,23 @@
  * non-2xx response) is caught and logged here. When an execution context is
  * reachable the request is scheduled with `waitUntil`; otherwise it is still
  * issued, pre-`catch`ed so it cannot become an unhandled rejection.
+ *
+ * Request signing (issue #700): when `NEW_EMAIL_WEBHOOK_SIGNING_SECRET` is
+ * configured, every dispatch carries an `x-phishsoc-signature` header —
+ * Stripe's `t=<unix-seconds>,v1=<hex-hmac>` construction — computed with
+ * `hmacSha256Hex` (lifted from `workers/routes/yaramail-callback.ts`) over
+ * `${timestamp}.${rawBody}`, i.e. the exact serialized body about to be
+ * sent. Signing wraps whatever body is produced, so it applies identically
+ * regardless of payload shape. With no secret configured the request is
+ * byte-for-byte unchanged from before this feature existed.
  */
 
 import type { Env } from "../types";
 import type { AlertExecutionContext } from "./security-alert";
+import { hmacSha256Hex } from "./hmac";
 import {
 	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
+	type NewEmailWebhookFormat,
 	type ResolvedNewEmailWebhook,
 } from "./new-email-webhook-policy";
 
@@ -39,6 +50,9 @@ const MAX_SUBJECT_LENGTH = 120;
  * but still bounded so a hostile 100KB subject can't balloon the request.
  */
 const MAX_JSON_SUBJECT_LENGTH = 1000;
+
+/** Header carrying the outbound signature — see module doc for the format. */
+const SIGNATURE_HEADER = "x-phishsoc-signature";
 
 export interface NewEmailNotification {
 	mailboxId: string;
@@ -139,11 +153,15 @@ function buildJsonPayload(
  * any.
  *
  * No-ops silently when the webhook is unconfigured. Never throws and never
- * rejects into the caller. When `ctx` is supplied the request is scheduled
- * with `waitUntil`; otherwise the request is still issued fire-and-forget.
+ * rejects into the caller — `sendNotification`'s returned promise is always
+ * `.catch`ed before being handed to `waitUntil`, and calling an `async`
+ * function can itself never throw synchronously (any error, sync or async,
+ * becomes a promise rejection caught below). When `ctx` is supplied the
+ * request is scheduled with `waitUntil`; otherwise the request is still
+ * issued fire-and-forget.
  */
 export function dispatchNewEmailNotification(
-	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN">,
+	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN" | "NEW_EMAIL_WEBHOOK_SIGNING_SECRET">,
 	ctx: AlertExecutionContext | undefined,
 	notification: NewEmailNotification,
 	webhook: ResolvedNewEmailWebhook = { configured: false, secretName: null, format: "chat" },
@@ -151,36 +169,47 @@ export function dispatchNewEmailNotification(
 	const url = resolveWebhookUrl(env, webhook);
 	if (!url) return;
 
-	try {
-		const payload =
-			webhook.format === "json"
-				? buildJsonPayload(env, notification)
-				: { text: buildMessageText(env, notification) };
-		const request = fetch(url, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify(payload),
-			signal: AbortSignal.timeout(NEW_EMAIL_WEBHOOK_TIMEOUT_MS),
-		})
-			.then((res) => {
-				if (!res.ok) {
-					console.error(`new-email webhook returned ${res.status}`);
-				}
-			})
-			.catch((err: unknown) => {
-				console.error(
-					"new-email webhook failed:",
-					err instanceof Error ? err.message : String(err),
-				);
-			});
-		ctx?.waitUntil(request);
-	} catch (err: unknown) {
-		// A synchronous failure (e.g. fetch/AbortSignal construction) must not
-		// propagate into email receipt.
+	const request = sendNotification(env, url, notification, webhook.format).catch((err: unknown) => {
+		// Never log the signing secret or a computed signature — only the
+		// error message.
 		console.error(
 			"new-email webhook dispatch error:",
 			err instanceof Error ? err.message : String(err),
 		);
+	});
+	ctx?.waitUntil(request);
+}
+
+async function sendNotification(
+	env: Pick<Env, "RP_ORIGIN" | "NEW_EMAIL_WEBHOOK_SIGNING_SECRET">,
+	url: string,
+	notification: NewEmailNotification,
+	format: NewEmailWebhookFormat,
+): Promise<void> {
+	// Signing below covers whichever shape this produces: it operates on the
+	// serialized body, not on the payload's structure.
+	const payload =
+		format === "json"
+			? buildJsonPayload(env, notification)
+			: { text: buildMessageText(env, notification) };
+	const body = JSON.stringify(payload);
+	const headers: Record<string, string> = { "content-type": "application/json" };
+
+	const signingSecret = env.NEW_EMAIL_WEBHOOK_SIGNING_SECRET;
+	if (signingSecret) {
+		const timestamp = Math.floor(Date.now() / 1000);
+		const signature = await hmacSha256Hex(signingSecret, `${timestamp}.${body}`);
+		headers[SIGNATURE_HEADER] = `t=${timestamp},v1=${signature}`;
+	}
+
+	const res = await fetch(url, {
+		method: "POST",
+		headers,
+		body,
+		signal: AbortSignal.timeout(NEW_EMAIL_WEBHOOK_TIMEOUT_MS),
+	});
+	if (!res.ok) {
+		console.error(`new-email webhook returned ${res.status}`);
 	}
 }
 
