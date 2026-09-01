@@ -122,10 +122,10 @@ export function dispatchNewEmailNotification(
 	notification: NewEmailNotification,
 	webhook: ResolvedNewEmailWebhook = { configured: false, secretName: null },
 ): void {
-	const url = resolveWebhookUrl(env, webhook);
-	if (!url) return;
+	const target = resolveWebhookTarget(env, webhook);
+	if (!target) return;
 
-	const request = sendNotification(env, url, notification).catch((err: unknown) => {
+	const request = sendNotification(env, target, notification).catch((err: unknown) => {
 		// Never log the signing secret or a computed signature — only the
 		// error message.
 		console.error(
@@ -138,13 +138,22 @@ export function dispatchNewEmailNotification(
 
 async function sendNotification(
 	env: Pick<Env, "RP_ORIGIN" | "NEW_EMAIL_WEBHOOK_SIGNING_SECRET">,
-	url: string,
+	target: WebhookTarget,
 	notification: NewEmailNotification,
 ): Promise<void> {
 	const text = buildMessageText(env, notification);
 	const body = JSON.stringify({ text });
-	const headers: Record<string, string> = { "content-type": "application/json" };
+	// Envelope headers spread over the default so an operator can set a
+	// destination-specific content-type.
+	const headers: Record<string, string> = {
+		"content-type": "application/json",
+		...target.headers,
+	};
 
+	// Signature is assigned AFTER the envelope's headers, deliberately: an
+	// envelope must not be able to override or suppress it. Silently
+	// unsigning a delivery by setting this key in a secret would defeat the
+	// feature with no error anywhere.
 	const signingSecret = env.NEW_EMAIL_WEBHOOK_SIGNING_SECRET;
 	if (signingSecret) {
 		const timestamp = Math.floor(Date.now() / 1000);
@@ -152,7 +161,7 @@ async function sendNotification(
 		headers[SIGNATURE_HEADER] = `t=${timestamp},v1=${signature}`;
 	}
 
-	const res = await fetch(url, {
+	const res = await fetch(target.url, {
 		method: "POST",
 		headers,
 		body,
@@ -179,11 +188,93 @@ async function sendNotification(
  * API token) and have its value POSTed to an operator-chosen endpoint. Same
  * defense-in-depth as `SmtpRelayProvider` re-checking `RELAY_CREDS_`.
  */
-function resolveWebhookUrl(
+interface WebhookTarget {
+	url: string;
+	/** Extra request headers, empty for the bare-URL form. */
+	headers: Record<string, string>;
+}
+
+/**
+ * Interpret a webhook secret's value.
+ *
+ * Two accepted forms. A bare URL string is the original shape and still the
+ * default — it suits chat incoming webhooks (Slack, Google Chat, Discord),
+ * which carry their credential in the query string. A JSON envelope
+ * `{"url": "...", "headers": {...}}` covers destinations that authenticate
+ * with a header instead; Cursor's automations endpoint requires
+ * `Authorization: Bearer`.
+ *
+ * Keeping both halves inside ONE operator-set secret is the security point.
+ * Settings name the secret and nothing else, so a settings write can never
+ * pair someone else's credential with a destination of its choosing — the
+ * confused-deputy hole that forced the `FEED_ALLOWED_HOSTS` allowlist in
+ * `workers/intel/feeds.ts` cannot open here, and no allowlist is needed.
+ *
+ * Mirrors `RELAY_CREDS_*`, which holds `{"user","pass"}` JSON parsed at use
+ * time in `workers/providers/smtp-relay.ts`.
+ *
+ * `label` is the secret NAME and is safe to log; the value never is.
+ */
+function parseWebhookSecret(value: string, label: string): WebhookTarget | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		// Not JSON — the bare-URL form. A URL never parses as JSON.
+		return { url: value, headers: {} };
+	}
+
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		console.error(
+			`new-email webhook secret ${label} is neither a URL nor a {url, headers} envelope; sending nothing`,
+		);
+		return undefined;
+	}
+
+	const { url, headers } = parsed as { url?: unknown; headers?: unknown };
+	if (typeof url !== "string" || url.length === 0) {
+		// Fail closed. Falling back to the raw string would POST the literal
+		// JSON text as a URL, and there is no safe destination to guess.
+		console.error(`new-email webhook secret ${label} envelope has no usable url; sending nothing`);
+		return undefined;
+	}
+
+	const out: Record<string, string> = {};
+	if (headers && typeof headers === "object" && !Array.isArray(headers)) {
+		for (const [key, headerValue] of Object.entries(headers as Record<string, unknown>)) {
+			// Drop a non-string value rather than coercing it — a malformed
+			// header is a misconfiguration, not something to guess at.
+			if (typeof headerValue === "string") out[key] = headerValue;
+		}
+	}
+	return { url, headers: out };
+}
+
+/**
+ * Pick the destination for this email.
+ *
+ * No tier configured falls back to the legacy global `NEW_EMAIL_WEBHOOK_URL`,
+ * so a deployment that never touches settings keeps working unchanged.
+ *
+ * Once a tier IS configured there is deliberately NO fallback: a muted,
+ * half-written, or invalid tier sends nothing. Falling back would leak the
+ * mail to the wider channel the operator configured that tier to replace.
+ *
+ * The prefix is re-checked here even though the Zod schema enforces it on
+ * write — a hand-edited R2 blob never passes through Zod, and without this
+ * check a settings write could name any secret in `env` (a signing key, an
+ * API token) and have its value POSTed to an operator-chosen endpoint. Same
+ * defense-in-depth as `SmtpRelayProvider` re-checking `RELAY_CREDS_`.
+ */
+function resolveWebhookTarget(
 	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN">,
 	webhook: ResolvedNewEmailWebhook,
-): string | undefined {
-	if (!webhook.configured) return env.NEW_EMAIL_WEBHOOK_URL;
+): WebhookTarget | undefined {
+	if (!webhook.configured) {
+		const globalUrl = env.NEW_EMAIL_WEBHOOK_URL;
+		if (!globalUrl) return undefined;
+		return parseWebhookSecret(globalUrl, "NEW_EMAIL_WEBHOOK_URL");
+	}
 
 	const name = webhook.secretName;
 	if (!name) return undefined;
@@ -200,5 +291,5 @@ function resolveWebhookUrl(
 		console.error(`new-email webhook secret ${name} is not configured; sending nothing`);
 		return undefined;
 	}
-	return value;
+	return parseWebhookSecret(value, name);
 }
