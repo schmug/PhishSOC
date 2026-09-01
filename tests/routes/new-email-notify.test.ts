@@ -455,3 +455,144 @@ describe("receiveEmail — tiered new-mail webhook", () => {
 		expect(callsToHost(fetchSpy.mock.calls, "grok.example.com")).toHaveLength(1);
 	});
 });
+
+/**
+ * Outbound request signing (issue #700). `NEW_EMAIL_WEBHOOK_SIGNING_SECRET`
+ * gates an `x-phishsoc-signature: t=,v1=` header — Stripe's construction —
+ * computed over `${timestamp}.${rawBody}`. Applies uniformly regardless of
+ * destination (global fallback or a per-tier secret) or payload shape, since
+ * it signs whatever serialized body is about to be sent.
+ */
+async function hmacHex(secret: string, message: string): Promise<string> {
+	const enc = new TextEncoder();
+	const key = await crypto.subtle.importKey(
+		"raw",
+		enc.encode(secret),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+	return Array.from(new Uint8Array(sig))
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+}
+
+describe("receiveEmail — new-email webhook request signing", () => {
+	const SIGNING_SECRET = "test-signing-secret-value";
+
+	let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockedResolve.mockResolvedValue(makeSettings());
+		mockedPipeline.mockResolvedValue({
+			verdict: { action: "allow", score: 12, signals: [], explanation: "" },
+			skipped: false,
+		} as never);
+		mockedIsDmarcReport.mockReturnValue(false);
+		mockedIsDmarcRuf.mockReturnValue(false);
+		mockedIsTlsRptReport.mockReturnValue(false);
+		fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("no signing secret configured: headers and body are byte-for-byte unchanged from pre-#700 behavior", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		await receiveEmail(makeNormalized(makeEmail()), makeEnv(stub, { NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL }), ctx);
+		await settle();
+
+		expect(fetchSpy).toHaveBeenCalledOnce();
+		const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe(WEBHOOK_URL);
+		expect(init.method).toBe("POST");
+		expect(init.headers).toEqual({ "content-type": "application/json" });
+		const body = JSON.parse(String(init.body)) as { text: string };
+		expect(Object.keys(body)).toEqual(["text"]);
+	});
+
+	it("signing secret configured: carries a t=,v1= header whose signature independently verifies against the captured body", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		await receiveEmail(
+			makeNormalized(makeEmail()),
+			makeEnv(stub, {
+				NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL,
+				NEW_EMAIL_WEBHOOK_SIGNING_SECRET: SIGNING_SECRET,
+			}),
+			ctx,
+		);
+		await settle();
+
+		expect(fetchSpy).toHaveBeenCalledOnce();
+		const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		const headers = init.headers as Record<string, string>;
+		expect(headers["content-type"]).toBe("application/json");
+
+		const match = /^t=(\d+),v1=([0-9a-f]+)$/.exec(headers["x-phishsoc-signature"] ?? "");
+		expect(match).not.toBeNull();
+		const [, timestamp, signature] = match as unknown as [string, string, string];
+
+		// Recompute the signature independently from the captured body,
+		// timestamp, and secret and assert equality — not merely that a
+		// header is present (issue #700 acceptance criterion 3).
+		const expected = await hmacHex(SIGNING_SECRET, `${timestamp}.${String(init.body)}`);
+		expect(signature).toBe(expected);
+
+		// The timestamp is fresh and part of the signed material, so a
+		// captured request can't be replayed indefinitely.
+		expect(Math.abs(Date.now() / 1000 - Number(timestamp))).toBeLessThan(30);
+	});
+
+	it("a signature computed with the wrong secret does not match", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		await receiveEmail(
+			makeNormalized(makeEmail()),
+			makeEnv(stub, {
+				NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL,
+				NEW_EMAIL_WEBHOOK_SIGNING_SECRET: SIGNING_SECRET,
+			}),
+			ctx,
+		);
+		await settle();
+
+		const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		const headers = init.headers as Record<string, string>;
+		const [, timestamp, signature] = /^t=(\d+),v1=([0-9a-f]+)$/.exec(
+			headers["x-phishsoc-signature"] ?? "",
+		) as unknown as [string, string, string];
+
+		const wrongSecretSignature = await hmacHex("not-the-real-secret", `${timestamp}.${String(init.body)}`);
+		expect(signature).not.toBe(wrongSecretSignature);
+	});
+
+	it("signs requests routed to a per-tier destination the same way as the global fallback", async () => {
+		const stub = makeMailboxStub();
+		const { ctx, settle } = makeCtx();
+		mockedResolve.mockResolvedValue(
+			makeSettings({ raw: { newEmailWebhook: { enabled: true, urlSecret: "NEW_EMAIL_WEBHOOK_GROK" } } }),
+		);
+
+		await receiveEmail(
+			makeNormalized(makeEmail()),
+			makeEnv(stub, {
+				NEW_EMAIL_WEBHOOK_URL: WEBHOOK_URL,
+				NEW_EMAIL_WEBHOOK_GROK: "https://grok.example.com/hooks/abc?key=k",
+				NEW_EMAIL_WEBHOOK_SIGNING_SECRET: SIGNING_SECRET,
+			}),
+			ctx,
+		);
+		await settle();
+
+		expect(fetchSpy).toHaveBeenCalledOnce();
+		const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		expect(new URL(url).hostname).toBe("grok.example.com");
+		const headers = init.headers as Record<string, string>;
+		expect(headers["x-phishsoc-signature"]).toMatch(/^t=\d+,v1=[0-9a-f]+$/);
+	});
+});
