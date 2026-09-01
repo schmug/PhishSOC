@@ -85,6 +85,46 @@ scoped to `/api/v1/confirm` from the Cloudflare dashboard.
 | **Rotation cadence** | Same as the global secret — whenever the destination changes, or immediately if the URL is suspected leaked. |
 | **If missing** | A tier naming a secret that is unset (or outside the prefix) sends nothing for that scope and logs the reason. It deliberately does **not** fall back to the global URL, which would leak the mail to the channel that tier was configured to replace. |
 
+### `NEW_EMAIL_WEBHOOK_SIGNING_SECRET` — optional
+
+| Field | Value |
+| --- | --- |
+| **What it is** | HMAC-SHA256 signing secret for outbound new-email webhook requests (issue #700). Applies to every destination — the global `NEW_EMAIL_WEBHOOK_URL` fallback and every per-tier `NEW_EMAIL_WEBHOOK_*` secret alike — so it is a single deployment-wide signing identity, not a per-destination one. When set, every request carries an `x-phishsoc-signature: t=<unix-seconds>,v1=<hex-hmac>` header (Stripe's `t=,v1=` construction), letting a receiver verify both authenticity and integrity and reject stale or replayed deliveries. The signature is computed over `${timestamp}.${rawBody}` — the exact serialized request body, whatever payload format it holds. |
+| **Where stored** | Cloudflare Workers secret — `wrangler secret put NEW_EMAIL_WEBHOOK_SIGNING_SECRET`. |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role; the operator(s) who need to verify signatures on the receiving end |
+| **Rotation cadence** | Every 90 days, or immediately on suspected compromise. Coordinate with every receiver before rotating — an old signature stops verifying the moment the Worker secret changes, so update receiver-side verification secrets in the same maintenance window. Generate a new value: `openssl rand -hex 32`. |
+| **If missing** | The outbound request is sent exactly as it was before this feature existed — no signature header, same headers and body. Signing is opt-in and fully backward compatible. |
+| **Receiver-side verification** | Reject any request whose signature doesn't verify, and reject stale timestamps to bound replay. Node.js example: |
+
+```js
+const crypto = require("crypto");
+
+// rawBody must be the exact bytes received — read it before any JSON.parse.
+function verifyPhishSocSignature(rawBody, signatureHeader, secret, toleranceSeconds = 300) {
+  const match = /^t=(\d+),v1=([0-9a-f]+)$/.exec(signatureHeader || "");
+  if (!match) return false;
+
+  const timestamp = Number(match[1]);
+  const signature = match[2];
+  if (Math.abs(Date.now() / 1000 - timestamp) > toleranceSeconds) return false; // stale/replayed
+
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${timestamp}.${rawBody}`)
+    .digest("hex");
+
+  const received = Buffer.from(signature, "hex");
+  const wanted = Buffer.from(expected, "hex");
+  return received.length === wanted.length && crypto.timingSafeEqual(received, wanted);
+}
+
+// const ok = verifyPhishSocSignature(
+//   rawBody,
+//   req.header("x-phishsoc-signature"),
+//   process.env.NEW_EMAIL_WEBHOOK_SIGNING_SECRET,
+// );
+```
+
 ### `RP_ID` / `RP_ORIGIN` — WebAuthn Relying Party config (wrangler vars, not secrets)
 
 Set in `wrangler.jsonc` `vars`. `RP_ID` is the effective domain

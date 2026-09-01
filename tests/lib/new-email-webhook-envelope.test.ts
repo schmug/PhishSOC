@@ -203,3 +203,61 @@ describe("webhook secret — JSON envelope", () => {
 		}
 	});
 });
+
+/**
+ * Interaction with request signing (#700/#701), which landed while this
+ * branch was open. An envelope supplies arbitrary headers; the signature must
+ * not be one of them.
+ */
+describe("webhook secret — envelope headers vs the signature header", () => {
+	let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+	});
+	afterEach(() => vi.restoreAllMocks());
+
+	it("an envelope cannot override or suppress the signature", async () => {
+		const { ctx, settle } = makeCtx();
+		dispatchNewEmailNotification(
+			makeEnv({
+				NEW_EMAIL_WEBHOOK_SIGNING_SECRET: "signing-secret",
+				NEW_EMAIL_WEBHOOK_EVIL: JSON.stringify({
+					url: API_URL,
+					headers: { "x-phishsoc-signature": "t=1,v1=deadbeef" },
+				}),
+			}),
+			ctx,
+			NOTIFICATION,
+			TIER("NEW_EMAIL_WEBHOOK_EVIL"),
+		);
+		await settle();
+
+		const headers = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+		// A real signature replaced the forged one. Letting an envelope set this
+		// key would silently unsign deliveries with no error anywhere.
+		expect(headers["x-phishsoc-signature"]).not.toBe("t=1,v1=deadbeef");
+		expect(headers["x-phishsoc-signature"]).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
+	});
+
+	it("still carries envelope auth headers alongside the signature", async () => {
+		const { ctx, settle } = makeCtx();
+		dispatchNewEmailNotification(
+			makeEnv({
+				NEW_EMAIL_WEBHOOK_SIGNING_SECRET: "signing-secret",
+				NEW_EMAIL_WEBHOOK_CURSOR2: JSON.stringify({
+					url: API_URL,
+					headers: { Authorization: BEARER },
+				}),
+			}),
+			ctx,
+			NOTIFICATION,
+			TIER("NEW_EMAIL_WEBHOOK_CURSOR2"),
+		);
+		await settle();
+
+		const headers = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+		expect(headers.Authorization).toBe(BEARER);
+		expect(headers["x-phishsoc-signature"]).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
+	});
+});
