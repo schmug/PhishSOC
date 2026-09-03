@@ -1,7 +1,8 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { Input } from "@cloudflare/kumo";
+import { Button, Input } from "@cloudflare/kumo";
 import { useState } from "react";
+import api from "~/services/api";
 import { NEW_EMAIL_WEBHOOK_SECRET_PREFIX } from "shared/mailbox-settings";
 import type { NewEmailWebhookSettings } from "shared/mailbox-settings";
 
@@ -90,8 +91,41 @@ export function NewEmailWebhookCard(props: {
 		value?.urlSecret || NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
 	);
 
+	// Result of the last "Send test", cleared whenever the draft changes below —
+	// a stale "Delivered" sitting next to an edited secret name reads as a pass
+	// for a config that was never tested.
+	const [testing, setTesting] = useState(false);
+	const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null);
+
 	const mode = newEmailWebhookMode(value);
 	const secretInvalid = mode === "configured" && !isNewEmailWebhookValid(value);
+
+	/**
+	 * Post the DRAFT block, not the saved one, so a secret name can be verified
+	 * before it is committed — which is when the typo happens. The endpoint
+	 * resolves the destination from the named Worker Secret server-side; the
+	 * URL never travels in either direction.
+	 */
+	const runTest = async () => {
+		setTesting(true);
+		setTestResult(null);
+		try {
+			const data = await api.testNewEmailWebhook({
+				urlSecret: value?.urlSecret ?? "",
+				...(value?.format ? { format: value.format } : {}),
+				tier,
+			});
+			setTestResult(
+				data.ok
+					? { ok: true, detail: `Delivered — the endpoint returned HTTP ${data.status}.` }
+					: { ok: false, detail: `${data.stage}: ${data.error}` },
+			);
+		} catch (e) {
+			setTestResult({ ok: false, detail: (e as Error).message });
+		} finally {
+			setTesting(false);
+		}
+	};
 
 	const selectMode = (next: NewEmailWebhookMode) => {
 		if (next === "inherit") {
@@ -165,6 +199,9 @@ export function NewEmailWebhookCard(props: {
 						label="Webhook secret name"
 						value={value?.urlSecret ?? ""}
 						onChange={(e) => {
+							// A result left standing next to an edited draft reads as a
+							// pass for a configuration that was never tested.
+							setTestResult(null);
 							setSecretDraft(e.target.value);
 							// Spread, don't replace: a bare literal drops `format`
 							// and silently reverts the tier to chat prose.
@@ -204,15 +241,16 @@ export function NewEmailWebhookCard(props: {
 									type="radio"
 									name={`new-email-webhook-${tier}-format`}
 									checked={(value?.format ?? "chat") === key}
-									onChange={() =>
+									onChange={() => {
+										setTestResult(null);
 										onChange(
 											// Omit the default rather than storing it, so the
 											// blob stays minimal under absent-key-inherits.
 											key === "chat"
 												? { ...value, enabled: true, format: undefined }
 												: { ...value, enabled: true, format: key },
-										)
-									}
+										);
+									}}
 									className="mt-1 h-4 w-4 accent-accent shrink-0"
 								/>
 								<span className="flex flex-col">
@@ -230,6 +268,31 @@ export function NewEmailWebhookCard(props: {
 						<code className="pp-mono">wrangler secret put &lt;name&gt;</code>.
 						The endpoint itself is a bearer credential and is never stored in
 						settings.
+					</p>
+
+					<div className="flex items-center gap-2 border-t border-line pt-3">
+						<Button
+							variant="secondary"
+							size="sm"
+							type="button"
+							onClick={runTest}
+							loading={testing}
+							disabled={secretInvalid}
+						>
+							Send test
+						</Button>
+						{testResult && (
+							<span
+								role={testResult.ok ? "status" : "alert"}
+								className={`text-xs ${testResult.ok ? "text-ink-3" : "text-red-600 dark:text-red-400"}`}
+							>
+								{testResult.detail}
+							</span>
+						)}
+					</div>
+					<p className="text-xs text-ink-3">
+						Sends one clearly-marked test message to the live destination, signed
+						the same way real mail is.
 					</p>
 				</div>
 			)}

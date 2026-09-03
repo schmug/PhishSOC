@@ -169,23 +169,42 @@ export function dispatchNewEmailNotification(
 	const target = resolveWebhookTarget(env, webhook);
 	if (!target) return;
 
-	const request = sendNotification(env, target, notification, webhook.format).catch((err: unknown) => {
-		// Never log the signing secret or a computed signature — only the
-		// error message.
-		console.error(
-			"new-email webhook dispatch error:",
-			err instanceof Error ? err.message : String(err),
-		);
-	});
+	const request = deliverNewEmailNotification(env, target, notification, webhook.format)
+		.then(({ ok, status }) => {
+			// Logged here rather than inside the delivery call: the test
+			// endpoint reports a non-2xx to the operator instead, and a
+			// swallowed log is the wrong outcome for an awaited caller.
+			if (!ok) console.error(`new-email webhook returned ${status}`);
+		})
+		.catch((err: unknown) => {
+			// Never log the signing secret or a computed signature — only the
+			// error message.
+			console.error(
+				"new-email webhook dispatch error:",
+				err instanceof Error ? err.message : String(err),
+			);
+		});
 	ctx?.waitUntil(request);
 }
 
-async function sendNotification(
+/**
+ * POST one notification and REPORT the outcome instead of swallowing it.
+ *
+ * Split out of `dispatchNewEmailNotification` so the settings UI's "Send
+ * test" button (`POST /api/v1/new-email-webhook/test`) drives this exact
+ * path — the same payload builders, the same signing, the same timeout — and
+ * can tell the operator what happened. A test that reimplemented delivery
+ * would verify a copy of the code rather than the code that runs on mail.
+ *
+ * Rejects on a transport failure (DNS, TLS, timeout); a non-2xx is a resolved
+ * `{ ok: false, status }`, since the request itself succeeded.
+ */
+export async function deliverNewEmailNotification(
 	env: Pick<Env, "RP_ORIGIN" | "NEW_EMAIL_WEBHOOK_SIGNING_SECRET">,
 	target: WebhookTarget,
 	notification: NewEmailNotification,
 	format: NewEmailWebhookFormat,
-): Promise<void> {
+): Promise<{ ok: boolean; status: number }> {
 	// Signing below covers whichever shape this produces: it operates on the
 	// serialized body, not on the payload's structure.
 	const payload =
@@ -217,32 +236,51 @@ async function sendNotification(
 		body,
 		signal: AbortSignal.timeout(NEW_EMAIL_WEBHOOK_TIMEOUT_MS),
 	});
-	if (!res.ok) {
-		console.error(`new-email webhook returned ${res.status}`);
-	}
+	return { ok: res.ok, status: res.status };
 }
 
 /**
- * Pick the destination URL for this email.
+ * A synthetic notification for the "Send test" button.
  *
- * No tier configured falls back to the legacy global `NEW_EMAIL_WEBHOOK_URL`,
- * so a deployment that never touches settings keeps working unchanged.
+ * Deliberately routed through the real `buildMessageText` / `buildJsonPayload`
+ * so the format toggle and the HMAC signature are genuinely exercised — a
+ * bespoke test body would prove nothing about what real mail sends.
  *
- * Once a tier IS configured there is deliberately NO fallback: a muted,
- * half-written, or invalid tier sends nothing. Falling back would leak the
- * mail to the wider channel the operator configured that tier to replace.
- *
- * The prefix is re-checked here even though the Zod schema enforces it on
- * write — a hand-edited R2 blob never passes through Zod, and without this
- * check a settings write could name any secret in `env` (a signing key, an
- * API token) and have its value POSTed to an operator-chosen endpoint. Same
- * defense-in-depth as `SmtpRelayProvider` re-checking `RELAY_CREDS_`.
+ * The values are unmistakably synthetic on purpose: this lands in a live
+ * operator channel, and a consumer that opens a ticket per event must be able
+ * to tell this apart from mail. `scope` names the tier the operator clicked
+ * from, so a shared channel shows which config produced the message.
  */
-interface WebhookTarget {
+export function buildTestNotification(scope: string): NewEmailNotification {
+	return {
+		mailboxId: `${scope}-settings-test`,
+		messageId: "webhook-test",
+		folder: "inbox",
+		sender: "phishsoc-webhook-test@invalid",
+		subject: "PhishSOC webhook test — no action needed",
+		verdictAction: "test",
+		verdictScore: 0,
+	};
+}
+
+/**
+ * Extra request headers, empty for the bare-URL form.
+ */
+export interface WebhookTarget {
 	url: string;
-	/** Extra request headers, empty for the bare-URL form. */
 	headers: Record<string, string>;
 }
+
+/**
+ * Why a secret did not yield a usable destination.
+ *
+ * The reason is carried rather than logged-and-dropped so the test endpoint
+ * can report which stage failed. Every `error` string here names the secret
+ * NAME only — never its value, which is a bearer credential.
+ */
+export type WebhookTargetResolution =
+	| { ok: true; target: WebhookTarget }
+	| { ok: false; error: string };
 
 /**
  * Interpret a webhook secret's value.
@@ -265,28 +303,30 @@ interface WebhookTarget {
  *
  * `label` is the secret NAME and is safe to log; the value never is.
  */
-function parseWebhookSecret(value: string, label: string): WebhookTarget | undefined {
+function parseWebhookSecret(value: string, label: string): WebhookTargetResolution {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(value);
 	} catch {
 		// Not JSON — the bare-URL form. A URL never parses as JSON.
-		return { url: value, headers: {} };
+		return { ok: true, target: { url: value, headers: {} } };
 	}
 
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		console.error(
-			`new-email webhook secret ${label} is neither a URL nor a {url, headers} envelope; sending nothing`,
-		);
-		return undefined;
+		return {
+			ok: false,
+			error: `new-email webhook secret ${label} is neither a URL nor a {url, headers} envelope; sending nothing`,
+		};
 	}
 
 	const { url, headers } = parsed as { url?: unknown; headers?: unknown };
 	if (typeof url !== "string" || url.length === 0) {
 		// Fail closed. Falling back to the raw string would POST the literal
 		// JSON text as a URL, and there is no safe destination to guess.
-		console.error(`new-email webhook secret ${label} envelope has no usable url; sending nothing`);
-		return undefined;
+		return {
+			ok: false,
+			error: `new-email webhook secret ${label} envelope has no usable url; sending nothing`,
+		};
 	}
 
 	const out: Record<string, string> = {};
@@ -297,7 +337,40 @@ function parseWebhookSecret(value: string, label: string): WebhookTarget | undef
 			if (typeof headerValue === "string") out[key] = headerValue;
 		}
 	}
-	return { url, headers: out };
+	return { ok: true, target: { url, headers: out } };
+}
+
+/**
+ * Resolve ONE named secret to a destination.
+ *
+ * The prefix is re-checked here even though the Zod schema enforces it on
+ * write — a hand-edited R2 blob never passes through Zod, and without this
+ * check a settings write could name any secret in `env` (a signing key, an
+ * API token) and have its value POSTed to an operator-chosen endpoint. Same
+ * defense-in-depth as `SmtpRelayProvider` re-checking `RELAY_CREDS_`.
+ *
+ * Shared with the test endpoint deliberately: a second copy of this guard is
+ * exactly how that confused-deputy hole reopens.
+ */
+export function resolveWebhookSecretTarget(
+	env: unknown,
+	secretName: string,
+): WebhookTargetResolution {
+	if (!secretName.startsWith(NEW_EMAIL_WEBHOOK_SECRET_PREFIX)) {
+		return {
+			ok: false,
+			error: `new-email webhook secret ${secretName} must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}; sending nothing`,
+		};
+	}
+
+	const value = (env as Record<string, unknown>)[secretName];
+	if (typeof value !== "string" || value.length === 0) {
+		return {
+			ok: false,
+			error: `new-email webhook secret ${secretName} is not configured; sending nothing`,
+		};
+	}
+	return parseWebhookSecret(value, secretName);
 }
 
 /**
@@ -309,12 +382,6 @@ function parseWebhookSecret(value: string, label: string): WebhookTarget | undef
  * Once a tier IS configured there is deliberately NO fallback: a muted,
  * half-written, or invalid tier sends nothing. Falling back would leak the
  * mail to the wider channel the operator configured that tier to replace.
- *
- * The prefix is re-checked here even though the Zod schema enforces it on
- * write — a hand-edited R2 blob never passes through Zod, and without this
- * check a settings write could name any secret in `env` (a signing key, an
- * API token) and have its value POSTed to an operator-chosen endpoint. Same
- * defense-in-depth as `SmtpRelayProvider` re-checking `RELAY_CREDS_`.
  */
 function resolveWebhookTarget(
 	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN">,
@@ -323,23 +390,17 @@ function resolveWebhookTarget(
 	if (!webhook.configured) {
 		const globalUrl = env.NEW_EMAIL_WEBHOOK_URL;
 		if (!globalUrl) return undefined;
-		return parseWebhookSecret(globalUrl, "NEW_EMAIL_WEBHOOK_URL");
+		return unwrap(parseWebhookSecret(globalUrl, "NEW_EMAIL_WEBHOOK_URL"));
 	}
 
 	const name = webhook.secretName;
 	if (!name) return undefined;
+	return unwrap(resolveWebhookSecretTarget(env, name));
+}
 
-	if (!name.startsWith(NEW_EMAIL_WEBHOOK_SECRET_PREFIX)) {
-		console.error(
-			`new-email webhook secret ${name} must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}; sending nothing`,
-		);
-		return undefined;
-	}
-
-	const value = (env as unknown as Record<string, unknown>)[name];
-	if (typeof value !== "string" || value.length === 0) {
-		console.error(`new-email webhook secret ${name} is not configured; sending nothing`);
-		return undefined;
-	}
-	return parseWebhookSecret(value, name);
+/** Log-and-drop, the fire-and-forget path's contract for a bad secret. */
+function unwrap(resolution: WebhookTargetResolution): WebhookTarget | undefined {
+	if (resolution.ok) return resolution.target;
+	console.error(resolution.error);
+	return undefined;
 }
