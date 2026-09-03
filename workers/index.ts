@@ -20,11 +20,16 @@ import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, 
 import { OrgSettings } from "../shared/org-settings";
 import { getDomainSettings, putDomainSettings, domainFromMailboxId } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
-import { MailboxSettings, SidecarSettings } from "../shared/mailbox-settings";
+import { MailboxSettings, NewEmailWebhookSettings, SidecarSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline, type FinalVerdict } from "./security";
 import { resolveRelayPolicy } from "./lib/relay-policy";
 import { relayAfterVerdict } from "./lib/gateway-relay";
-import { dispatchNewEmailNotification } from "./lib/new-email-notify";
+import {
+	buildTestNotification,
+	deliverNewEmailNotification,
+	dispatchNewEmailNotification,
+	resolveWebhookSecretTarget,
+} from "./lib/new-email-notify";
 import { resolveNewEmailWebhook } from "./lib/new-email-webhook-policy";
 import { parseAuthResults } from "./security/auth";
 import { runDeepScan } from "./intel/deep-scan";
@@ -872,6 +877,77 @@ app.put("/api/v1/domains/:domain/settings", async (c) => {
 	const stripped = stripDefaultEqual(parsed.data);
 	const written = await putDomainSettings(c.env, domain, stripped);
 	return c.json({ domain, settings: written });
+});
+
+/** Strip a webhook target's URL and header credentials out of free text. */
+function redactTarget(text: string, target: { url: string; headers: Record<string, string> }): string {
+	let out = target.url ? text.replaceAll(target.url, "<webhook url>") : text;
+	for (const value of Object.values(target.headers)) {
+		if (value) out = out.replaceAll(value, "<redacted>");
+	}
+	return out;
+}
+
+// "Send test" for the per-tier new-mail webhook. Every failure path in
+// `dispatchNewEmailNotification` is deliberately silent — a broken webhook must
+// never block email receipt — so without this an operator only learns a secret
+// name is wrong by waiting for real mail and reading Worker logs.
+//
+// Tier-agnostic on purpose: the block arrives in the body, so the settings card
+// can verify a secret name BEFORE it is saved, which is when the typo happens.
+// That grants nothing a settings PUT doesn't already: the destination is
+// resolved server-side from a NEW_EMAIL_WEBHOOK_-prefixed secret and never
+// comes from the request, so this cannot become a generic outbound-fetch
+// primitive. Staged {ok, stage, error} shape mirrors workers/routes/sidecar.ts.
+app.post("/api/v1/new-email-webhook/test", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as { tier?: unknown };
+	// Labels the outbound message so a shared channel receiving tests from all
+	// three tiers shows which config produced the one in front of the operator.
+	const tier = body?.tier === "org" || body?.tier === "domain" ? body.tier : "mailbox";
+	const parsed = NewEmailWebhookSettings.safeParse(body ?? {});
+	// `config` vs `secret` is the distinction an operator acts on: "you typed
+	// the name wrong" versus "the name is fine, the secret isn't usable".
+	// Report the schema's own message, never the submitted value — a
+	// mis-prefixed name may well be some other secret's name.
+	if (!parsed.success) {
+		return c.json({
+			ok: false,
+			stage: "config",
+			error: parsed.error.issues[0]?.message ?? "Invalid webhook settings",
+		});
+	}
+	const urlSecret = parsed.data.urlSecret;
+	if (!urlSecret) {
+		return c.json({ ok: false, stage: "config", error: "No webhook secret name set." });
+	}
+
+	const resolution = resolveWebhookSecretTarget(c.env, urlSecret);
+	if (!resolution.ok) return c.json({ ok: false, stage: "secret", error: resolution.error });
+
+	try {
+		const result = await deliverNewEmailNotification(
+			c.env,
+			resolution.target,
+			buildTestNotification(tier),
+			parsed.data.format === "json" ? "json" : "chat",
+		);
+		if (!result.ok) {
+			return c.json({
+				ok: false,
+				stage: "delivery",
+				status: result.status,
+				error: `The endpoint returned HTTP ${result.status}.`,
+			});
+		}
+		return c.json({ ok: true, status: result.status });
+	} catch (err) {
+		// A transport failure's message can embed the request URL, and that URL
+		// IS the credential (a Google Chat hook carries its key and token in the
+		// query string). Redact the destination and any envelope header value
+		// before the message reaches a response body.
+		const detail = err instanceof Error ? err.message : String(err);
+		return c.json({ ok: false, stage: "delivery", error: redactTarget(detail, resolution.target) });
+	}
 });
 
 // DMARC RUF records for a domain (issue #171). Fans out to all mailboxes on

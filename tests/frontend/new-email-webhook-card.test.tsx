@@ -21,7 +21,7 @@
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import { NEW_EMAIL_WEBHOOK_SECRET_PREFIX } from "shared/mailbox-settings";
 import type { NewEmailWebhookSettings } from "shared/mailbox-settings";
@@ -309,3 +309,150 @@ describe("NewEmailWebhookCard — payload format", () => {
 		expect(emitted()).toMatchObject({ format: "json" });
 	});
 })
+
+
+/**
+ * "Send test" (the button next to the secret name).
+ *
+ * Every failure path in `dispatchNewEmailNotification` is silent by design, so
+ * a typo'd secret name or a receiver that rejects the HMAC is otherwise
+ * invisible until real mail arrives. The button posts the DRAFT block, so a
+ * name can be verified before it is saved — which is when the typo happens.
+ */
+describe("NewEmailWebhookCard — send test", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	/**
+	 * A real Response, not a duck-typed stub: the call goes through
+	 * `api.testNewEmailWebhook`, and `app/services/api.ts` reads `res.ok` and
+	 * `res.headers.get("content-type")` before parsing.
+	 */
+	const jsonResponse = (body: unknown) =>
+		new Response(JSON.stringify(body), {
+			status: 200,
+			headers: { "content-type": "application/json" },
+		});
+
+	const testButton = () => screen.getByRole("button", { name: /send test/i });
+
+	it("offers no test button while the scope is inheriting", () => {
+		render(<Harness />);
+
+		expect(screen.queryByRole("button", { name: /send test/i })).toBeNull();
+	});
+
+	it("offers no test button while the scope is muted", () => {
+		render(<Harness initial={{ enabled: false }} />);
+
+		expect(screen.queryByRole("button", { name: /send test/i })).toBeNull();
+	});
+
+	it("disables the test button while the secret name fails the prefix guard", () => {
+		render(<Harness initial={{ enabled: true, urlSecret: "HUB_API_KEY" }} />);
+
+		expect(testButton()).toBeDisabled();
+	});
+
+	it("posts the draft block and its tier, then reports delivery", async () => {
+		const user = userEvent.setup();
+		const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true, status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		render(
+			<Harness
+				initial={{
+					enabled: true,
+					urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}SOC`,
+					format: "json",
+				}}
+				tier="org"
+			/>,
+		);
+
+		await user.click(testButton());
+
+		expect(await screen.findByRole("status")).toHaveTextContent(/delivered/i);
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe("/api/v1/new-email-webhook/test");
+		expect(JSON.parse(init.body as string)).toMatchObject({
+			urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}SOC`,
+			format: "json",
+			tier: "org",
+		});
+	});
+
+	it("shows the stage-prefixed error as an alert when the endpoint reports a failure", async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				jsonResponse({
+					ok: false,
+					stage: "secret",
+					error: "new-email webhook secret NEW_EMAIL_WEBHOOK_SOC is not configured; sending nothing",
+				}),
+			),
+		);
+
+		render(
+			<Harness initial={{ enabled: true, urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}SOC` }} />,
+		);
+
+		await user.click(testButton());
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(/secret:/i);
+	});
+
+	it("clears a stale result when the secret name is edited afterwards", async () => {
+		// A "Delivered" left sitting next to an edited name reads as a pass for
+		// a configuration that was never actually tested.
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(jsonResponse({ ok: true, status: 200 })),
+		);
+
+		render(
+			<Harness initial={{ enabled: true, urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}SOC` }} />,
+		);
+
+		await user.click(testButton());
+		expect(await screen.findByRole("status")).toBeInTheDocument();
+
+		await user.type(secretInput(), "2");
+
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("clears a stale result when the payload format is changed afterwards", async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(jsonResponse({ ok: true, status: 200 })),
+		);
+
+		render(
+			<Harness initial={{ enabled: true, urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}SOC` }} />,
+		);
+
+		await user.click(testButton());
+		expect(await screen.findByRole("status")).toBeInTheDocument();
+
+		await user.click(screen.getByLabelText(/structured json/i));
+
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("shows the thrown message as an alert when the request itself fails", async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network unreachable")));
+
+		render(
+			<Harness initial={{ enabled: true, urlSecret: `${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}SOC` }} />,
+		);
+
+		await user.click(testButton());
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(/network unreachable/i);
+	});
+});
