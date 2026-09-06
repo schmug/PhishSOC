@@ -105,13 +105,16 @@ eventRoutes.post("/", async (c) => {
 	);
 	if (attrStatements.length > 0) await c.env.DB.batch(attrStatements);
 
+	// ⚡ Bolt: Batch tag insertions to prevent N+1 query performance bottleneck
+	// when events arrive with dozens of tags.
+	const tagStatements = [];
 	for (const t of incoming.Tag ?? []) {
-		await c.env.DB.prepare(`INSERT OR IGNORE INTO tags (name) VALUES (?1)`).bind(t.name).run();
-		await c.env.DB
-			.prepare(`INSERT OR IGNORE INTO event_tags (event_uuid, tag_name) VALUES (?1, ?2)`)
-			.bind(eventUuid, t.name)
-			.run();
+		tagStatements.push(c.env.DB.prepare(`INSERT OR IGNORE INTO tags (name) VALUES (?1)`).bind(t.name));
+		tagStatements.push(
+			c.env.DB.prepare(`INSERT OR IGNORE INTO event_tags (event_uuid, tag_name) VALUES (?1, ?2)`).bind(eventUuid, t.name)
+		);
 	}
+	if (tagStatements.length > 0) await c.env.DB.batch(tagStatements);
 
 	// Corroboration update (sync — keeps feed generation consistent; a Queue
 	// push is also sent so the triage agent can dedupe/tag asynchronously).
