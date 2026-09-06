@@ -20,6 +20,7 @@
  */
 
 import { Hono } from "hono";
+import { secureHeaders } from "hono/secure-headers";
 import { eventRoutes } from "./routes/events";
 import { feedRoutes, publicFeedRoutes } from "./routes/feeds";
 import { orgRoutes, orgAcceptApp } from "./routes/orgs";
@@ -35,13 +36,15 @@ import type { Env, TriageMessage } from "./types";
 const app = new Hono<{ Bindings: Env }>();
 
 // Global security headers
-app.use("*", async (c, next) => {
-	await next();
-	c.header("X-Frame-Options", "DENY");
-	c.header("X-Content-Type-Options", "nosniff");
-	c.header("Referrer-Policy", "strict-origin-when-cross-origin");
-	c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-});
+app.use(
+	"*",
+	secureHeaders({
+		referrerPolicy: "strict-origin-when-cross-origin",
+		strictTransportSecurity: "max-age=31536000; includeSubDomains",
+		xFrameOptions: "DENY",
+		xContentTypeOptions: "nosniff",
+	}),
+);
 
 app.get("/", (c) =>
 	c.text(
