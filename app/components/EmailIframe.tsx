@@ -5,6 +5,7 @@
 import DOMPurify from "dompurify";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUIStore } from "~/hooks/useUIStore";
+import { escapeHtml, looksLikeHtml } from "shared/html-text";
 
 interface EmailIframeProps {
 	body: string;
@@ -95,7 +96,17 @@ export default function EmailIframe({ body, autoSize, onLinkClick }: EmailIframe
 		const iframe = iframeRef.current;
 		if (!iframe || !body) return;
 
-		const cleanBody = DOMPurify.sanitize(body, {
+		// No stored content-type flag (#708): a body with no HTML-tag-shaped
+		// substring is plain text. Escape it before it reaches DOMPurify (escaping
+		// after sanitize would double-escape genuine HTML) and wrap it so
+		// `white-space: pre-wrap` preserves newlines/blank lines while still
+		// soft-wrapping long lines. Bodies that look like HTML are sanitized
+		// unmodified, exactly as before.
+		const sanitizeInput = looksLikeHtml(body)
+			? body
+			: `<div style="white-space: pre-wrap;">${escapeHtml(body)}</div>`;
+
+		const cleanBody = DOMPurify.sanitize(sanitizeInput, {
 			USE_PROFILES: { html: true },
 			FORBID_TAGS: ["style"],
 			ADD_ATTR: ["target"],

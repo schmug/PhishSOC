@@ -145,8 +145,8 @@ export const IntelSettings = z
  * `agentModel`, `autoDraft`, `security`, etc. on every read.
  *
  * Strategy: parse strictly; on failure, drop ONLY the offending `intel.hub`,
- * the invalid `intel.feeds[]` entries, and/or the invalid `sidecar` block,
- * then retry. The runtime guards (`loadHubConfig` / `resolveFeeds` /
+ * the invalid `intel.feeds[]` entries, and/or the invalid `sidecar`, `relay`,
+ * or `newEmailWebhook` block, then retry. The runtime guards (`loadHubConfig` / `resolveFeeds` /
  * `sidecarConfigOf`) already enforce the prefix at use time, so a dropped
  * block merely disables that one feature rather than corrupting the tier.
  * Anything malformed beyond those known cases falls back to empty (prior
@@ -210,6 +210,34 @@ export function parseSettingsLenient<T extends z.ZodTypeAny>(
     if (dropSidecar) {
       delete salvaged.sidecar;
       droppedLabels.push("sidecar");
+    }
+
+    // Invalid `relay` block (bad `RELAY_CREDS_` prefix, manual R2 edit) is
+    // dropped wholesale so it degrades to "relay disabled" on read instead of
+    // wiping the whole domain tier.
+    const dropRelay =
+      "relay" in rec && issues.some((i) => i.path[0] === "relay");
+    if (dropRelay) {
+      delete salvaged.relay;
+      droppedLabels.push("relay");
+    }
+
+    // An invalid `newEmailWebhook` block is MUTED, not deleted — deliberately
+    // unlike `relay`/`sidecar` above.
+    //
+    // Deleting is fail-closed for those, where absent means "off". Here absent
+    // means "inherit from the next tier, else the global NEW_EMAIL_WEBHOOK_URL",
+    // so deleting would be fail-OPEN: a typo'd secret name at the winning tier
+    // would route that scope's mail to the wider channel the tier was
+    // configured to replace. Replacing it with an explicit `{enabled:false}`
+    // makes `resolveNewEmailWebhook` report configured-but-silent, which sends
+    // nothing and suppresses both inheritance and the global fallback.
+    const muteNewEmailWebhook =
+      "newEmailWebhook" in rec &&
+      issues.some((i) => i.path[0] === "newEmailWebhook");
+    if (muteNewEmailWebhook) {
+      salvaged.newEmailWebhook = { enabled: false };
+      droppedLabels.push("newEmailWebhook(muted)");
     }
 
     if (droppedLabels.length > 0) {
@@ -303,6 +331,49 @@ export const SidecarSettings = z
 export type SidecarSettings = z.infer<typeof SidecarSettings>;
 
 /**
+ * Worker Secret name prefix for tiered new-email webhook URLs (#563 follow-up).
+ *
+ * A webhook URL is a bearer credential — a Google Chat incoming webhook
+ * carries its `key` and `token` in the query string — and the settings GET
+ * endpoints return these blobs to the client. So the tier stores the NAME of
+ * a secret and never the URL. The prefix stops a settings write from naming
+ * an unrelated secret (`CONFIRMATION_TOKEN_SECRET`, `HUB_API_KEY`) and having
+ * its value POSTed to an operator-chosen endpoint — the confused-deputy hole
+ * the `RELAY_CREDS_` prefix closed in #615.
+ */
+export const NEW_EMAIL_WEBHOOK_SECRET_PREFIX = "NEW_EMAIL_WEBHOOK_";
+
+/**
+ * Per-tier ops-visibility "new mail" webhook (#563 follow-up).
+ *
+ * Resolves with override semantics — most specific tier wins, whole-object
+ * replace — via `resolveNewEmailWebhook` in
+ * `workers/lib/new-email-webhook-policy.ts`. `enabled` must be explicitly
+ * true: an outbound data flow defaults to off, matching `RelaySettings`.
+ */
+export const NewEmailWebhookSettings = z
+  .object({
+    enabled: z.boolean().optional(),
+    /** Name of the Worker Secret holding the webhook URL. */
+    urlSecret: z
+      .string()
+      .min(1)
+      .startsWith(NEW_EMAIL_WEBHOOK_SECRET_PREFIX, {
+        message: `Secret name must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}`,
+      })
+      .optional(),
+    /**
+     * Payload shape. `chat` (the default) posts Slack/Google-Chat-compatible
+     * `{"text": "..."}` prose. `json` posts the structured event instead, for
+     * consumers that want fields rather than a sentence to regex.
+     */
+    format: z.enum(["chat", "json"]).optional(),
+  })
+  .passthrough();
+
+export type NewEmailWebhookSettings = z.infer<typeof NewEmailWebhookSettings>;
+
+/**
  * Per-mailbox settings stored at R2 key `mailboxes/<mailboxId>.json`.
  *
  * Semantic shift introduced by #106: **field absence = inherit**. Defaults
@@ -332,6 +403,7 @@ export const MailboxSettings = z.object({
   yaramail_scanner: YaraMailScannerSettings.optional(),
   honeypot: HoneypotSettings.optional(),
   sidecar: SidecarSettings.optional(),
+  newEmailWebhook: NewEmailWebhookSettings.optional(),
 }).passthrough();
 
 export type MailboxSettings = z.infer<typeof MailboxSettings>;

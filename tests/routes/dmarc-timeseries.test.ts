@@ -233,17 +233,23 @@ describe("GET /timeseries", () => {
 	});
 
 	it("returns { domain, timeseries } with the DO result", async () => {
+		// Plant records 2 days ago and 1 day ago (well within the default
+		// 90-day window) and derive the expected day strings from Date.now(),
+		// matching the pattern below at "defaults to 90-day window".
+		const now = Date.now();
+		const day1Iso = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
+		const day2Iso = new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString();
 		const records: FakeDmarcRecord[] = [
 			{
 				domain: "acme.com",
-				received_at: "2026-05-20T09:00:00Z",
+				received_at: day1Iso,
 				count: 4,
 				dkim_result: "pass",
 				spf_result: "fail",
 			},
 			{
 				domain: "acme.com",
-				received_at: "2026-05-21T09:00:00Z",
+				received_at: day2Iso,
 				count: 1,
 				dkim_result: "fail",
 				spf_result: "fail",
@@ -255,8 +261,8 @@ describe("GET /timeseries", () => {
 		const body = await res.json() as { domain: string; timeseries: { day: string; aligned: number; failing: number }[] };
 		expect(body.domain).toBe("acme.com");
 		expect(body.timeseries).toHaveLength(2);
-		expect(body.timeseries[0]).toMatchObject({ day: "2026-05-20", aligned: 4, failing: 0 });
-		expect(body.timeseries[1]).toMatchObject({ day: "2026-05-21", aligned: 0, failing: 1 });
+		expect(body.timeseries[0]).toMatchObject({ day: day1Iso.slice(0, 10), aligned: 4, failing: 0 });
+		expect(body.timeseries[1]).toMatchObject({ day: day2Iso.slice(0, 10), aligned: 0, failing: 1 });
 	});
 
 	it("returns an empty timeseries array when no records exist for the domain", async () => {

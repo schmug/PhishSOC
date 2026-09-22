@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
 	AutoDraftSettings,
 	IntelSettings,
+	NewEmailWebhookSettings,
 	SecuritySettings,
 } from "./mailbox-settings";
 
@@ -66,7 +67,13 @@ export const RelaySettings = z
 			.passthrough()
 			.optional(),
 		/** Name of the Worker Secret holding `{"user":"...","pass":"..."}` JSON. */
-		credentialsSecret: z.string().optional(),
+		credentialsSecret: z
+			.string()
+			.min(1)
+			.startsWith("RELAY_CREDS_", {
+				message: "Secret name must start with RELAY_CREDS_",
+			})
+			.optional(),
 		actions: z
 			.object({
 				allow: RelayActionBehavior.optional(),
@@ -117,6 +124,7 @@ export const DomainSettings = z
 		intel: IntelSettings.optional(),
 		catchall_intel: CatchallIntelSettings.optional(),
 		relay: RelaySettings.optional(),
+		newEmailWebhook: NewEmailWebhookSettings.optional(),
 	})
 	.passthrough();
 

@@ -138,9 +138,10 @@ export const SIDECAR_BACKOFF_INTERVAL_MS = 15 * 60 * 1000;
 export const MAX_MESSAGES_PER_POLL = 25;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 /**
- * Poll lease TTL (#591): must comfortably exceed a worst-case tick (a full
- * batch is ~26 sequential Gmail round-trips) and expire on its own so a
- * crashed poller never wedges the mailbox.
+ * Poll lease TTL (#591): must exceed a single message's worst-case wall time
+ * (Gmail fetch + full receiveEmail security pipeline + label write) because
+ * the poll loop renews the lease at the top of every iteration. Expires on
+ * its own so a crashed poller never wedges the mailbox past the TTL.
  */
 export const POLL_LEASE_TTL_MS = 5 * 60 * 1000;
 
@@ -292,6 +293,12 @@ export async function pollWorkspaceMailbox(
 		let firstLabelError: string | null = null;
 		for (const gmailId of history.messageIds) {
 			if (processed >= MAX_MESSAGES_PER_POLL) { hitCap = true; break; }
+			// Lease heartbeat (#591): a batch can exceed POLL_LEASE_TTL_MS once
+			// receiveEmail + labeling run on up to MAX_MESSAGES_PER_POLL fresh
+			// messages. Without renewal the lease expires while this tick is
+			// still in the loop, the next cron acquires, and both ticks can
+			// pass the dedupe probe on not-yet-stored tail messages.
+			await stub.putSidecarState({ poll_lease_until: Date.now() + POLL_LEASE_TTL_MS });
 			const bytes = await getRawMessage(token, gmailId);
 			const parsed = await new PostalMime().parse(bytes);
 			// Replay dedupe (rule 7 + #593): RFC Message-ID when present;
