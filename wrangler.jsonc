@@ -38,6 +38,8 @@
 		// Ops-visibility "new mail" webhook (issue #563) is also a SECRET, not a
 		// var here, for the same reason. Configure with:
 		//   wrangler secret put NEW_EMAIL_WEBHOOK_URL
+		// Per-tier destinations use the same NEW_EMAIL_WEBHOOK_ prefix and are
+		// named from a settings-tier `newEmailWebhook` block; see docs/secrets.md.
 		// When unset, no new-mail chat notification is sent.
 	},
 	"send_email": [

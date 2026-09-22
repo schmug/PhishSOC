@@ -19,8 +19,14 @@ import {
 	DEFAULT_CLASSIFIER_MODEL,
 	DEFAULT_DRAFT_VERIFIER_MODEL,
 	DEFAULT_INJECTION_SCANNER_MODEL,
+	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
 	TEXT_MODELS,
 } from "shared/mailbox-settings";
+import type { NewEmailWebhookSettings } from "shared/mailbox-settings";
+import {
+	NewEmailWebhookCard,
+	isNewEmailWebhookValid,
+} from "~/components/NewEmailWebhookCard";
 
 const PROMPT_PLACEHOLDER = `You are an email assistant that helps manage this inbox. You read emails, draft replies, and help organize conversations.\n\nWrite like a real person. Short, direct, flowing prose. Plain text only.\n\n(Leave empty to use the full built-in default prompt)`;
 
@@ -36,6 +42,7 @@ interface OrgSettingsShape {
 	/** Written via POST /api/v1/org/domains — not edited on this page. */
 	domains?: string[];
 	gateway?: { arcSealerDomain?: string; arcSelector?: string };
+	newEmailWebhook?: NewEmailWebhookSettings;
 }
 
 /**
@@ -66,6 +73,11 @@ export default function OrgSettingsRoute() {
 	const [classifierModel, setClassifierModel] = useState("");
 	const [arcSealerDomain, setArcSealerDomain] = useState("");
 	const [arcSelector, setArcSelector] = useState("");
+	// New-mail webhook (#694). undefined = inherit (key omitted on save),
+	// {enabled:false} = muted, {enabled:true, urlSecret} = configured.
+	const [newEmailWebhook, setNewEmailWebhook] = useState<
+		NewEmailWebhookSettings | undefined
+	>(undefined);
 	const [isSaving, setIsSaving] = useState(false);
 
 	useEffect(() => {
@@ -91,6 +103,8 @@ export default function OrgSettingsRoute() {
 		setClassifierModel(s.classifierModel ?? "");
 		setArcSealerDomain(s.gateway?.arcSealerDomain ?? "");
 		setArcSelector(s.gateway?.arcSelector ?? "");
+		// Absent key is the meaningful "inherit" state — load it through as-is.
+		setNewEmailWebhook(s.newEmailWebhook);
 		// availableModels intentionally omitted from deps — see settings.tsx
 		// for the rationale (re-running this effect would clobber edits).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -123,6 +137,13 @@ export default function OrgSettingsRoute() {
 		setHubErrors(hubValidation ?? undefined);
 		if (hubValidation) {
 			feedback.error("Fix the threat-intel hub fields before saving.");
+			return;
+		}
+
+		if (!isNewEmailWebhookValid(newEmailWebhook)) {
+			feedback.error(
+				`Webhook secret name must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}`,
+			);
 			return;
 		}
 
@@ -161,6 +182,15 @@ export default function OrgSettingsRoute() {
 					}
 				: {},
 		};
+
+		// Inherit is expressed by omitting the key entirely; `...existing`
+		// above would otherwise carry a stale block through. A mute
+		// (`{enabled:false}`) is written, and stripDefaultEqual keeps it.
+		if (newEmailWebhook) {
+			settings.newEmailWebhook = newEmailWebhook;
+		} else {
+			delete settings.newEmailWebhook;
+		}
 
 		setIsSaving(true);
 		try {
@@ -392,6 +422,13 @@ export default function OrgSettingsRoute() {
 						if (hubErrors) setHubErrors(validateHubConfig(next) ?? undefined);
 					}}
 					errors={hubErrors}
+				/>
+
+				{/* New mail webhook (#694) */}
+				<NewEmailWebhookCard
+					value={newEmailWebhook}
+					onChange={setNewEmailWebhook}
+					tier="org"
 				/>
 
 				{/* Save */}
