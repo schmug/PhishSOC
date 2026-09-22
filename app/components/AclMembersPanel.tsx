@@ -58,7 +58,15 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 					variant="secondary"
 					size="sm"
 					loading={lockDown.isPending}
-					onClick={() => lockDown.mutate(mailboxId)}
+					onClick={() => {
+						if (
+							window.confirm(
+								"Are you sure you want to lock down this mailbox? Only you will have access until you add others.",
+							)
+						) {
+							lockDown.mutate(mailboxId);
+						}
+					}}
 					data-testid="acl-lockdown-btn"
 				>
 					Lock down
@@ -89,6 +97,7 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleRemove = async (email: string) => {
+		if (!window.confirm(`Are you sure you want to remove ${email}?`)) return;
 		setRemoveError(null);
 		try {
 			await removeMember.mutateAsync(email);
@@ -100,6 +109,12 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleTransfer = async (email: string) => {
+		if (
+			!window.confirm(
+				`Are you sure you want to transfer ownership to ${email}? You will lose owner privileges.`,
+			)
+		)
+			return;
 		setTransferError(null);
 		try {
 			await transferOwnership.mutateAsync(email);
@@ -125,6 +140,8 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	};
 
 	const handleRemoveGroup = async (group: string) => {
+		if (!window.confirm(`Are you sure you want to remove group ${group}?`))
+			return;
 		setRemoveGroupError(null);
 		try {
 			await removeGroup.mutateAsync(group);
