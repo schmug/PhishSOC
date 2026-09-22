@@ -19,6 +19,10 @@ signing, and outbound scanning are tracked in follow-up issues.
    and an ARC seal, then goes out over SMTP submission to your backend.
 5. Held mail stays in the PhishSOC quarantine UI; registered mailboxes keep
    a full mirror copy of everything regardless.
+6. The mirror copy records the outcome in `relay_status`: `relayed`, `held`,
+   `dropped` (policy drop), or `failed` (permanent relay failure). The
+   email-detail view shows it as a "gateway relay" badge. NULL means the
+   domain has no relay policy, and no badge is shown.
 
 Recipients with no registered PhishSOC mailbox are scored with domain-tier
 settings, relayed, and NOT stored. Both `quarantine` and `block` verdicts are
