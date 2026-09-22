@@ -69,6 +69,20 @@ export interface Env extends Cloudflare.Env {
 	 */
 	NEW_EMAIL_WEBHOOK_URL?: string;
 	/**
+	 * Optional HMAC-SHA256 signing secret for outbound new-email webhook
+	 * requests (issue #700). When set, every `dispatchNewEmailNotification`
+	 * request carries an `x-phishsoc-signature: t=<unix-seconds>,v1=<hex>`
+	 * header computed over `${timestamp}.${rawBody}`, letting a receiver
+	 * verify authenticity and reject stale/replayed deliveries. Applies to
+	 * every destination — the global `NEW_EMAIL_WEBHOOK_URL` fallback and
+	 * every per-tier `NEW_EMAIL_WEBHOOK_*` secret alike — since signing wraps
+	 * the outgoing request rather than any one destination. When unset, the
+	 * request is sent exactly as before (no signature header) — fully
+	 * backward compatible. Set with
+	 * `wrangler secret put NEW_EMAIL_WEBHOOK_SIGNING_SECRET`.
+	 */
+	NEW_EMAIL_WEBHOOK_SIGNING_SECRET?: string;
+	/**
 	 * Comma-separated hostname allowlist for the community-hub URL
 	 * (GHSA-jfj6-w954-96vg f29). A `HUB_SECRET_*` API key is only resolved
 	 * and sent when `intel.hub.url` is https AND its hostname is on this
