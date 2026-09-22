@@ -1,36 +1,44 @@
--- Copyright (c) 2026 Cloudflare, Inc.
--- Licensed under the Apache 2.0 license found in the LICENSE file or at:
---     https://opensource.org/licenses/Apache-2.0
-
--- Per-contributor join timestamp on `corroboration_contributors`. Lets
--- /api/v1/corroboration answer the literal question "how many of MY
--- attributes got a SECOND contributor in the last N hours" precisely,
--- instead of approximating via `corroboration.last_seen` (which advances
--- on every contribution to the row, not just on a new contributor join).
--- See issue #131 for the counter-examples that motivated this.
+-- Track when each org FIRST contributed to a corroboration row, so the
+-- "corroborated since X" query can window on contributor-join time rather
+-- than conflating it with `corroboration.last_seen` (issue #131).
 --
--- Stored as epoch milliseconds (INTEGER) — directly usable from JS, and
--- consistent with `cron_runs.last_run_at` (migration 0003).
+-- first_seen is epoch MILLISECONDS (INTEGER), matching the `sinceMs` the
+-- /corroboration route binds.
+--
+-- D1 CONSTRAINT: `ADD COLUMN` must use a CONSTANT default. A parenthesised
+-- expression such as `DEFAULT (unixepoch() * 1000)` is rejected with
+--   Cannot add a column with non-constant default: SQLITE_ERROR [code: 7500]
+-- even though stock SQLite (better-sqlite3, which backs tests/helpers/d1.ts)
+-- accepts it. Hence: constant default, then backfill. `tests/migrations-d1-
+-- compat.test.ts` lints for this, because no better-sqlite3-backed test can.
+--
+-- Because the default is 0 rather than "now", every INSERT must supply
+-- first_seen explicitly — see `recordContribution` in src/lib/aggregate.ts.
 ALTER TABLE corroboration_contributors
-    ADD COLUMN first_seen INTEGER NOT NULL DEFAULT (unixepoch() * 1000);
+    ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0;
 
--- Backfill existing rows from `corroboration.last_seen` as the
--- best-available estimate (the only timestamp recorded before this
--- migration). `last_seen` is an ISO-8601 TEXT column ('YYYY-MM-DDTHH:MM:SS.sssZ');
--- `unixepoch(text)` parses it and returns seconds, so we multiply for ms.
+-- Backfill existing rows from their corroboration's last_seen, the closest
+-- available approximation of join time for rows that predate this column.
+-- COALESCE guards an unparseable last_seen, which would otherwise violate
+-- the NOT NULL constraint.
 UPDATE corroboration_contributors
-SET first_seen = (
-    SELECT unixepoch(c.last_seen) * 1000
-    FROM corroboration c
-    WHERE c.id = corroboration_contributors.corroboration_id
+SET first_seen = COALESCE(
+    (
+        SELECT unixepoch(c.last_seen) * 1000
+        FROM corroboration c
+        WHERE c.id = corroboration_contributors.corroboration_id
+    ),
+    unixepoch() * 1000
 )
 WHERE EXISTS (
     SELECT 1 FROM corroboration c WHERE c.id = corroboration_contributors.corroboration_id
 );
 
--- Index supports the JOIN in /api/v1/corroboration: we look up "other
--- contributors of attribute X whose first_seen >= cutoff" once per
--- candidate attribute, and `(orgc_uuid, first_seen)` lets the planner
--- range-scan within an org.
+-- Orphan rows (no matching corroboration) get "now", preserving the original
+-- intent of the non-constant default this migration used to carry.
+UPDATE corroboration_contributors
+SET first_seen = unixepoch() * 1000
+WHERE first_seen = 0;
+
 CREATE INDEX idx_corroboration_contributors_orgc_first_seen
     ON corroboration_contributors(orgc_uuid, first_seen);

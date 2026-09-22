@@ -73,8 +73,12 @@ export async function applyCorroboration(db: D1Database, input: AggregateInput) 
 		// is a no-op and we do not re-add their trust.
 		const res = await db
 			.prepare(
-				`INSERT OR IGNORE INTO corroboration_contributors (corroboration_id, orgc_uuid)
-				 VALUES (?1, ?2)`,
+				// first_seen is supplied explicitly: migration 0005 has to declare a
+				// CONSTANT column default (D1 rejects a computed one), so the column
+				// default is 0 and would break the `first_seen >= sinceMs` window in
+				// routes/corroboration.ts if relied on here.
+				`INSERT OR IGNORE INTO corroboration_contributors (corroboration_id, orgc_uuid, first_seen)
+				 VALUES (?1, ?2, unixepoch() * 1000)`,
 			)
 			.bind(row.id, input.orgc_uuid)
 			.run();
