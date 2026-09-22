@@ -14,7 +14,8 @@
 
 import { render, waitFor } from "@testing-library/react";
 import DOMPurify from "dompurify";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useUIStore } from "~/hooks/useUIStore";
 import EmailIframe from "~/components/EmailIframe";
 
 async function getSrcdoc(container: HTMLElement): Promise<string> {
@@ -60,5 +61,91 @@ describe("EmailIframe — plain-text body rendering (issue #708)", () => {
 		expect(srcdoc).toContain(expectedClean);
 		// No pre-wrap wrapper is introduced for genuine HTML bodies.
 		expect(srcdoc).not.toContain("white-space: pre-wrap");
+	});
+});
+
+/**
+ * Palette selection for emails that paint their own background (issue #711).
+ *
+ * Acceptance:
+ * - Dark theme + a body with an inline background style or `bgcolor`: light
+ *   palette (`body` color #1a1a1a, background #ffffff, color-scheme: light).
+ * - Dark theme + plain-text / unstyled HTML: dark palette (#ebe9e3 / #1a1816).
+ * - Light theme + any of the above: light palette (unchanged).
+ */
+describe("EmailIframe — palette selection for self-styled emails (issue #711)", () => {
+	afterEach(() => {
+		useUIStore.getState().setTheme("dark");
+	});
+
+	it("dark theme + inline background-color style: uses the light palette", async () => {
+		useUIStore.getState().setTheme("dark");
+		const { container } = render(
+			<EmailIframe
+				body={'<p>Use this code:</p><div style="background-color:#f4f6f8;padding:24px;font-size:32px">123456</div>'}
+			/>,
+		);
+		const srcdoc = await getSrcdoc(container);
+
+		expect(srcdoc).toContain("color: #1a1a1a");
+		expect(srcdoc).toContain("background: #ffffff");
+		expect(srcdoc).toContain("color-scheme: light");
+		expect(srcdoc).not.toContain("#ebe9e3");
+	});
+
+	it("dark theme + bgcolor attribute: uses the light palette", async () => {
+		useUIStore.getState().setTheme("dark");
+		const { container } = render(
+			<EmailIframe body='<table><tr><td bgcolor="#f4f6f8">123456</td></tr></table>' />,
+		);
+		const srcdoc = await getSrcdoc(container);
+
+		expect(srcdoc).toContain("color: #1a1a1a");
+		expect(srcdoc).toContain("background: #ffffff");
+		expect(srcdoc).toContain("color-scheme: light");
+	});
+
+	it("dark theme + plain-text body: keeps the dark palette", async () => {
+		useUIStore.getState().setTheme("dark");
+		const { container } = render(<EmailIframe body={"Use this code: 123456"} />);
+		const srcdoc = await getSrcdoc(container);
+
+		expect(srcdoc).toContain("color: #ebe9e3");
+		expect(srcdoc).toContain("background: #1a1816");
+		expect(srcdoc).toContain("color-scheme: dark");
+	});
+
+	it("dark theme + unstyled HTML: keeps the dark palette", async () => {
+		useUIStore.getState().setTheme("dark");
+		const { container } = render(<EmailIframe body={"<p>hi</p><blockquote>q</blockquote>"} />);
+		const srcdoc = await getSrcdoc(container);
+
+		expect(srcdoc).toContain("color: #ebe9e3");
+		expect(srcdoc).toContain("background: #1a1816");
+		expect(srcdoc).toContain("color-scheme: dark");
+	});
+
+	it("light theme + self-styled body: uses the light palette", async () => {
+		useUIStore.getState().setTheme("light");
+		const { container } = render(
+			<EmailIframe
+				body={'<div style="background-color:#f4f6f8">123456</div>'}
+			/>,
+		);
+		const srcdoc = await getSrcdoc(container);
+
+		expect(srcdoc).toContain("color: #1a1a1a");
+		expect(srcdoc).toContain("background: #ffffff");
+		expect(srcdoc).toContain("color-scheme: light");
+	});
+
+	it("light theme + unstyled HTML: uses the light palette", async () => {
+		useUIStore.getState().setTheme("light");
+		const { container } = render(<EmailIframe body={"<p>hi</p><blockquote>q</blockquote>"} />);
+		const srcdoc = await getSrcdoc(container);
+
+		expect(srcdoc).toContain("color: #1a1a1a");
+		expect(srcdoc).toContain("background: #ffffff");
+		expect(srcdoc).toContain("color-scheme: light");
 	});
 });
