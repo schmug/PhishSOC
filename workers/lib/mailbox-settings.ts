@@ -490,6 +490,15 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 			// Off by default — strip the disabled/empty default so absent-key
 			// semantics are preserved; an enabled relay policy survives.
 			return deepEqual(value, { enabled: false }) || deepEqual(value, {});
+		case "newEmailWebhook":
+			// Strip ONLY the empty object — deliberately NOT `{enabled:false}`,
+			// unlike `relay`/`honeypot` above. This block has three states, not
+			// two: absent means "inherit from the next tier, else the global
+			// NEW_EMAIL_WEBHOOK_URL", while `{enabled:false}` is an explicit mute
+			// for this scope. Stripping the mute would persist it as absent, and
+			// the next read would quietly route the muted mailbox's mail to the
+			// wider channel. See `resolveNewEmailWebhook`.
+			return deepEqual(value, {});
 		case "gateway":
 			// Org-tier ARC sealer identity — strip only the empty object.
 			return deepEqual(value, {});
