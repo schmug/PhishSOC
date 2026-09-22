@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
 	AutoDraftSettings,
 	IntelSettings,
+	NewEmailWebhookSettings,
 	SecuritySettings,
 } from "./mailbox-settings";
 
@@ -123,6 +124,7 @@ export const DomainSettings = z
 		intel: IntelSettings.optional(),
 		catchall_intel: CatchallIntelSettings.optional(),
 		relay: RelaySettings.optional(),
+		newEmailWebhook: NewEmailWebhookSettings.optional(),
 	})
 	.passthrough();
 

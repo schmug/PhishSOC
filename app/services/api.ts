@@ -325,6 +325,22 @@ const api = {
 	createHubInvite: (mailboxId: string, body: HubInviteRequest) =>
 		post<HubInviteResponse>(`/api/v1/mailboxes/${mailboxId}/hub/invites`, body),
 
+	// New-mail webhook "Send test". Tier-agnostic: the DRAFT block travels in
+	// the body so a secret name can be verified before it is saved. The
+	// destination is resolved server-side from the named Worker Secret and
+	// never crosses the wire in either direction. Always resolves 200 with a
+	// staged {ok, stage, error} body — a failed test is a result, not an
+	// ApiError.
+	testNewEmailWebhook: (body: {
+		urlSecret: string;
+		format?: "chat" | "json";
+		tier: "mailbox" | "domain" | "org";
+	}) =>
+		post<{ ok: boolean; status?: number; stage?: string; error?: string }>(
+			"/api/v1/new-email-webhook/test",
+			body,
+		),
+
 	// AI — Workers AI text-generation model list (#64). Worker
 	// read-through caches against KV with a static fallback, so this
 	// endpoint always resolves to a usable list.
