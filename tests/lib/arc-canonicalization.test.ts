@@ -70,6 +70,23 @@ describe("byte fidelity (0x80–0x9F must round-trip)", () => {
 		expect(canonicalizeBodyRelaxed(line)).toEqual(line);
 	});
 
+	it("latin1Decode maps byte N → code point N across the 0x8000 chunk boundary (>64KB)", () => {
+		const big = Uint8Array.from({ length: 70_000 }, (_, i) => 0x80 + (i % 0x80));
+		const s = latin1Decode(big);
+		expect(s.length).toBe(big.length);
+		expect(Array.from(s).findIndex((ch, i) => ch.charCodeAt(0) !== big[i])).toBe(-1);
+	});
+
+	it("canonicalizeBodyRelaxed preserves 0x80–0xFF and treats only SP/HTAB as WSP (0xA0 is not)", () => {
+		const line = new Uint8Array(130);
+		for (let i = 0; i < 128; i++) line[i] = 0x80 + i;
+		line[128] = 0x0d;
+		line[129] = 0x0a;
+		expect(canonicalizeBodyRelaxed(line)).toEqual(line);
+		// NBSP (0xA0) survives; the SP/HTAB run collapses; trailing WSP is stripped.
+		expect(dec(canonicalizeBodyRelaxed(enc("  \tÿ \r\n")))).toBe("  ÿ\r\n");
+	});
+
 	it("splitRawMessage headerBlock survives re-encoding byte-exactly", () => {
 		const raw = latin1Encode("X-Weird: café\r\n\r\nbody\r\n");
 		const { headerBlock } = splitRawMessage(raw);

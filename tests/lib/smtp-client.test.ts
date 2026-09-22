@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	SmtpPermanentError,
 	SmtpTransientError,
+	dotStuff,
 	submitRaw,
 	type SmtpConnectFn,
 	type SmtpSocketLike,
@@ -175,5 +176,16 @@ describe("submitRaw", () => {
 			}),
 		).rejects.toBeInstanceOf(SmtpPermanentError);
 		expect(connectCalled.value).toBe(false);
+	});
+});
+
+describe("dotStuff", () => {
+	it("round-trips bytes 0x80–0xFF byte-exactly (incl. past the 0x8000 decode chunk) while stuffing dots", () => {
+		// >64KB of high bytes forces the multi-chunk decode; then a dot-led line, no trailing CRLF.
+		const bulk = Uint8Array.from({ length: 70_000 }, (_, i) => 0x80 + (i % 0x80));
+		const raw = new Uint8Array([...bulk, 0x0d, 0x0a, 0x2e, 0x80, 0x9f, 0xa0, 0xff]);
+		expect(dotStuff(raw)).toEqual(
+			new Uint8Array([...bulk, 0x0d, 0x0a, 0x2e, 0x2e, 0x80, 0x9f, 0xa0, 0xff, 0x0d, 0x0a]),
+		);
 	});
 });

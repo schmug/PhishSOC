@@ -229,6 +229,7 @@ export default function DomainSettingsRoute() {
 			nextIntel = Object.keys(rest).length > 0 ? rest : undefined;
 		}
 
+		const parsedRelayPort = Number.parseInt(relayPort, 10);
 		const settings: DomainSettingsShape = {
 			...existing,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
@@ -248,7 +249,9 @@ export default function DomainSettingsRoute() {
 						enabled: true,
 						target: {
 							host: relayHost.trim(),
-							port: Number.parseInt(relayPort, 10) || 587,
+							// Only an unparseable port falls back; a typed "0" reaches
+							// the server's min(1) check instead of silently becoming 587.
+							port: Number.isNaN(parsedRelayPort) ? 587 : parsedRelayPort,
 							implicitTls: relayImplicitTls,
 						},
 						...(relayCredentialsSecret.trim()
