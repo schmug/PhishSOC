@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import SecurityVerdictPanel from "~/components/email-panel/SecurityVerdictPanel";
 import type { Email } from "~/types";
+import { renderWithProviders } from "./test-utils";
 
 function makeEmail(verdictOverrides: object | null): Email {
 	const verdict =
@@ -118,5 +119,51 @@ describe("SecurityVerdictPanel — confidence chip in case-detail title bar (iss
 		render(<SecurityVerdictPanel email={email} />);
 
 		expect(screen.getByTestId("verdict-confidence-chip")).toHaveTextContent("50%");
+	});
+});
+
+/**
+ * Inline-gateway relay outcome badge (issue #581). `relay_status` is NULL for
+ * domains without a relay policy, so the badge renders only when it is set —
+ * and independently of the verdict card, which stays quiet for plain allow mail.
+ */
+describe("SecurityVerdictPanel — relay status badge (issue #581)", () => {
+	const ALLOW = {
+		action: "allow",
+		score: 5,
+		classification: { label: "safe", confidence: 0.99, reasoning: "No signals." },
+		signals: [],
+	};
+
+	it("shows the badge for relayed allow-verdict mail even though the verdict card is hidden", () => {
+		const email: Email = { ...makeEmail(ALLOW), relay_status: "relayed" };
+		renderWithProviders(<SecurityVerdictPanel email={email} />);
+
+		expect(screen.queryByTestId("verdict-confidence-chip")).toBeNull();
+		expect(screen.getByTestId("relay-status-badge")).toHaveTextContent("relayed");
+	});
+
+	it("shows the badge when the pipeline produced no verdict (fail-open relay)", () => {
+		const email: Email = { ...makeEmail(null), relay_status: "relayed" };
+		renderWithProviders(<SecurityVerdictPanel email={email} />);
+
+		expect(screen.getByTestId("relay-status-badge")).toHaveTextContent("relayed");
+	});
+
+	it.each(["held", "failed", "dropped"] as const)("shows the %s outcome alongside a block verdict", (status) => {
+		const email: Email = { ...makeEmail({ confidence: 0.9 }), relay_status: status };
+		renderWithProviders(<SecurityVerdictPanel email={email} />);
+
+		expect(screen.getByTestId("verdict-confidence-chip")).toBeInTheDocument();
+		expect(screen.getByTestId("relay-status-badge")).toHaveTextContent(status);
+	});
+
+	it("renders no badge for non-gateway mail (NULL relay_status)", () => {
+		renderWithProviders(<SecurityVerdictPanel email={{ ...makeEmail(ALLOW), relay_status: null }} />);
+		expect(screen.queryByTestId("relay-status-badge")).toBeNull();
+
+		renderWithProviders(<SecurityVerdictPanel email={{ ...makeEmail({}), relay_status: null }} />);
+		expect(screen.getByTestId("verdict-confidence-chip")).toBeInTheDocument();
+		expect(screen.queryByTestId("relay-status-badge")).toBeNull();
 	});
 });

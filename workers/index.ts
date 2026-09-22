@@ -1919,11 +1919,10 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 			envelopeFrom: normalized.envelopeFrom ?? "",
 			rcptTo: mailboxId,
 		});
-		const status =
-			outcome === "relayed" ? "relayed" : outcome === "failed_permanent" ? "failed" : outcome === "held" ? "held" : null;
-		if (status) {
-			await stub.setRelayStatus(messageId, status).catch((e) => console.error("setRelayStatus failed:", (e as Error).message));
-		}
+		// Every outcome is recorded, `dropped` included: NULL is reserved for
+		// "domain has no relay policy" (#581).
+		const status = outcome === "failed_permanent" ? "failed" : outcome;
+		await stub.setRelayStatus(messageId, status).catch((e) => console.error("setRelayStatus failed:", (e as Error).message));
 	}
 
 	// Foreground notification fanout. Pass the *final* folder so connected

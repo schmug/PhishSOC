@@ -5,18 +5,33 @@
 import {
 	CaretDownIcon,
 	CaretUpIcon,
+	PaperPlaneTiltIcon,
+	PauseCircleIcon,
+	ProhibitIcon,
 	ShieldCheckIcon,
 	ShieldIcon,
 	ShieldWarningIcon,
+	WarningCircleIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
-import { type Email, parseVerdict } from "~/types";
+import { type ReactNode, useState } from "react";
+import { type Email, parseVerdict, type RelayStatus } from "~/types";
 
 /**
  * Renders the security pipeline's verdict for an email: action, score, auth
  * chips (SPF/DKIM/DMARC), classifier label, and a collapsible signals list.
+ * The inline-gateway relay badge renders independently of the verdict card,
+ * which stays hidden for plain allow mail (#581).
  */
 export default function SecurityVerdictPanel({ email }: { email: Email }) {
+	return (
+		<>
+			<VerdictCard email={email} />
+			<RelayStatusBadge status={email.relay_status} />
+		</>
+	);
+}
+
+function VerdictCard({ email }: { email: Email }) {
 	const verdict = parseVerdict(email.security_verdict);
 	const [expanded, setExpanded] = useState(false);
 
@@ -140,6 +155,49 @@ function ui(action: string) {
 				headline: "Security verdict",
 			};
 	}
+}
+
+const RELAY_UI: Record<RelayStatus, { colorClass: string; icon: ReactNode; title: string }> = {
+	relayed: {
+		colorClass: "text-safe",
+		icon: <PaperPlaneTiltIcon size={14} />,
+		title: "Relayed to the backend mail server",
+	},
+	held: {
+		colorClass: "text-suspect",
+		icon: <PauseCircleIcon size={14} />,
+		title: "Held in PhishSOC; not relayed to the backend",
+	},
+	dropped: {
+		colorClass: "text-danger",
+		icon: <ProhibitIcon size={14} />,
+		title: "Dropped by the domain relay policy; not relayed to the backend",
+	},
+	failed: {
+		colorClass: "text-danger",
+		icon: <WarningCircleIcon size={14} />,
+		title: "Relay to the backend failed permanently; the copy here was kept",
+	},
+};
+
+/** Inline-gateway relay outcome (#581). Renders nothing for NULL or an
+ * unrecognised value: NULL means the domain has no relay policy. */
+function RelayStatusBadge({ status }: { status?: RelayStatus | null }) {
+	const cfg = status ? RELAY_UI[status] : undefined;
+	if (!status || !cfg) return null;
+	return (
+		<div className="px-4 md:px-6 pt-3">
+			<span
+				className="inline-flex items-center gap-1 text-xs rounded border border-line px-1.5 py-0.5 bg-paper-3"
+				title={cfg.title}
+				data-testid="relay-status-badge"
+			>
+				<span className={cfg.colorClass}>{cfg.icon}</span>
+				<span className="text-ink-3">gateway relay</span>
+				<span className={`font-medium ${cfg.colorClass}`}>{status}</span>
+			</span>
+		</div>
+	);
 }
 
 function AuthChip({ label, value }: { label: string; value: string }) {

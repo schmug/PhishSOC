@@ -199,7 +199,11 @@ export interface Email {
 	security_verdict?: string | null;
 	security_score?: number | null;
 	security_explanation?: string | null;
+	// Inline-gateway relay outcome (#32/#581); null when the domain has no relay policy
+	relay_status?: RelayStatus | null;
 }
+
+export type RelayStatus = "relayed" | "held" | "failed" | "dropped";
 
 /** Shape of the JSON stored in Email.security_verdict. */
 export interface SecurityVerdict {

@@ -1288,9 +1288,10 @@ export class MailboxDO extends DurableObject<Env> {
 	/**
 	 * Record the inline-gateway relay outcome for an email (issue #32).
 	 * Called from `receiveEmail` after `relayAfterVerdict` resolves; NULL
-	 * (column default) means the domain has no relay policy.
+	 * (column default) means the domain has no relay policy, so a policy
+	 * drop is written as `dropped`, never left NULL (#581).
 	 */
-	async setRelayStatus(emailId: string, status: "relayed" | "held" | "failed"): Promise<void> {
+	async setRelayStatus(emailId: string, status: "relayed" | "held" | "failed" | "dropped"): Promise<void> {
 		this.db
 			.update(schema.emails)
 			.set({ relay_status: status })
