@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { htmlToPlainText } from "shared/html-text";
+import { escapeHtml, htmlToPlainText, looksLikeHtml } from "shared/html-text";
 import { stripHtmlToText } from "../../workers/lib/email-helpers";
 
 describe("htmlToPlainText", () => {
@@ -69,6 +69,66 @@ describe("htmlToPlainText", () => {
 
 	it("handles unclosed tags without infinite-looping", () => {
 		expect(htmlToPlainText("hello <b world")).toBe("hello");
+	});
+});
+
+/**
+ * #708: EmailIframe uses `looksLikeHtml` to decide whether a stored body
+ * (no content-type column) is genuine HTML or plain text that needs
+ * `escapeHtml` + whitespace preservation before it reaches DOMPurify.
+ */
+describe("looksLikeHtml", () => {
+	it("returns false for empty input", () => {
+		expect(looksLikeHtml("")).toBe(false);
+		expect(looksLikeHtml(undefined as unknown as string)).toBe(false);
+	});
+
+	it("returns false for plain text with no tags", () => {
+		expect(looksLikeHtml("line one\n\nline two\n- bullet a\n- bullet b")).toBe(false);
+	});
+
+	it("returns false for bare angle brackets used as comparisons", () => {
+		expect(looksLikeHtml("3 < 5 and 7 > 2")).toBe(false);
+	});
+
+	it("returns false for an email address in angle brackets (not a substring match)", () => {
+		expect(looksLikeHtml("Contact us at <support@example.com> any time")).toBe(false);
+	});
+
+	it("returns true for a simple tag", () => {
+		expect(looksLikeHtml("<p>Hello</p>")).toBe(true);
+	});
+
+	it("returns true for a self-closing tag", () => {
+		expect(looksLikeHtml("line one<br>line two")).toBe(true);
+	});
+
+	it("returns true for a tag with attributes", () => {
+		expect(looksLikeHtml('<a href="https://example.com">link</a>')).toBe(true);
+	});
+
+	it("returns true for a closing tag alone", () => {
+		expect(looksLikeHtml("some text</div>")).toBe(true);
+	});
+});
+
+describe("escapeHtml", () => {
+	it("returns empty string for empty input", () => {
+		expect(escapeHtml("")).toBe("");
+	});
+
+	it("escapes the five OWASP special characters", () => {
+		expect(escapeHtml(`<script>alert("x") & 'y'</script>`)).toBe(
+			"&lt;script&gt;alert(&quot;x&quot;) &amp; &#39;y&#39;&lt;/script&gt;",
+		);
+	});
+
+	it("round-trips a plain-text body containing <, > and & literally", () => {
+		const body = "Rates: 3 < 5 > 2, terms & conditions apply";
+		const escaped = escapeHtml(body);
+		expect(escaped).toBe("Rates: 3 &lt; 5 &gt; 2, terms &amp; conditions apply");
+		expect(escaped).not.toContain("<");
+		expect(escaped).not.toContain(">");
 	});
 });
 
