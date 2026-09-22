@@ -5,6 +5,7 @@
 import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
+import { SECURITY_HEADER_OPTIONS } from "./lib/security-headers";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
 import {
@@ -65,15 +66,7 @@ function getAccessUrls(teamDomain: string) {
 const app = new Hono<{ Bindings: Env; Variables: AccessVariables }>();
 
 // Global security headers
-app.use(
-	"*",
-	secureHeaders({
-		referrerPolicy: "strict-origin-when-cross-origin",
-		strictTransportSecurity: "max-age=31536000; includeSubDomains",
-		xFrameOptions: "DENY",
-		xContentTypeOptions: "nosniff",
-	}),
-);
+app.use("*", secureHeaders(SECURITY_HEADER_OPTIONS));
 
 // Cloudflare Access JWT validation middleware (production only)
 app.use("*", async (c, next) => {
