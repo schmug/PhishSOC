@@ -149,6 +149,28 @@ describe("POST /emails — Tier 2 (BEC keyword) without token", () => {
 		expect(json.error).toBe("confirmation_required");
 		expect(json.risk.tier).toBe(2);
 	});
+
+	it("classifies tier 2 when BEC keyword is only in text/plain with benign html", async () => {
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(
+					sendBody({
+						to: "colleague@internal.example",
+						html: "<p>Please review the attached.</p>",
+						text: "wire transfer $50,000 to account 12345 immediately",
+					}),
+				),
+			},
+		);
+		expect(res.status).toBe(401);
+		const json = await res.json() as { error: string; risk: { tier: number } };
+		expect(json.error).toBe("confirmation_required");
+		expect(json.risk.tier).toBe(2);
+	});
 });
 
 describe("POST /emails/preflight", () => {
