@@ -67,7 +67,7 @@
 		"path-to-regexp@>=8.0.0 <8.4.0": "^8.4.0",
 		"@babel/core": "^7.29.6",
 		"js-yaml": "^4.3.2",
-		"undici": "^7.28.0",
+		"undici": "^7.29.0",
 		"ws": "^8.21.0",
 		"esbuild@>=0.27.3 <=0.28.0": "^0.28.1",
 		"markdown-it": "^14.2.0",
@@ -94,7 +94,8 @@
 		"@tiptap/extension-ordered-list": "3.30.5",
 		"@tiptap/extension-paragraph": "3.30.5",
 		"@tiptap/extension-strike": "3.30.5",
-		"@tiptap/extension-text": "3.30.5"
+		"@tiptap/extension-text": "3.30.5",
+		"sharp": "^0.35.4"
 	},
 	"devDependencies": {
 		"@cloudflare/vite-plugin": "^1.34.0",
@@ -110,12 +111,12 @@
 		"@types/react": "^19.1.2",
 		"@types/react-dom": "^19.1.2",
 		"jsdom": "^29.1.0",
-		"mailauth": "^4.13.3",
+		"mailauth": "^6.0.0",
 		"tailwindcss": "^4.1.4",
 		"typescript": "^5.8.3",
 		"vite": "^6.4.3",
 		"vite-tsconfig-paths": "^5.1.4",
-		"vitest": "^4.1.4",
+		"vitest": "^4.1.11",
 		"wrangler": "^4.86.0"
 	}
 }
