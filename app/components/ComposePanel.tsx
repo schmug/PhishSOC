@@ -12,11 +12,16 @@ import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
 import RichTextEditor from "./RichTextEditor";
 
-export default function ComposePanel() {
-	const { mailboxId, folder } = useParams<{
-		mailboxId: string;
-		folder: string;
-	}>();
+export interface ComposePanelProps {
+	/** Overrides :mailboxId — set by /inbox, which has no route param. */
+	mailboxId?: string;
+	folder?: string;
+}
+
+export default function ComposePanel({ mailboxId: mailboxIdProp, folder: folderProp }: ComposePanelProps = {}) {
+	const params = useParams<{ mailboxId: string; folder: string }>();
+	const mailboxId = mailboxIdProp ?? params.mailboxId;
+	const folder = folderProp ?? params.folder;
 
 	const {
 		to,

@@ -12,12 +12,17 @@ interface MailboxSplitViewProps {
 	selectedEmailId: string | null;
 	isComposing: boolean;
 	children: ReactNode;
+	/** /inbox only: mailbox owning the selected row. Per-mailbox pages omit it and the panels read :mailboxId. */
+	mailboxId?: string;
+	folder?: string;
 }
 
 export default function MailboxSplitView({
 	selectedEmailId,
 	isComposing,
 	children,
+	mailboxId,
+	folder,
 }: MailboxSplitViewProps) {
 	const isPanelOpen = selectedEmailId !== null || isComposing;
 	const { closePanel, closeCompose } = useUIStore();
@@ -59,16 +64,16 @@ export default function MailboxSplitView({
 						Back to list
 					</button>
 					{isComposing && !selectedEmailId ? (
-						<ComposePanel />
+						<ComposePanel mailboxId={mailboxId} folder={folder} />
 					) : isComposing && selectedEmailId ? (
 						<div className="flex flex-col h-full overflow-y-auto">
-							<ComposePanel />
+							<ComposePanel mailboxId={mailboxId} folder={folder} />
 							<div className="border-t border-line">
-								<EmailPanel emailId={selectedEmailId} />
+								<EmailPanel emailId={selectedEmailId} mailboxId={mailboxId} folder={folder} />
 							</div>
 						</div>
 					) : selectedEmailId ? (
-						<EmailPanel emailId={selectedEmailId} />
+						<EmailPanel emailId={selectedEmailId} mailboxId={mailboxId} folder={folder} />
 					) : null}
 				</div>
 			)}
