@@ -5,6 +5,7 @@
 import { CaretLeftIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import ComposePanel from "~/components/ComposePanel";
+import type { ComposeFromPicker } from "~/components/ComposePanel";
 import EmailPanel from "~/components/EmailPanel";
 import { useUIStore } from "~/hooks/useUIStore";
 
@@ -15,6 +16,8 @@ interface MailboxSplitViewProps {
 	/** /inbox only: mailbox owning the selected row. Per-mailbox pages omit it and the panels read :mailboxId. */
 	mailboxId?: string;
 	folder?: string;
+	/** /inbox only: From picker for a new message. */
+	fromPicker?: ComposeFromPicker;
 }
 
 export default function MailboxSplitView({
@@ -23,6 +26,7 @@ export default function MailboxSplitView({
 	children,
 	mailboxId,
 	folder,
+	fromPicker,
 }: MailboxSplitViewProps) {
 	const isPanelOpen = selectedEmailId !== null || isComposing;
 	const { closePanel, closeCompose } = useUIStore();
@@ -64,10 +68,10 @@ export default function MailboxSplitView({
 						Back to list
 					</button>
 					{isComposing && !selectedEmailId ? (
-						<ComposePanel mailboxId={mailboxId} folder={folder} />
+						<ComposePanel mailboxId={mailboxId} folder={folder} fromPicker={fromPicker} />
 					) : isComposing && selectedEmailId ? (
 						<div className="flex flex-col h-full overflow-y-auto">
-							<ComposePanel mailboxId={mailboxId} folder={folder} />
+							<ComposePanel mailboxId={mailboxId} folder={folder} fromPicker={fromPicker} />
 							<div className="border-t border-line">
 								<EmailPanel emailId={selectedEmailId} mailboxId={mailboxId} folder={folder} />
 							</div>
