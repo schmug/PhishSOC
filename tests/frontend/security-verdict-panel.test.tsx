@@ -167,3 +167,36 @@ describe("SecurityVerdictPanel — relay status badge (issue #581)", () => {
 		expect(screen.queryByTestId("relay-status-badge")).toBeNull();
 	});
 });
+
+describe("SecurityVerdictPanel — send-risk badge", () => {
+	const sent = (sendRisk: string | null): Email => ({
+		id: "sent_1",
+		subject: "Invoice",
+		sender: "me@corp.example",
+		recipient: "vendor@acme.example",
+		date: "2026-05-06T10:00:00Z",
+		read: true,
+		starred: false,
+		send_risk: sendRisk,
+	});
+
+	it("renders the tier, verified marker, and reasons for a stepped-up send", () => {
+		render(
+			<SecurityVerdictPanel
+				email={sent(JSON.stringify({ v: 1, tier: 1, reasons: ["External recipient(s): vendor@acme.example"], confirmed: true }))}
+			/>,
+		);
+		const badge = screen.getByTestId("send-risk-badge");
+		expect(badge).toHaveTextContent("tier 1");
+		expect(badge).toHaveTextContent("verified");
+		expect(badge).toHaveTextContent("External recipient(s): vendor@acme.example");
+	});
+
+	it("renders nothing without a record or for a malformed one", () => {
+		const { unmount } = render(<SecurityVerdictPanel email={sent(null)} />);
+		expect(screen.queryByTestId("send-risk-badge")).toBeNull();
+		unmount();
+		render(<SecurityVerdictPanel email={sent("{not json")} />);
+		expect(screen.queryByTestId("send-risk-badge")).toBeNull();
+	});
+});

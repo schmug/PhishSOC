@@ -29,7 +29,7 @@ import {
 import { verifyDraft } from "./ai";
 import { resolveMailboxSettings } from "./mailbox-settings";
 import { sendEmail } from "../email-sender";
-import { enforceSendRiskConfirmation } from "./send-risk-gate";
+import { enforceSendRiskConfirmation, sendRiskRecord } from "./send-risk-gate";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 
@@ -540,6 +540,7 @@ export async function toolSendReply(
 				references.length > 0 ? JSON.stringify(references) : null,
 			thread_id: threadId,
 			message_id: outgoingMessageId,
+			send_risk: sendRiskRecord(gate),
 		},
 		[],
 	);
@@ -664,6 +665,7 @@ export async function toolSendEmail(
 			email_references: null,
 			thread_id: messageId,
 			message_id: outgoingMessageId,
+			send_risk: sendRiskRecord(gate),
 		},
 		sentAttachments,
 	);

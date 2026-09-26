@@ -16,7 +16,7 @@ import {
 } from "../lib/email-helpers";
 import { parseSendEmailRequest } from "../lib/schemas";
 import { classifySend } from "../security/send-risk";
-import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
+import { enforceSendRiskConfirmation, sendRiskRecord } from "../lib/send-risk-gate";
 import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
 import { requireMailbox, type MailboxContext } from "../lib/mailbox";
 import { Folders } from "../../shared/folders";
@@ -94,6 +94,7 @@ sendEmailRoutes.post("/emails", async (c) => {
 			{ key: "subject", value: subject }, { key: "date", value: new Date().toISOString() },
 			{ key: "message-id", value: `<${outgoingMessageId}>` },
 		]),
+		send_risk: sendRiskRecord(gate),
 	}, attachmentData);
 
 	c.executionCtx.waitUntil(

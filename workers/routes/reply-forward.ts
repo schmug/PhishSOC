@@ -15,7 +15,7 @@ import {
 	resolveOriginalEmail,
 } from "../lib/email-helpers";
 import { parseSendEmailRequest } from "../lib/schemas";
-import { enforceSendRiskConfirmation } from "../lib/send-risk-gate";
+import { enforceSendRiskConfirmation, sendRiskRecord } from "../lib/send-risk-gate";
 import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
 import { Folders } from "../../shared/folders";
 import type { MailboxContext } from "../lib/mailbox";
@@ -101,6 +101,7 @@ export async function handleReplyEmail(c: AppContext) {
 				...(originalMsgId ? [{ key: "in-reply-to", value: `<${originalMsgId}>` }] : []),
 				...(references.length > 0 ? [{ key: "references", value: references.map((r: string) => `<${r}>`).join(" ") }] : []),
 			]),
+			send_risk: sendRiskRecord(gate),
 		},
 		attachmentData,
 	);
@@ -207,6 +208,7 @@ export async function handleForwardEmail(c: AppContext) {
 				{ key: "date", value: new Date().toISOString() },
 				{ key: "message-id", value: `<${outgoingMessageId}>` },
 			]),
+			send_risk: sendRiskRecord(gate),
 		},
 		attachmentData,
 	);

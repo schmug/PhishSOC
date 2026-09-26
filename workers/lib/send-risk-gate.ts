@@ -1,6 +1,6 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { classifySend, type SendRisk } from "../security/send-risk";
+import { classifySend, type SendRisk, type SendRiskRecord } from "../security/send-risk";
 import { computePayloadHash, verifyConfirmationToken } from "./confirm-token";
 import type { Env } from "../types";
 
@@ -19,8 +19,19 @@ export type SendRiskGateInput = {
 type GateEnv = Pick<Env, "CONFIRMATION_TOKEN_SECRET" | "BLOOM_KV">;
 
 export type SendRiskGateResult =
-	| { ok: true; risk: SendRisk }
+	| { ok: true; risk: SendRisk; confirmed: boolean }
 	| { ok: false; status: 401; body: { error: string; risk?: SendRisk } };
+
+/** Serialize a passed gate for `emails.send_risk` on the SENT row. */
+export function sendRiskRecord(gate: { risk: SendRisk; confirmed: boolean }): string {
+	const record: SendRiskRecord = {
+		v: 1,
+		tier: gate.risk.tier,
+		reasons: gate.risk.reasons,
+		confirmed: gate.confirmed,
+	};
+	return JSON.stringify(record);
+}
 
 /**
  * Classify outbound send risk and enforce step-up confirmation for tier ≥ 1.
@@ -48,7 +59,7 @@ export async function enforceSendRiskConfirmation(
 	});
 
 	if (risk.tier < 1) {
-		return { ok: true, risk };
+		return { ok: true, risk, confirmed: false };
 	}
 
 	if (!confirmationToken) {
@@ -93,5 +104,5 @@ export async function enforceSendRiskConfirmation(
 		};
 	}
 
-	return { ok: true, risk };
+	return { ok: true, risk, confirmed: true };
 }

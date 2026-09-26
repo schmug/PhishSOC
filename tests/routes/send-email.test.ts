@@ -151,6 +151,27 @@ describe("POST /emails — Tier 2 (BEC keyword) without token", () => {
 	});
 });
 
+describe("POST /emails — persists the gate decision", () => {
+	it("stores the send-risk record on the SENT row", async () => {
+		const created: Array<Record<string, unknown>> = [];
+		currentStub = makeStub({
+			createEmail: async (_folder: string, email: Record<string, unknown>) => { created.push(email); return {}; },
+		});
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody()),
+			},
+		);
+		expect(res.status).toBe(202);
+		expect(created).toHaveLength(1);
+		expect(JSON.parse(created[0].send_risk as string)).toEqual({ v: 1, tier: 0, reasons: [], confirmed: false });
+	});
+});
+
 describe("POST /emails/preflight", () => {
 	it("returns tier and reasons without creating or sending anything", async () => {
 		const createEmailCalls: unknown[] = [];

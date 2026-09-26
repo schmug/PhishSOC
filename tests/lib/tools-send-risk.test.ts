@@ -181,6 +181,8 @@ describe("toolSendReply — send-risk gate", () => {
 		expect(result).toMatchObject({ status: "sent" });
 		expect(sendEmail).toHaveBeenCalledOnce();
 		expect(stub._sentEmails).toHaveLength(1); // SENT row written
+		const record = JSON.parse((stub._sentEmails[0] as { send_risk: string }).send_risk);
+		expect(record).toEqual({ v: 1, tier: 0, reasons: [], confirmed: false });
 	});
 
 	it("tier ≥ 1 (external recipient) without token: returns confirmation_required, no send", async () => {
@@ -237,6 +239,8 @@ describe("toolSendReply — send-risk gate", () => {
 		expect(result).toMatchObject({ status: "sent" });
 		expect(sendEmail).toHaveBeenCalledOnce();
 		expect(stub._sentEmails).toHaveLength(1);
+		const record = JSON.parse((stub._sentEmails[0] as { send_risk: string }).send_risk);
+		expect(record).toMatchObject({ v: 1, tier: 1, confirmed: true });
 	});
 });
 

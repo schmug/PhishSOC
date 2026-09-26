@@ -203,6 +203,8 @@ export interface Email {
 	security_explanation?: string | null;
 	// Inline-gateway relay outcome (#32/#581); null when the domain has no relay policy
 	relay_status?: RelayStatus | null;
+	// Outbound send-risk gate decision (JSON SendRiskRecord); set on sent mail only
+	send_risk?: string | null;
 }
 
 export type RelayStatus = "relayed" | "held" | "failed" | "dropped";
@@ -245,6 +247,26 @@ export interface SecurityVerdict {
 	signals: string[];
 	/** Present when a triage tier short-circuited the pipeline. */
 	triage?: "hard_allow" | "hard_block" | "attachment_block" | "folder_bypass";
+}
+
+/** Shape of the JSON stored in Email.send_risk (mirrors workers/security/send-risk.ts). */
+export interface SendRiskRecord {
+	v: 1;
+	tier: 0 | 1 | 2;
+	reasons: string[];
+	/** True when a step-up confirmation token was verified for the send. */
+	confirmed: boolean;
+}
+
+export function parseSendRisk(raw: string | null | undefined): SendRiskRecord | null {
+	if (!raw) return null;
+	try {
+		const parsed = JSON.parse(raw) as Partial<SendRiskRecord>;
+		if (typeof parsed.tier !== "number" || !Array.isArray(parsed.reasons)) return null;
+		return parsed as SendRiskRecord;
+	} catch {
+		return null;
+	}
 }
 
 export function parseVerdict(raw: string | null | undefined): SecurityVerdict | null {

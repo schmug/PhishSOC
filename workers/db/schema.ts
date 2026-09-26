@@ -51,6 +51,10 @@ export const emails = sqliteTable("emails", {
 	// predates the gateway feature).
 	relay_status: text("relay_status"),
 	created_by: text("created_by").default("user"),
+	// Outbound send-risk record (JSON `SendRiskRecord`, see
+	// workers/security/send-risk.ts) for rows written to SENT. NULL for
+	// inbound mail and sends that predate migration 32.
+	send_risk: text("send_risk"),
 });
 
 export const attachments = sqliteTable("attachments", {
@@ -129,6 +133,18 @@ export const senderGraph = sqliteTable(
 		pk: primaryKey({ columns: [t.sender_name, t.sender_address] }),
 	}),
 );
+
+// Outbound mirror of `sender_reputation`: one row per address this mailbox
+// has sent to. Upserted whenever a SENT row is written; read by the
+// stateful send-risk signals (first-time recipient, lookalike domain,
+// established-correspondent trust). See workers/durableObject/recipient-graph.ts.
+export const recipientGraph = sqliteTable("recipient_graph", {
+	address: text("address").primaryKey(),
+	domain: text("domain").notNull(),
+	send_count: integer("send_count").notNull().default(1),
+	first_sent: text("first_sent").notNull(),
+	last_sent: text("last_sent").notNull(),
+});
 
 // ── Threat intel ─────────────────────────────────────────────────
 

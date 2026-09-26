@@ -37,6 +37,11 @@ import {
 	type SidecarEventRow,
 } from "./sidecar-state";
 import {
+	_getSendContextImpl,
+	_recordSentRecipientsImpl,
+	parseRecipientList,
+} from "./recipient-graph";
+import {
 	_getThreadedEmailsImpl,
 	NORMALIZED_SUBJECT_SQL,
 	type ThreadedCursor,
@@ -125,6 +130,11 @@ interface EmailData {
 	 * Omit to inherit the column default ("user") at the SQL layer.
 	 */
 	created_by?: "agent" | "user";
+	/**
+	 * JSON `SendRiskRecord` for rows written to SENT (migration 32): the
+	 * send-risk gate decision that let this message out. Omit for inbound.
+	 */
+	send_risk?: string | null;
 }
 
 interface AttachmentData {
@@ -986,12 +996,37 @@ export class MailboxDO extends DurableObject<Env> {
 				provider_message_id: email.provider_message_id ?? null,
 				raw_headers: email.raw_headers ?? null,
 				created_by: email.created_by ?? "user",
+				send_risk: email.send_risk ?? null,
 			})
 			.run();
 
 		if (attachments.length > 0) {
 			this.db.insert(schema.attachments).values(attachments).run();
 		}
+
+		// Outbound recipient history (migration 32). Best-effort: the SENT
+		// row is already written and delivery may be under way, so a
+		// history-write failure must never fail the send.
+		if (isSent) {
+			try {
+				_recordSentRecipientsImpl(
+					this.ctx.storage.sql as SqlLike,
+					parseRecipientList(email.recipient, email.cc, email.bcc),
+					new Date().toISOString(),
+				);
+			} catch (e) {
+				console.error("createEmail: recipient_graph update failed:", (e as Error).message);
+			}
+		}
+	}
+
+	/**
+	 * Mailbox state the outbound send-risk classifier needs, in one RPC:
+	 * recipient history, per-domain send counts, lookalike anchor domains,
+	 * and the verdict of the message being replied to or forwarded.
+	 */
+	async getSendContext(args: { addresses: string[]; originalRef?: string | null }) {
+		return _getSendContextImpl(this.ctx.storage.sql as SqlLike, args);
 	}
 
 	// ── Security pipeline persistence ──────────────────────────────

@@ -20,6 +20,17 @@ export interface SendRisk {
 	reasons: string[];
 }
 
+/**
+ * The gate decision persisted as JSON in `emails.send_risk` on every SENT
+ * row (migration 32), so each outbound message records why it was allowed
+ * out. `confirmed` is true when a step-up confirmation token was verified
+ * for the send.
+ */
+export interface SendRiskRecord extends SendRisk {
+	v: 1;
+	confirmed: boolean;
+}
+
 export interface ClassifySendInput {
 	/** Primary recipient(s) — string or array of RFC-5322 address strings. */
 	to: string | string[];
