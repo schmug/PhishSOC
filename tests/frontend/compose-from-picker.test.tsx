@@ -27,7 +27,9 @@ vi.mock("~/queries/emails", () => ({
 	useDeleteEmail: () => ({ mutate: vi.fn() }),
 }));
 vi.mock("~/queries/mailboxes", () => ({
-	useMailbox: (id: string | undefined) => ({ data: id ? { id, email: id, name: id, settings: {} } : undefined }),
+	useMailbox: (id: string | undefined) => ({
+		data: id ? { id, email: id, name: id, settings: { signature: { enabled: true, text: `SIG-${id}` } } } : undefined,
+	}),
 }));
 vi.mock("~/components/RichTextEditor", () => ({ default: () => null }));
 
@@ -96,6 +98,30 @@ describe("Compose From picker", () => {
 		await user.selectOptions(screen.getByLabelText("From"), "sales@b.test");
 		expect(screen.getByPlaceholderText(/recipient@example.com/i)).toHaveValue("dest@ext.test");
 		expect(screen.getByPlaceholderText(/email subject/i)).toHaveValue("Quote");
+	});
+
+	it("swaps the signature when From changes before the body is edited", async () => {
+		const user = userEvent.setup();
+		renderPicker("ops@a.test");
+		await user.selectOptions(await screen.findByLabelText("From"), "sales@b.test");
+		await user.type(screen.getByPlaceholderText(/recipient@example.com/i), "dest@ext.test");
+		await user.type(screen.getByPlaceholderText(/email subject/i), "Quote");
+		await user.click(screen.getByTestId("send-button-tier0"));
+		await waitFor(() => expect(sendMutate).toHaveBeenCalledTimes(1));
+		const html = sendMutate.mock.calls[0][0].email.html as string;
+		expect(html).toContain("SIG-sales@b.test");
+		expect(html).not.toContain("SIG-ops@a.test");
+	});
+
+	it("adds the picked mailbox's signature when compose opened with no default", async () => {
+		const user = userEvent.setup();
+		renderPicker(null);
+		await user.selectOptions(await screen.findByLabelText("From"), "sales@b.test");
+		await user.type(screen.getByPlaceholderText(/recipient@example.com/i), "dest@ext.test");
+		await user.type(screen.getByPlaceholderText(/email subject/i), "Quote");
+		await user.click(screen.getByTestId("send-button-tier0"));
+		await waitFor(() => expect(sendMutate).toHaveBeenCalledTimes(1));
+		expect(sendMutate.mock.calls[0][0].email.html as string).toContain("SIG-sales@b.test");
 	});
 
 	it("hides the picker for replies", async () => {

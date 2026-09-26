@@ -187,6 +187,9 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const [isPreflighting, setIsPreflighting] = useState(false);
 	const [confirmPhrase, setConfirmPhrase] = useState("");
 	const lastInitializedOptionsRef = useRef<typeof composeOptions | null>(null);
+	// Signature and body as last initialized, so a later signature change can
+	// be applied without clobbering what the user typed.
+	const lastInitRef = useRef<{ sig: string; body: string } | null>(null);
 	const latestSubjectRef = useRef(subject);
 	const latestBodyRef = useRef(body);
 	const isDraftEdit = !!composeOptions.draftEmail;
@@ -214,9 +217,29 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		setShowCcBcc(initialFields.showCcBcc);
 		setSubject(initialFields.subject);
 		setBody(initialFields.body);
+		lastInitRef.current = { sig: sigBlock, body: initialFields.body };
 		setPreflight(null);
 		setConfirmPhrase("");
 	}, [composeOptions, currentMailbox?.email, sigBlock]);
+
+	// The sending mailbox can change after init (the /inbox From picker, or the
+	// mailbox query resolving late). Swap in its signature without touching
+	// to/cc/bcc/subject: rebuild an untouched body, or replace the old block
+	// when it is still verbatim. Once the editor has rewritten the markup the
+	// old block can't be found, and the body is left as the user sees it.
+	useEffect(() => {
+		const init = lastInitRef.current;
+		if (!init || init.sig === sigBlock || composeOptions.draftEmail) return;
+		const current = latestBodyRef.current;
+		let next = current;
+		if (current === init.body) {
+			next = buildInitialComposeFields(composeOptions, currentMailbox?.email, sigBlock).body;
+		} else if (init.sig && current.includes(init.sig)) {
+			next = current.replace(init.sig, sigBlock);
+		}
+		lastInitRef.current = { sig: sigBlock, body: current === init.body ? next : init.body };
+		if (next !== current) setBody(next);
+	}, [sigBlock, composeOptions, currentMailbox?.email]);
 
 	useEffect(() => { latestSubjectRef.current = subject; }, [subject]);
 	useEffect(() => { latestBodyRef.current = body; }, [body]);
