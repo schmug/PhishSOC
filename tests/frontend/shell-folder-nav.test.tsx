@@ -96,7 +96,7 @@ describe("Shell folder navigation (#366)", () => {
 		renderShellAt();
 
 		// Should have a link for every folder
-		expect(screen.getByRole("link", { name: /inbox/i })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /^inbox/i })).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: /sent/i })).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: /drafts/i })).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: /archive/i })).toBeInTheDocument();
@@ -108,7 +108,7 @@ describe("Shell folder navigation (#366)", () => {
 		foldersFixture = [{ id: "inbox", name: "Inbox", unreadCount: 0 }];
 		renderShellAt();
 
-		const link = screen.getByRole("link", { name: /inbox/i });
+		const link = screen.getByRole("link", { name: /^inbox/i });
 		expect(link).toHaveAttribute("href", "/mailbox/m1/emails/inbox");
 	});
 
@@ -215,13 +215,13 @@ describe("Shell folder navigation (#366)", () => {
 		renderShellAt();
 
 		// Folder link is visible initially
-		expect(screen.getByRole("link", { name: /inbox/i })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /^inbox/i })).toBeInTheDocument();
 
 		// Collapse
 		await userEvent.click(screen.getByRole("button", { name: /folders/i }));
 
 		// Folder links should no longer be in the DOM
-		expect(screen.queryByRole("link", { name: /inbox/i })).toBeNull();
+		expect(screen.queryByRole("link", { name: /^inbox/i })).toBeNull();
 	});
 
 	it("expanding a collapsed section makes folder links visible again", async () => {
@@ -232,10 +232,10 @@ describe("Shell folder navigation (#366)", () => {
 
 		// Collapse then expand
 		await userEvent.click(toggle);
-		expect(screen.queryByRole("link", { name: /inbox/i })).toBeNull();
+		expect(screen.queryByRole("link", { name: /^inbox/i })).toBeNull();
 
 		await userEvent.click(toggle);
-		expect(screen.getByRole("link", { name: /inbox/i })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /^inbox/i })).toBeInTheDocument();
 	});
 
 	it("pin button is present for each folder", () => {

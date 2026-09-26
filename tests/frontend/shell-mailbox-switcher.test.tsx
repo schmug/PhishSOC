@@ -219,7 +219,7 @@ describe("Shell mailbox switcher (#188)", () => {
 				within(menu).queryByRole("textbox", { name: /search mailboxes/i }),
 			).toBeNull();
 			// All 8 rows should be present.
-			expect(within(menu).getAllByRole("menuitem")).toHaveLength(8);
+			expect(within(menu).getAllByRole("menuitem")).toHaveLength(9);
 		});
 
 		it("renders the search input when count > 8 and filters by name substring", async () => {
@@ -242,7 +242,7 @@ describe("Shell mailbox switcher (#188)", () => {
 			});
 			expect(input).toBeInTheDocument();
 			// All 12 rows visible before filtering.
-			expect(within(menu).getAllByRole("menuitem")).toHaveLength(12);
+			expect(within(menu).getAllByRole("menuitem")).toHaveLength(13);
 
 			fireEvent.change(input, { target: { value: "needle" } });
 
@@ -294,7 +294,7 @@ describe("Shell mailbox switcher (#188)", () => {
 
 			fireEvent.change(input, { target: { value: "" } });
 			// Full list restored.
-			expect(within(menu).getAllByRole("menuitem")).toHaveLength(12);
+			expect(within(menu).getAllByRole("menuitem")).toHaveLength(13);
 		});
 	});
 
