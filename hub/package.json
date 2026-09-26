@@ -13,7 +13,7 @@
 		"db:migrate:remote": "wrangler d1 migrations apply ais-hub --remote"
 	},
 	"dependencies": {
-		"hono": "^4.12.25",
+		"hono": "^4.13.5",
 		"zod": "^3.23.0"
 	},
 	"devDependencies": {
