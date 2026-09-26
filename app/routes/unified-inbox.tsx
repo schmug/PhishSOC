@@ -39,7 +39,7 @@ export default function UnifiedInboxRoute() {
 	const [searchParams, setSearchParams] = useSearchParams();
 
 	const queryClient = useQueryClient();
-	const { data, isFetching } = useUnifiedInbox(before);
+	const { data, isFetching, isError } = useUnifiedInbox(before);
 	const { data: mailboxes } = useMailboxes();
 	const updateEmail = useUpdateEmail();
 	const markThreadRead = useMarkThreadRead();
@@ -155,6 +155,12 @@ export default function UnifiedInboxRoute() {
 						</Tooltip>
 					</div>
 				</div>
+
+				{isError && (
+					<div className="px-4 pt-3 md:px-5">
+						<Banner variant="error" text="Couldn't load All inboxes. Use Refresh to try again." />
+					</div>
+				)}
 
 				{failed.length > 0 && (
 					<div className="px-4 pt-3 md:px-5">

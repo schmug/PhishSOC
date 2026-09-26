@@ -26,11 +26,14 @@ function row(id: string, mailbox: string, extra: Partial<UnifiedInboxRow> = {}):
 }
 
 let response: UnifiedInboxResponse;
+let requestFailed = false;
 const useUnifiedInboxSpy = vi.fn();
 vi.mock("~/queries/inbox", () => ({
 	useUnifiedInbox: (before: string | null) => {
 		useUnifiedInboxSpy(before);
-		return { data: response, isFetching: false, isError: false };
+		return requestFailed
+			? { data: undefined, isFetching: false, isError: true }
+			: { data: response, isFetching: false, isError: false };
 	},
 }));
 
@@ -91,6 +94,7 @@ describe("/inbox", () => {
 		deleteMutate.mockReset();
 		localStorage.clear();
 		useUIStore.setState({ selectedEmailId: null, isComposing: false });
+		requestFailed = false;
 		response = {
 			emails: [row("e1", "ops@a.test"), row("e2", "sales@b.test")],
 			nextCursor: "CUR1",
@@ -134,6 +138,12 @@ describe("/inbox", () => {
 		response = { ...response, failed: ["broken@z.test"] };
 		renderInbox();
 		expect(screen.getByText(/1 mailbox didn't load/i)).toHaveTextContent("broken@z.test");
+	});
+
+	it("says so when the request fails instead of showing a blank list", () => {
+		requestFailed = true;
+		renderInbox();
+		expect(screen.getByText(/couldn't load all inboxes/i)).toBeInTheDocument();
 	});
 
 	it("shows the no-mailboxes empty state with a link to /mailboxes", async () => {
