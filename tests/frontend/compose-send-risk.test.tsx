@@ -445,6 +445,18 @@ describe("Composer send-risk — parity with the gate", () => {
 		expect((preflightMock.mock.calls[0][1] as { in_reply_to?: string }).in_reply_to).toBeUndefined();
 	});
 
+	it("previews again after a pause in editing, so the server's AI check sees the text", async () => {
+		preflightMock.mockResolvedValue({ tier: 0, reasons: [] });
+		const user = userEvent.setup();
+		renderPanel();
+		await user.type(screen.getByPlaceholderText(/recipient@example.com/i), "colleague@internal.test");
+		await waitFor(() => expect(preflightMock).toHaveBeenCalled(), { timeout: 2000 });
+		const before = preflightMock.mock.calls.length;
+		await user.type(screen.getByPlaceholderText(/email subject/i), "Q3 numbers");
+		await waitFor(() => expect(preflightMock.mock.calls.length).toBeGreaterThan(before), { timeout: 3000 });
+		expect((preflightMock.mock.calls.at(-1)![1] as { subject: string }).subject).toBe("Q3 numbers");
+	});
+
 	it("shows why the tier was chosen", async () => {
 		preflightMock.mockResolvedValue({
 			tier: 2,

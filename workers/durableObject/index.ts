@@ -42,6 +42,11 @@ import {
 	parseRecipientList,
 } from "./recipient-graph";
 import {
+	_getSendRiskLlmCacheImpl,
+	_putSendRiskLlmCacheImpl,
+	type CachedOutboundVerdict,
+} from "./send-risk-llm-cache";
+import {
 	_getThreadedEmailsImpl,
 	NORMALIZED_SUBJECT_SQL,
 	type ThreadedCursor,
@@ -1027,6 +1032,15 @@ export class MailboxDO extends DurableObject<Env> {
 	 */
 	async getSendContext(args: { addresses: string[]; originalRef?: string | null }) {
 		return _getSendContextImpl(this.ctx.storage.sql as SqlLike, args);
+	}
+
+	/** Outbound LLM send-risk verdict cache (migration 33): preflight writes, the send gate reads. */
+	async getSendRiskLlmCache(key: string) {
+		return _getSendRiskLlmCacheImpl(this.ctx.storage.sql as SqlLike, key, Date.now());
+	}
+
+	async putSendRiskLlmCache(key: string, verdict: CachedOutboundVerdict) {
+		_putSendRiskLlmCacheImpl(this.ctx.storage.sql as SqlLike, key, verdict, Date.now());
 	}
 
 	// ── Security pipeline persistence ──────────────────────────────

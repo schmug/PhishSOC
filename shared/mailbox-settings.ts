@@ -76,11 +76,14 @@ const DetectorSettings = z
 
 /**
  * Outbound send-risk options (follow-up to #15). See `SendRiskSettings` in
- * `workers/security/defaults.ts`; absent key = default (off).
+ * `workers/security/defaults.ts`; absent key = default (trust off, LLM on,
+ * default classifier model).
  */
 const SendRiskSettings = z
   .object({
     trust_known_recipients: z.boolean().optional(),
+    llm_enabled: z.boolean().optional(),
+    classifier_model: z.string().optional(),
   })
   .passthrough();
 

@@ -42,6 +42,7 @@ sendEmailRoutes.post("/emails/preflight", async (c) => {
 		createdBy,
 		originalRef: in_reply_to,
 		channel: "api",
+		phase: "preflight",
 	});
 	return c.json(risk);
 });

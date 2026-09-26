@@ -361,6 +361,19 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 						send_risk: { ...s.send_risk, trust_known_recipients: v },
 					})}
 				/>
+				<p className="text-xs text-ink-3 mt-4 mb-3">
+					An AI model (Workers AI) also reads the text you write, not quoted replies,
+					and asks for step-up when it looks like a response to a scam, phishing or spam
+					sent from this account, or a leaked password, key or personal data. It can only
+					add step-up, never remove it.
+				</p>
+				<Switch
+					label="AI check of outgoing text"
+					checked={s.send_risk?.llm_enabled ?? true}
+					onCheckedChange={(v) => patch({
+						send_risk: { ...s.send_risk, llm_enabled: v },
+					})}
+				/>
 			</div>
 
 			{/* Business hours */}

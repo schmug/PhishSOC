@@ -11,7 +11,7 @@
  *   4. Tier ≥ 1 send with valid token → send proceeds.
  */
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 // ── Mock sendEmail so no real delivery happens ───────────────────────────────
 vi.mock("../../workers/email-sender", () => ({
@@ -47,6 +47,7 @@ import {
 } from "../../workers/lib/confirm-token";
 import type { Env } from "../../workers/types";
 import type { EmailFull } from "../../workers/lib/schemas";
+import { GATE_BUDGET_MS, __setOutboundClassifier } from "../../workers/security/send-risk-llm";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -644,6 +645,53 @@ describe("MCP send tools — no established-correspondent trust", () => {
 			subject: "Statement",
 			bodyHtml: "<p>See attached.</p>",
 		});
+		expect(result).toMatchObject({ error: "confirmation_required", risk: { tier: 1 } });
+		expect(sendEmail).not.toHaveBeenCalled();
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Outbound LLM classifier covers the MCP channel (slice 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("MCP send tools — outbound LLM classifier", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+	afterEach(() => __setOutboundClassifier(null));
+
+	it("toolSendEmail: an internal send the classifier flags needs step-up", async () => {
+		const budgets: number[] = [];
+		__setOutboundClassifier(async (_ai, _input, opts) => {
+			budgets.push(opts.timeoutMs);
+			return '{"label":"victim_response","confidence":0.9}';
+		});
+		const stub = makeStub();
+		const result = await toolSendEmail(makeEnv(stub), MAILBOX_ID, {
+			to: "colleague@internal.example",
+			subject: "Codes",
+			bodyHtml: "<p>Here you go: 4921-8830</p>",
+		});
+		expect(result).toMatchObject({ error: "confirmation_required", risk: { tier: 2 } });
+		expect((result as { risk: { reasons: string[] } }).risk.reasons).toContain("AI classifier: victim_response (0.90)");
+		expect(budgets).toEqual([GATE_BUDGET_MS]);
+		expect(sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("toolSendReply: the classifier sees the reply text", async () => {
+		const seen: string[] = [];
+		__setOutboundClassifier(async (_ai, input) => {
+			seen.push(input.newText);
+			return '{"label":"data_exposure","confidence":0.8}';
+		});
+		const stub = makeStub();
+		const result = await toolSendReply(makeEnv(stub), MAILBOX_ID, {
+			originalEmailId: ORIGINAL_ID,
+			to: "colleague@internal.example",
+			subject: "Re: Question",
+			bodyHtml: "<p>The API key is sk-live-123</p>",
+		});
+		expect(seen).toEqual(["The API key is sk-live-123"]);
 		expect(result).toMatchObject({ error: "confirmation_required", risk: { tier: 1 } });
 		expect(sendEmail).not.toHaveBeenCalled();
 	});

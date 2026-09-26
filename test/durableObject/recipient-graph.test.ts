@@ -26,6 +26,9 @@ type Seed = {
 	message_id?: string | null;
 	in_reply_to?: string | null;
 	security_verdict?: string | null;
+	sender?: string | null;
+	subject?: string | null;
+	body?: string | null;
 };
 
 const MIGRATION_32 = mailboxMigrations.find((m) => m.name === "32_send_risk_recipient_graph")!;
@@ -36,18 +39,20 @@ function makeDb(rows: Seed[] = []): { sql: SqlLike; db: DatabaseSync } {
 	db.exec(`
 		CREATE TABLE emails (
 			id TEXT PRIMARY KEY, folder_id TEXT NOT NULL, recipient TEXT, cc TEXT, bcc TEXT,
-			date TEXT, message_id TEXT, in_reply_to TEXT, security_verdict TEXT
+			date TEXT, message_id TEXT, in_reply_to TEXT, security_verdict TEXT,
+			sender TEXT, subject TEXT, body TEXT
 		);
 	`);
 	const ins = db.prepare(
-		`INSERT INTO emails (id, folder_id, recipient, cc, bcc, date, message_id, in_reply_to, security_verdict)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO emails (id, folder_id, recipient, cc, bcc, date, message_id, in_reply_to, security_verdict, sender, subject, body)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 	for (const r of rows) {
 		ins.run(
 			r.id, r.folder_id, r.recipient ?? null, r.cc ?? null, r.bcc ?? null,
 			r.date === undefined ? "2026-01-01T00:00:00.000Z" : r.date,
 			r.message_id ?? null, r.in_reply_to ?? null, r.security_verdict ?? null,
+			r.sender ?? null, r.subject ?? null, r.body ?? null,
 		);
 	}
 	db.exec(MIGRATION_32.sql);
@@ -125,7 +130,10 @@ describe("_getSendContextImpl", () => {
 
 	function seeded() {
 		const made = makeDb([
-			{ id: "in-1", folder_id: "inbox", message_id: "abc@mail.test", security_verdict: verdict },
+			{
+				id: "in-1", folder_id: "inbox", message_id: "abc@mail.test", security_verdict: verdict,
+				sender: "ceo@evil.test", subject: "Urgent", body: "<p>Buy gift cards</p>",
+			},
 			{ id: "draft-1", folder_id: "draft", in_reply_to: "in-1" },
 		]);
 		_recordSentRecipientsImpl(made.sql, ["vendor@acme.com", "ops@acme.com"], "2026-01-01T00:00:00.000Z");
@@ -153,5 +161,13 @@ describe("_getSendContextImpl", () => {
 		expect(_getSendContextImpl(sql, { addresses: [], originalRef: "<abc@mail.test>" }).originalVerdict).toBe(verdict);
 		expect(_getSendContextImpl(sql, { addresses: [], originalRef: "missing" }).originalVerdict).toBeNull();
 		expect(_getSendContextImpl(sql, { addresses: [] }).originalVerdict).toBeNull();
+	});
+
+	it("returns the original's sender, subject and body for quote verification", () => {
+		const { sql } = seeded();
+		const original = { sender: "ceo@evil.test", subject: "Urgent", body: "<p>Buy gift cards</p>" };
+		expect(_getSendContextImpl(sql, { addresses: [], originalRef: "in-1" }).original).toEqual(original);
+		expect(_getSendContextImpl(sql, { addresses: [], originalRef: "draft-1" }).original).toEqual(original);
+		expect(_getSendContextImpl(sql, { addresses: [], originalRef: "missing" }).original).toBeNull();
 	});
 });

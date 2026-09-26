@@ -69,6 +69,7 @@ export async function enforceSendRiskConfirmation(
 		createdBy: input.createdBy,
 		originalRef: input.originalRef,
 		channel: input.channel,
+		phase: "gate",
 	});
 
 	if (risk.tier < 1) {
