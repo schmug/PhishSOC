@@ -1305,6 +1305,7 @@ export class MailboxDO extends DurableObject<Env> {
 				verdict: schema.emails.security_verdict,
 				score: schema.emails.security_score,
 				explanation: schema.emails.security_explanation,
+				sender: schema.emails.sender,
 			})
 			.from(schema.emails)
 			.where(eq(schema.emails.id, emailId))

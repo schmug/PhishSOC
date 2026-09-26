@@ -98,7 +98,7 @@ const MULTI_LABEL_PUBLIC_SUFFIXES = new Set([
  * Extract the registrable (eTLD+1) portion of a hostname, handling common
  * multi-label suffixes so we compare like-for-like against HIGH_VALUE_DOMAINS.
  */
-function registrableDomain(hostname: string): string {
+export function registrableDomain(hostname: string): string {
 	const parts = hostname.split(".");
 	if (parts.length < 2) return hostname;
 	const last2 = parts.slice(-2).join(".");
