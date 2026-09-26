@@ -39,6 +39,7 @@ import { isTlsRptReport, ingestTlsRptReport } from "./tlsrpt/ingest";
 import { tlsrptRoutes } from "./routes/tlsrpt";
 import { caseRoutes } from "./routes/cases";
 import { sendEmailRoutes } from "./routes/send-email";
+import { unifiedInboxRoutes } from "./routes/unified-inbox";
 import { hubUiRoutes } from "./routes/hub-ui";
 import { sidecarRoutes } from "./routes/sidecar";
 import { sidecarConfigOf, sidecarHealthOf } from "./lib/sidecar-config";
@@ -171,6 +172,10 @@ app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/hub", hubUiRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/sidecar", sidecarRoutes);
 app.route("/api/v1/mailboxes/:mailboxId", sendEmailRoutes);
+
+// Unified All inboxes (spec 2026-09-26). Not under /mailboxes/:mailboxId, so
+// requireMailbox does not run — the route ACL-filters every mailbox itself.
+app.route("/api/v1/inbox", unifiedInboxRoutes);
 
 // Rejects strings that aren't registrable domains (no protocol, path, @, single label).
 function isValidRegistrableDomain(d: string): boolean {

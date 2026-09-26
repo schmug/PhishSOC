@@ -154,6 +154,8 @@ export interface MailboxSettings {
 	intel?: IntelSettings;
 	yaramail_scanner?: YaraMailScannerSettings;
 	sidecar?: SidecarSettings;
+	/** Leave this mailbox out of the /inbox All inboxes view. */
+	hideFromAllInboxes?: boolean;
 }
 
 export interface Mailbox {
@@ -204,6 +206,22 @@ export interface Email {
 }
 
 export type RelayStatus = "relayed" | "held" | "failed" | "dropped";
+
+/** Row from GET /api/v1/inbox: a threaded inbox row tagged with its owning mailbox. */
+export interface UnifiedInboxRow extends Email {
+	mailbox_id: string;
+	mailbox_email: string;
+}
+
+export interface UnifiedInboxResponse {
+	emails: UnifiedInboxRow[];
+	/** Opaque keyset cursor for the next (older) page; null on the last page. */
+	nextCursor: string | null;
+	/** Mailboxes (visible to the caller) whose inbox could not be read. */
+	failed: string[];
+	/** Mailboxes included in the merge (0 when every mailbox is hidden). */
+	mailboxCount: number;
+}
 
 /** Shape of the JSON stored in Email.security_verdict. */
 export interface SecurityVerdict {

@@ -50,11 +50,19 @@ function EmailPanelSkeleton() {
 	);
 }
 
-export default function EmailPanel({ emailId }: { emailId: string }) {
-	const { mailboxId, folder } = useParams<{
-		mailboxId: string;
-		folder: string;
-	}>();
+export default function EmailPanel({
+	emailId,
+	mailboxId: mailboxIdProp,
+	folder: folderProp,
+}: {
+	emailId: string;
+	/** Overrides :mailboxId — set by /inbox, which has no route param. */
+	mailboxId?: string;
+	folder?: string;
+}) {
+	const params = useParams<{ mailboxId: string; folder: string }>();
+	const mailboxId = mailboxIdProp ?? params.mailboxId;
+	const folder = folderProp ?? params.folder;
 	const { data: email } = useEmail(mailboxId, emailId) as { data?: Email };
 	const { data: threadRepliesRaw } = useThreadReplies(
 		mailboxId,

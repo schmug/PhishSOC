@@ -404,6 +404,8 @@ export const MailboxSettings = z.object({
   honeypot: HoneypotSettings.optional(),
   sidecar: SidecarSettings.optional(),
   newEmailWebhook: NewEmailWebhookSettings.optional(),
+  /** Leave this mailbox out of the unified All inboxes view (GET /api/v1/inbox). Mailbox tier only. */
+  hideFromAllInboxes: z.boolean().optional(),
 }).passthrough();
 
 export type MailboxSettings = z.infer<typeof MailboxSettings>;

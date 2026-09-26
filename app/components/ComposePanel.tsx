@@ -8,15 +8,44 @@ import {
 	PaperPlaneTiltIcon,
 	XIcon,
 } from "@phosphor-icons/react";
+import { useState } from "react";
 import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
+import { useUIStore } from "~/hooks/useUIStore";
+import { writeLastFrom } from "~/lib/compose-from";
 import RichTextEditor from "./RichTextEditor";
 
-export default function ComposePanel() {
-	const { mailboxId, folder } = useParams<{
-		mailboxId: string;
-		folder: string;
-	}>();
+export interface ComposeFromPicker {
+	/** Mailboxes the operator may send from (inbox-navigable, including ones hidden from All inboxes). */
+	options: Array<{ id: string; email: string }>;
+	/** Pre-selected mailbox id, or null to force a choice. */
+	defaultId: string | null;
+}
+
+export interface ComposePanelProps {
+	/** Overrides :mailboxId — set by /inbox, which has no route param. */
+	mailboxId?: string;
+	folder?: string;
+	/** /inbox only: From picker for a new message. Ignored for replies, forwards and draft edits. */
+	fromPicker?: ComposeFromPicker;
+}
+
+export default function ComposePanel({
+	mailboxId: mailboxIdProp,
+	folder: folderProp,
+	fromPicker,
+}: ComposePanelProps = {}) {
+	const params = useParams<{ mailboxId: string; folder: string }>();
+	const { composeOptions } = useUIStore();
+	const showFromPicker = !!fromPicker && composeOptions.mode === "new" && !composeOptions.draftEmail;
+	const [fromId, setFromId] = useState<string | null>(fromPicker?.defaultId ?? null);
+	// A default outside the options (deep link to a sidecar mailbox, list not
+	// loaded yet) would render the first option while sending from another
+	// mailbox. Treat it as unpicked.
+	const pickedFromId = fromId && fromPicker?.options.some((o) => o.id === fromId) ? fromId : null;
+	const mailboxId = showFromPicker ? (pickedFromId ?? undefined) : (mailboxIdProp ?? params.mailboxId);
+	const folder = folderProp ?? params.folder;
+	const fromMissing = showFromPicker && !pickedFromId;
 
 	const {
 		to,
@@ -84,6 +113,32 @@ export default function ComposePanel() {
 					{error && <Banner variant="error" text={error} />}
 
 					<div className="space-y-3">
+						{showFromPicker && fromPicker && (
+							<div className="flex items-center gap-2">
+								<label htmlFor="compose-from" className="text-sm font-medium text-ink-3 w-14 shrink-0">
+									From
+								</label>
+								<select
+									id="compose-from"
+									value={pickedFromId ?? ""}
+									onChange={(e) => {
+										const v = e.target.value || null;
+										setFromId(v);
+										if (v) writeLastFrom(v);
+									}}
+									className="flex-1 min-w-0 rounded-md border border-line bg-paper px-2 py-1 text-sm text-ink"
+								>
+									<option value="" disabled>
+										Choose a mailbox…
+									</option>
+									{fromPicker.options.map((o) => (
+										<option key={o.id} value={o.id}>
+											{o.email}
+										</option>
+									))}
+								</select>
+							</div>
+						)}
 						<div className="flex items-center gap-2">
 							<label
 								htmlFor="compose-to"
@@ -211,7 +266,7 @@ export default function ComposePanel() {
 								variant="secondary"
 								size="sm"
 								loading={isSavingDraft}
-								disabled={isSending}
+								disabled={isSending || fromMissing}
 								icon={<FloppyDiskIcon size={14} />}
 								onClick={handleSaveDraft}
 							>
@@ -222,7 +277,7 @@ export default function ComposePanel() {
 								variant="primary"
 								size="sm"
 								loading={isSending}
-								disabled={isSavingDraft || isSending}
+								disabled={isSavingDraft || isSending || fromMissing}
 								icon={<PaperPlaneTiltIcon size={14} />}
 								data-testid={sendTestId}
 							>
