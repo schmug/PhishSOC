@@ -107,6 +107,43 @@ describe("resolveUrl", () => {
 		expect(r?.host_changed).toBe(false);
 	});
 
+	it("does not flag host_changed for an apex-to-www redirect on the same registrable domain (issue #716)", async () => {
+		const fetchImpl = stubFetch({
+			"https://ietf.org/announce": new Response("", {
+				status: 301,
+				headers: { location: "https://www.ietf.org/announce" },
+			}),
+			"https://www.ietf.org/announce": new Response("ok", { status: 200 }),
+		});
+		const r = await resolveUrl("https://ietf.org/announce", fetchImpl);
+		expect(r?.resolved).toBe("https://www.ietf.org/announce");
+		expect(r?.host_changed).toBe(false);
+	});
+
+	it("does not flag host_changed for a scheme-only redirect on the same host (issue #716)", async () => {
+		const fetchImpl = stubFetch({
+			"http://x.com/login": new Response("", {
+				status: 301,
+				headers: { location: "https://x.com/login" },
+			}),
+			"https://x.com/login": new Response("ok", { status: 200 }),
+		});
+		const r = await resolveUrl("http://x.com/login", fetchImpl);
+		expect(r?.host_changed).toBe(false);
+	});
+
+	it("still flags host_changed for a redirect to an unrelated registrable domain (issue #716)", async () => {
+		const fetchImpl = stubFetch({
+			"https://www.google.com/url?q=https://evil.example": new Response("", {
+				status: 302,
+				headers: { location: "https://evil.example/phish" },
+			}),
+			"https://evil.example/phish": new Response("ok", { status: 200 }),
+		});
+		const r = await resolveUrl("https://www.google.com/url?q=https://evil.example", fetchImpl);
+		expect(r?.host_changed).toBe(true);
+	});
+
 	it("returns null for a URL that cannot be parsed", async () => {
 		const r = await resolveUrl("not a url");
 		expect(r).toBeNull();
