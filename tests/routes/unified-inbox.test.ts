@@ -1,22 +1,7 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-// Every settings tier swallows R2 errors, so the route's settings `catch` is
-// only reachable when resolveMailboxSettings itself throws. Force that per id.
-const { resolveFail } = vi.hoisted(() => ({ resolveFail: new Set<string>() }));
-vi.mock("../../workers/lib/mailbox-settings", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("../../workers/lib/mailbox-settings")>();
-	return {
-		...actual,
-		resolveMailboxSettings: async (env: Parameters<typeof actual.resolveMailboxSettings>[0], id: string) => {
-			if (resolveFail.has(id)) throw new Error("settings down");
-			return actual.resolveMailboxSettings(env, id);
-		},
-	};
-});
-
+import { describe, expect, it, vi } from "vitest";
 import { encodeCursor } from "../../workers/lib/unified-inbox";
 import { unifiedInboxRoutes } from "../../workers/routes/unified-inbox";
 
@@ -26,10 +11,11 @@ function makeFakeJwt(claims: Record<string, unknown>): string {
 	return `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify(claims))}.`;
 }
 
-function makeR2Stub(initial: Record<string, string>) {
+function makeR2Stub(initial: Record<string, string>, throwOn: Set<string> = new Set()) {
 	const store = { ...initial };
 	return {
 		async get(key: string) {
+			if (throwOn.has(key)) throw new Error("r2 down");
 			const val = store[key];
 			if (val === undefined) return null;
 			return { json: async <T>() => JSON.parse(val) as T };
@@ -87,8 +73,6 @@ function baseStubs(): Record<string, Stub> {
 }
 
 describe("GET /api/v1/inbox", () => {
-	beforeEach(() => resolveFail.clear());
-
 	it("merges visible mailboxes newest first and drops honeypot, hidden and ACL-denied mailboxes", async () => {
 		const stubs = baseStubs();
 		const res = await makeApp(makeR2Stub(baseStore()), stubs)("/api/v1/inbox");
@@ -116,19 +100,38 @@ describe("GET /api/v1/inbox", () => {
 		expect(body.failed).toEqual(["ops@a.test"]);
 	});
 
-	it("excludes a mailbox whose settings cannot be resolved and lists it in failed", async () => {
-		resolveFail.add("ops@b.test");
+	it("excludes a mailbox whose settings read throws and lists it in failed", async () => {
 		const stubs = baseStubs();
-		const res = await makeApp(makeR2Stub(baseStore()), stubs)("/api/v1/inbox");
+		const bucket = makeR2Stub(baseStore(), new Set(["mailboxes/ops@b.test.json"]));
+		const res = await makeApp(bucket, stubs)("/api/v1/inbox");
 		const body = (await res.json()) as { emails: Array<{ id: string }>; failed: string[] };
 		expect(body.emails.map((e) => e.id)).toEqual(["a1"]);
 		expect(body.failed).toEqual(["ops@b.test"]);
 		expect(stubs["ops@b.test"].getThreadedEmails).not.toHaveBeenCalled();
 	});
 
+	it("excludes a honeypot whose settings blob cannot be read and lists it in failed", async () => {
+		const stubs = baseStubs();
+		const bucket = makeR2Stub(baseStore(), new Set(["mailboxes/pot@a.test.json"]));
+		const res = await makeApp(bucket, stubs)("/api/v1/inbox");
+		const body = (await res.json()) as { emails: Array<{ id: string }>; failed: string[] };
+		expect(body.emails.map((e) => e.id)).not.toContain("p1");
+		expect(body.failed).toEqual(["pot@a.test"]);
+		expect(stubs["pot@a.test"].getThreadedEmails).not.toHaveBeenCalled();
+	});
+
+	it("treats a malformed settings blob as unreadable, not as empty settings", async () => {
+		const stubs = baseStubs();
+		const store = { ...baseStore(), "mailboxes/quiet@b.test.json": "{not json" };
+		const res = await makeApp(makeR2Stub(store), stubs)("/api/v1/inbox");
+		const body = (await res.json()) as { emails: Array<{ id: string }>; failed: string[] };
+		expect(body.emails.map((e) => e.id)).not.toContain("q1");
+		expect(body.failed).toEqual(["quiet@b.test"]);
+	});
+
 	it("never lists a mailbox the caller cannot see in failed", async () => {
-		resolveFail.add("bob@b.test");
-		const res = await makeApp(makeR2Stub(baseStore()), baseStubs())("/api/v1/inbox");
+		const bucket = makeR2Stub(baseStore(), new Set(["mailboxes/bob@b.test.json"]));
+		const res = await makeApp(bucket, baseStubs())("/api/v1/inbox");
 		const body = (await res.json()) as { failed: string[] };
 		expect(body.failed).not.toContain("bob@b.test");
 	});

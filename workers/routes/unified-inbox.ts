@@ -18,7 +18,6 @@ import { Hono } from "hono";
 import { Folders } from "../../shared/folders";
 import { listMailboxes } from "../lib/email-helpers";
 import { callerEmailFromJwt, callerGroupsFromJwt, readMailboxAcl } from "../lib/mailbox-acl";
-import { resolveMailboxSettings } from "../lib/mailbox-settings";
 import { sidecarConfigOf } from "../lib/sidecar-config";
 import {
 	decodeCursor,
@@ -63,8 +62,18 @@ unifiedInboxRoutes.get("/", async (c) => {
 		Promise.all(mailboxes.map((m) => readMailboxAcl(c.env, m.id))),
 		Promise.all(
 			mailboxes.map(async (m): Promise<InboxMailboxFlags | null> => {
+				// Read the mailbox tier blob directly: getMailboxSettings swallows R2
+				// and JSON errors and returns {}, which would read as "not a honeypot,
+				// not hidden" and leak lure mail into the list. All three flags live
+				// on the mailbox tier only. A missing blob (deleted since the list
+				// call) also counts as unreadable.
 				try {
-					const raw = (await resolveMailboxSettings(c.env, m.id)).raw;
+					const obj = await c.env.BUCKET.get(`mailboxes/${m.id}.json`);
+					if (!obj) throw new Error("settings blob missing");
+					const raw = (await obj.json()) as {
+						honeypot?: { enabled?: boolean };
+						hideFromAllInboxes?: unknown;
+					} | null;
 					return {
 						honeypot: !!raw?.honeypot?.enabled,
 						sidecar: !!sidecarConfigOf(raw),
