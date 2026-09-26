@@ -89,6 +89,7 @@ export interface SecuritySettings {
 	mitigations?: { dmarc_pass_compensates_method_fail?: boolean };
 	classification?: ClassificationSettings;
 	detectors?: { sender_graph?: { enabled?: boolean } };
+	send_risk?: { trust_known_recipients?: boolean };
 }
 
 export interface DmarcRufRecord {

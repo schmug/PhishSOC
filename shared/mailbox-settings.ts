@@ -74,6 +74,16 @@ const DetectorSettings = z
   })
   .passthrough();
 
+/**
+ * Outbound send-risk options (follow-up to #15). See `SendRiskSettings` in
+ * `workers/security/defaults.ts`; absent key = default (off).
+ */
+const SendRiskSettings = z
+  .object({
+    trust_known_recipients: z.boolean().optional(),
+  })
+  .passthrough();
+
 export const SecuritySettings = z
   .object({
     attachment_policy: AttachmentPolicy.optional(),
@@ -81,6 +91,7 @@ export const SecuritySettings = z
     classification: ClassificationSettings.optional(),
     mitigations: MitigationConfig.optional(),
     detectors: DetectorSettings.optional(),
+    send_risk: SendRiskSettings.optional(),
   })
   .passthrough();
 

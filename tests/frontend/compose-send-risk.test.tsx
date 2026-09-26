@@ -87,7 +87,7 @@ vi.mock("~/components/RichTextEditor", () => ({
 
 import ComposePanel from "~/components/ComposePanel";
 import ComposeEmail from "~/components/ComposeEmail";
-import api from "~/services/api";
+import api, { ApiError } from "~/services/api";
 import { useUIStore } from "~/hooks/useUIStore";
 import { StepUpNoPasskeyError } from "~/lib/step-up-confirm";
 
@@ -395,5 +395,85 @@ describe("Composer send-risk UI (#263)", () => {
 				expect.objectContaining({ confirmationToken: "tok-modal" }),
 			);
 		});
+	});
+});
+
+// ── Preflight parity with the send gate (stateful send-risk rules) ───────────
+
+describe("Composer send-risk — parity with the gate", () => {
+	beforeEach(() => {
+		preflightMock.mockReset();
+		feedbackError.mockReset();
+		stepUpMock.mockReset();
+		sendEmailMutate.mockReset().mockResolvedValue(undefined);
+	});
+
+	afterEach(() => {
+		useUIStore.getState().closePanel();
+		useUIStore.getState().closeComposeModal();
+	});
+
+	it("previews with the HTML body and the message being replied to", async () => {
+		preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient(s): asker@external.com"] });
+		useUIStore.getState().startCompose({
+			mode: "reply",
+			originalEmail: {
+				id: "orig-1",
+				subject: "Question",
+				sender: "asker@external.com",
+				recipient: "operator@internal.test",
+				date: "2026-09-01T00:00:00Z",
+				read: true,
+				starred: false,
+				body: "<p>Hi</p>",
+				thread_id: "orig-1",
+			},
+		});
+		renderPanel();
+		await waitFor(() => expect(preflightMock).toHaveBeenCalled(), { timeout: 2000 });
+		const payload = preflightMock.mock.calls[0][1] as { in_reply_to?: string; html?: string };
+		expect(payload.in_reply_to).toBe("orig-1");
+		expect(typeof payload.html).toBe("string");
+	});
+
+	it("does not name a reply target for a new message", async () => {
+		preflightMock.mockResolvedValue({ tier: 0, reasons: [] });
+		const user = userEvent.setup();
+		renderPanel();
+		await user.type(screen.getByPlaceholderText(/recipient@example.com/i), "colleague@internal.test");
+		await waitFor(() => expect(preflightMock).toHaveBeenCalled(), { timeout: 2000 });
+		expect((preflightMock.mock.calls[0][1] as { in_reply_to?: string }).in_reply_to).toBeUndefined();
+	});
+
+	it("shows why the tier was chosen", async () => {
+		preflightMock.mockResolvedValue({
+			tier: 2,
+			reasons: ['Recipient domain "contoso-bnak.com" resembles "contoso-bank.com"'],
+		});
+		const user = userEvent.setup();
+		renderPanel();
+		await typeToAndWaitForPreflight(user, "ap@contoso-bnak.com", "send-button-tier2");
+		expect(screen.getByTestId("send-risk-reasons")).toHaveTextContent('"contoso-bnak.com" resembles "contoso-bank.com"');
+	});
+
+	it("adopts a higher tier from the gate and asks for the typed recipient next time", async () => {
+		preflightMock.mockResolvedValue({ tier: 1, reasons: ["External recipient"] });
+		stepUpMock.mockResolvedValue("tok-tier1");
+		sendEmailMutate.mockRejectedValueOnce(
+			new ApiError(401, {
+				error: "confirmation_required",
+				risk: { tier: 2, reasons: ["Link on threat-intel feed: evil.example (openphish)"] },
+			}),
+		);
+		const user = userEvent.setup();
+		renderPanel();
+		await typeToAndWaitForPreflight(user, "vendor@external.com", "send-button-tier1");
+		await user.type(screen.getByPlaceholderText(/email subject/i), "Hello");
+		await user.click(screen.getByTestId("send-button-tier1"));
+
+		await waitFor(() => expect(feedbackError).toHaveBeenCalled());
+		expect(feedbackError.mock.calls[0][0]).toMatch(/typed recipient.*threat-intel feed/);
+		expect(screen.getByTestId("send-button-tier2")).toBeInTheDocument();
+		expect(screen.getByTestId("confirm-phrase-input")).toBeInTheDocument();
 	});
 });

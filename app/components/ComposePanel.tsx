@@ -14,6 +14,7 @@ import { useComposeForm } from "~/hooks/useComposeForm";
 import { useUIStore } from "~/hooks/useUIStore";
 import { writeLastFrom } from "~/lib/compose-from";
 import RichTextEditor from "./RichTextEditor";
+import SendRiskReasons from "./SendRiskReasons";
 
 export interface ComposeFromPicker {
 	/** Mailboxes the operator may send from (inbox-navigable, including ones hidden from All inboxes). */
@@ -234,6 +235,7 @@ export default function ComposePanel({
 					<div className="border border-line rounded-md overflow-hidden bg-paper">
 						<RichTextEditor value={body} onChange={setBody} />
 					</div>
+					<SendRiskReasons reasons={preflight?.reasons} />
 					{sendTier >= 2 && (
 						<div className="mt-2">
 							<Input

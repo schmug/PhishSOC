@@ -134,6 +134,25 @@ export interface MailboxSecuritySettings {
 	ruf_ingestion: RufIngestionSettings;
 	/** Issue #26: per-mailbox detector on/off controls. */
 	detectors: DetectorSettings;
+	/** Outbound send-risk options (follow-up to #15). */
+	send_risk: SendRiskSettings;
+}
+
+/**
+ * Outbound send-risk options. The send gate runs whether or not inbound
+ * scanning (`enabled`) is on; these only tune it.
+ */
+export interface SendRiskSettings {
+	/**
+	 * When true, a send whose external recipients are all established
+	 * correspondents (sent to at least twice, first more than 7 days ago, last
+	 * within a year) does not need step-up for that reason alone. Every other
+	 * send-risk rule still applies, and agent drafts and MCP sends never get
+	 * this trust. Default false: step-up for every external send also covers a
+	 * stolen session writing to the vendors it already knows, which is the
+	 * BEC case step-up exists for.
+	 */
+	trust_known_recipients: boolean;
 }
 
 /**
@@ -172,6 +191,10 @@ export const DEFAULT_DETECTOR_SETTINGS: DetectorSettings = {
 	sender_graph: { enabled: true },
 };
 
+export const DEFAULT_SEND_RISK_SETTINGS: SendRiskSettings = {
+	trust_known_recipients: false,
+};
+
 export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	enabled: false, // opt-in — existing mailboxes are unaffected until the user flips this
 	thresholds: DEFAULT_THRESHOLDS,
@@ -189,4 +212,5 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	mitigations: DEFAULT_MITIGATION_CONFIG,
 	ruf_ingestion: DEFAULT_RUF_INGESTION_SETTINGS,
 	detectors: DEFAULT_DETECTOR_SETTINGS,
+	send_risk: DEFAULT_SEND_RISK_SETTINGS,
 };

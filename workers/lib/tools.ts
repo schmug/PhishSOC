@@ -474,8 +474,11 @@ export async function toolSendReply(
 			bcc: params.bcc,
 			subject: params.subject,
 			body: params.bodyHtml,
+			originalRef: params.originalEmailId,
+			channel: "mcp",
 		},
 		(jti) => (stub as any).consumeJti(jti),
+		stub,
 	);
 	if (!gate.ok) {
 		const body = gate.body;
@@ -596,8 +599,10 @@ export async function toolSendEmail(
 			subject: params.subject,
 			body: params.bodyHtml,
 			attachments: params.attachments?.map((a) => ({ filename: a.filename })),
+			channel: "mcp",
 		},
 		(jti) => (stub as any).consumeJti(jti),
+		stub,
 	);
 	if (!gate.ok) {
 		const body = gate.body;

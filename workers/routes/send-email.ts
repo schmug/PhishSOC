@@ -15,8 +15,8 @@ import {
 	buildThreadingHeaders,
 } from "../lib/email-helpers";
 import { parseSendEmailRequest } from "../lib/schemas";
-import { classifySend } from "../security/send-risk";
 import { enforceSendRiskConfirmation, sendRiskRecord } from "../lib/send-risk-gate";
+import { assessSendRisk } from "../lib/send-risk-assess";
 import { resolveCreatedByFromDraft } from "../lib/send-risk-draft";
 import { requireMailbox, type MailboxContext } from "../lib/mailbox";
 import { Folders } from "../../shared/folders";
@@ -29,14 +29,19 @@ sendEmailRoutes.post("/emails/preflight", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const parsed = parseSendEmailRequest(await c.req.json().catch(() => null));
 	if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-	const { to, cc, bcc, subject, html, text, attachments, draft_id } = parsed.data;
+	const { to, cc, bcc, subject, html, text, attachments, draft_id, in_reply_to } = parsed.data;
 	const createdBy = await resolveCreatedByFromDraft(c.var.mailboxStub, draft_id);
-	const risk = classifySend({
+	// Same assessment the send gate runs, so the tier shown matches the tier
+	// enforced. `in_reply_to` names the message being replied to / forwarded
+	// (email row id from the composer, or a Message-ID from API clients).
+	const risk = await assessSendRisk(c.env, c.var.mailboxStub, {
 		to, cc, bcc, subject,
 		body: html || text || "",
 		attachments: attachments?.map((a) => ({ filename: a.filename })),
 		mailboxId,
 		createdBy,
+		originalRef: in_reply_to,
+		channel: "api",
 	});
 	return c.json(risk);
 });
@@ -68,8 +73,11 @@ sendEmailRoutes.post("/emails", async (c) => {
 			body: html || text || "",
 			attachments: attachments?.map((a) => ({ filename: a.filename })),
 			createdBy,
+			originalRef: in_reply_to,
+			channel: "api",
 		},
 		(jti) => (c.var.mailboxStub as any).consumeJti(jti),
+		c.var.mailboxStub,
 	);
 	if (!gate.ok) return c.json(gate.body, gate.status);
 

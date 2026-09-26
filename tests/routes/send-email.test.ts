@@ -42,8 +42,14 @@ import type { MailboxContext } from "../../workers/lib/mailbox";
 
 // ── fake stub ────────────────────────────────────────────────────────────────
 
+const sendContextCalls: Array<{ addresses: string[]; originalRef?: string | null }> = [];
+
 function makeStub(overrides: Record<string, unknown> = {}) {
 	return {
+		async getSendContext(args: { addresses: string[]; originalRef?: string | null }) {
+			sendContextCalls.push(args);
+			return { recipients: [], domainSendCounts: {}, knownDomains: [], originalVerdict: null };
+		},
 		async checkSendRateLimit() { return null; },
 		async createEmail() { return {}; },
 		async getEmail() { return null; },
@@ -55,6 +61,7 @@ let currentStub = makeStub();
 
 beforeEach(() => {
 	currentStub = makeStub();
+	sendContextCalls.length = 0;
 	vi.clearAllMocks();
 });
 
@@ -335,5 +342,47 @@ describe("invalid recipient input → 400 (never 500)", () => {
 			},
 		);
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("POST /emails/preflight — stateful context", () => {
+	it("passes in_reply_to through as the original message and reports first-time recipients", async () => {
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails/preflight`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody({ to: "vendor@external.com", in_reply_to: "orig-1" })),
+			},
+		);
+		expect(res.status).toBe(200);
+		const json = await res.json() as { tier: number; reasons: string[] };
+		expect(json.tier).toBe(1);
+		expect(json.reasons).toContain("First-time recipient(s): vendor@external.com");
+		expect(sendContextCalls[0]).toEqual({ addresses: ["vendor@external.com"], originalRef: "orig-1" });
+	});
+
+	it("flags a lookalike of a domain the mailbox already writes to", async () => {
+		currentStub = makeStub({
+			getSendContext: async () => ({
+				recipients: [],
+				domainSendCounts: {},
+				knownDomains: ["contoso-bank.com"],
+				originalVerdict: null,
+			}),
+		});
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails/preflight`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody({ to: "ap@contoso-bnak.com" })),
+			},
+		);
+		const json = await res.json() as { tier: number; reasons: string[] };
+		expect(json.tier).toBe(2);
+		expect(json.reasons).toContain('Recipient domain "contoso-bnak.com" resembles "contoso-bank.com"');
 	});
 });
