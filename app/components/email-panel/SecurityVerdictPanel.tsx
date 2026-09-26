@@ -5,6 +5,7 @@
 import {
 	CaretDownIcon,
 	CaretUpIcon,
+	FingerprintIcon,
 	PaperPlaneTiltIcon,
 	PauseCircleIcon,
 	ProhibitIcon,
@@ -14,7 +15,7 @@ import {
 	WarningCircleIcon,
 } from "@phosphor-icons/react";
 import { type ReactNode, useState } from "react";
-import { type Email, parseVerdict, type RelayStatus } from "~/types";
+import { type Email, parseSendRisk, parseVerdict, type RelayStatus } from "~/types";
 
 /**
  * Renders the security pipeline's verdict for an email: action, score, auth
@@ -27,6 +28,7 @@ export default function SecurityVerdictPanel({ email }: { email: Email }) {
 		<>
 			<VerdictCard email={email} />
 			<RelayStatusBadge status={email.relay_status} />
+			<SendRiskBadge raw={email.send_risk} />
 		</>
 	);
 }
@@ -196,6 +198,40 @@ function RelayStatusBadge({ status }: { status?: RelayStatus | null }) {
 				<span className="text-ink-3">gateway relay</span>
 				<span className={`font-medium ${cfg.colorClass}`}>{status}</span>
 			</span>
+		</div>
+	);
+}
+
+const SEND_TIER_UI = {
+	0: { colorClass: "text-ink-3", label: "no step-up needed" },
+	1: { colorClass: "text-suspect", label: "tier 1" },
+	2: { colorClass: "text-danger", label: "tier 2" },
+} as const;
+
+/** Outbound send-risk gate decision recorded on sent mail. Renders nothing
+ * for inbound mail or sends that predate the send_risk column. */
+function SendRiskBadge({ raw }: { raw?: string | null }) {
+	const record = parseSendRisk(raw);
+	if (!record) return null;
+	const cfg = SEND_TIER_UI[record.tier] ?? SEND_TIER_UI[0];
+	return (
+		<div className="px-4 md:px-6 pt-3" data-testid="send-risk-badge">
+			<span className="inline-flex items-center gap-1 text-xs rounded border border-line px-1.5 py-0.5 bg-paper-3">
+				<span className="text-ink-3">send risk</span>
+				<span className={`font-medium ${cfg.colorClass}`}>{cfg.label}</span>
+				{record.confirmed && (
+					<span className="inline-flex items-center gap-0.5 text-safe" title="Step-up confirmation was verified for this send">
+						<FingerprintIcon size={12} /> verified
+					</span>
+				)}
+			</span>
+			{record.reasons.length > 0 && (
+				<ul className="mt-1 text-xs text-ink-3 list-disc ml-4 space-y-0.5">
+					{record.reasons.map((r, i) => (
+						<li key={i}>{r}</li>
+					))}
+				</ul>
+			)}
 		</div>
 	);
 }

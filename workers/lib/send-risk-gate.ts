@@ -1,7 +1,8 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { classifySend, type SendRisk } from "../security/send-risk";
+import type { SendRisk, SendRiskRecord } from "../security/send-risk";
 import { computePayloadHash, verifyConfirmationToken } from "./confirm-token";
+import { assessSendRisk, type SendContextStub } from "./send-risk-assess";
 import type { Env } from "../types";
 
 export type SendRiskGateInput = {
@@ -14,29 +15,50 @@ export type SendRiskGateInput = {
 	attachments?: Array<{ filename?: string | null }>;
 	/** From draft row `created_by` when sending an existing draft (#266). */
 	createdBy?: "agent" | "user";
+	/** Email row id or Message-ID of the message being replied to / forwarded. */
+	originalRef?: string | null;
+	/** "api" for UI/API routes, "mcp" for MCP tools — see `AssessSendRiskInput.channel`. */
+	channel?: "api" | "mcp";
 };
 
-type GateEnv = Pick<Env, "CONFIRMATION_TOKEN_SECRET" | "BLOOM_KV">;
+type GateEnv = Pick<Env, "CONFIRMATION_TOKEN_SECRET" | "BLOOM_KV"> & Partial<Env>;
 
 export type SendRiskGateResult =
-	| { ok: true; risk: SendRisk }
+	| { ok: true; risk: SendRisk; confirmed: boolean }
 	| { ok: false; status: 401; body: { error: string; risk?: SendRisk } };
+
+/** Serialize a passed gate for `emails.send_risk` on the SENT row. */
+export function sendRiskRecord(gate: { risk: SendRisk; confirmed: boolean }): string {
+	const record: SendRiskRecord = {
+		v: 1,
+		tier: gate.risk.tier,
+		reasons: gate.risk.reasons,
+		confirmed: gate.confirmed,
+	};
+	return JSON.stringify(record);
+}
 
 /**
  * Classify outbound send risk and enforce step-up confirmation for tier ≥ 1.
- * Shared by POST /emails, /reply, and /forward so none can bypass send-risk.
+ * Shared by POST /emails, /reply, /forward and the MCP send tools so none can
+ * bypass send-risk.
  *
  * `consumeJti` must atomically mark the token's jti as consumed and return
  * true only on the first consume — use the per-mailbox DO's `consumeJti`
  * method (INSERT OR IGNORE with rowsWritten check) at every call site.
+ *
+ * `contextStub` (the mailbox DO) enables the stateful rules — recipient
+ * history, flagged-thread, lookalike domain. Every production call site
+ * passes it; without it only the stateless rules run.
  */
 export async function enforceSendRiskConfirmation(
 	env: GateEnv,
 	confirmationToken: string | undefined,
 	input: SendRiskGateInput,
 	consumeJti: (jti: string) => Promise<boolean>,
+	contextStub?: SendContextStub,
 ): Promise<SendRiskGateResult> {
-	const risk = classifySend({
+	const risk = await assessSendRisk(env, contextStub, {
 		to: input.to,
 		cc: input.cc,
 		bcc: input.bcc,
@@ -45,10 +67,12 @@ export async function enforceSendRiskConfirmation(
 		attachments: input.attachments,
 		mailboxId: input.mailboxId,
 		createdBy: input.createdBy,
+		originalRef: input.originalRef,
+		channel: input.channel,
 	});
 
 	if (risk.tier < 1) {
-		return { ok: true, risk };
+		return { ok: true, risk, confirmed: false };
 	}
 
 	if (!confirmationToken) {
@@ -93,5 +117,5 @@ export async function enforceSendRiskConfirmation(
 		};
 	}
 
-	return { ok: true, risk };
+	return { ok: true, risk, confirmed: true };
 }

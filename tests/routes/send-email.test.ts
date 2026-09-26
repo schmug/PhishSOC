@@ -42,8 +42,14 @@ import type { MailboxContext } from "../../workers/lib/mailbox";
 
 // ── fake stub ────────────────────────────────────────────────────────────────
 
+const sendContextCalls: Array<{ addresses: string[]; originalRef?: string | null }> = [];
+
 function makeStub(overrides: Record<string, unknown> = {}) {
 	return {
+		async getSendContext(args: { addresses: string[]; originalRef?: string | null }) {
+			sendContextCalls.push(args);
+			return { recipients: [], domainSendCounts: {}, knownDomains: [], originalVerdict: null };
+		},
 		async checkSendRateLimit() { return null; },
 		async createEmail() { return {}; },
 		async getEmail() { return null; },
@@ -55,6 +61,7 @@ let currentStub = makeStub();
 
 beforeEach(() => {
 	currentStub = makeStub();
+	sendContextCalls.length = 0;
 	vi.clearAllMocks();
 });
 
@@ -148,6 +155,27 @@ describe("POST /emails — Tier 2 (BEC keyword) without token", () => {
 		const json = await res.json() as { error: string; risk: { tier: number } };
 		expect(json.error).toBe("confirmation_required");
 		expect(json.risk.tier).toBe(2);
+	});
+});
+
+describe("POST /emails — persists the gate decision", () => {
+	it("stores the send-risk record on the SENT row", async () => {
+		const created: Array<Record<string, unknown>> = [];
+		currentStub = makeStub({
+			createEmail: async (_folder: string, email: Record<string, unknown>) => { created.push(email); return {}; },
+		});
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody()),
+			},
+		);
+		expect(res.status).toBe(202);
+		expect(created).toHaveLength(1);
+		expect(JSON.parse(created[0].send_risk as string)).toEqual({ v: 1, tier: 0, reasons: [], confirmed: false });
 	});
 });
 
@@ -314,5 +342,47 @@ describe("invalid recipient input → 400 (never 500)", () => {
 			},
 		);
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("POST /emails/preflight — stateful context", () => {
+	it("passes in_reply_to through as the original message and reports first-time recipients", async () => {
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails/preflight`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody({ to: "vendor@external.com", in_reply_to: "orig-1" })),
+			},
+		);
+		expect(res.status).toBe(200);
+		const json = await res.json() as { tier: number; reasons: string[] };
+		expect(json.tier).toBe(1);
+		expect(json.reasons).toContain("First-time recipient(s): vendor@external.com");
+		expect(sendContextCalls[0]).toEqual({ addresses: ["vendor@external.com"], originalRef: "orig-1" });
+	});
+
+	it("flags a lookalike of a domain the mailbox already writes to", async () => {
+		currentStub = makeStub({
+			getSendContext: async () => ({
+				recipients: [],
+				domainSendCounts: {},
+				knownDomains: ["contoso-bank.com"],
+				originalVerdict: null,
+			}),
+		});
+		const { fetch } = makeApp();
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails/preflight`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody({ to: "ap@contoso-bnak.com" })),
+			},
+		);
+		const json = await res.json() as { tier: number; reasons: string[] };
+		expect(json.tier).toBe(2);
+		expect(json.reasons).toContain('Recipient domain "contoso-bnak.com" resembles "contoso-bank.com"');
 	});
 });

@@ -62,7 +62,7 @@ function safeHostname(url: string): string | null {
 }
 
 /** Levenshtein distance — used for typo/homograph detection. */
-function levenshtein(a: string, b: string): number {
+export function levenshtein(a: string, b: string): number {
 	if (a === b) return 0;
 	const n = a.length, m = b.length;
 	if (n === 0) return m;

@@ -450,6 +450,27 @@ export async function checkUrlAgainstFeeds(
 }
 
 /**
+ * Batch variant of `checkUrlAgainstFeeds` for callers that check several URLs
+ * for one mailbox (the outbound send-risk classifier): resolves the mailbox's
+ * feed list once instead of once per URL. Returns one entry per input URL, in
+ * order — `null` for no match or an unparseable URL.
+ */
+export async function checkUrlsAgainstFeeds(
+	env: Env,
+	mailboxId: string,
+	fullUrls: string[],
+): Promise<Array<FeedMatch | null>> {
+	if (!env.BLOOM_KV || fullUrls.length === 0) return fullUrls.map(() => null);
+	const feeds = resolveFeeds(env, await loadMailboxIntelSettings(env, mailboxId));
+	const out: Array<FeedMatch | null> = [];
+	for (const fullUrl of fullUrls) {
+		const host = safeHostname(fullUrl);
+		out.push(host ? await matchUrlAgainstFeeds(env, feeds, fullUrl, host) : null);
+	}
+	return out;
+}
+
+/**
  * Domain-scoped variant of `checkUrlAgainstFeeds` for the catch-all path,
  * which has no `mailboxId`. Resolves feeds from the domain's intel settings
  * (a domain-level `intel.feeds` override, else `DEFAULT_FEEDS` via

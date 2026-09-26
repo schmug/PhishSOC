@@ -270,6 +270,10 @@ function mergeSecurityWithDefault(value: unknown): MailboxSecuritySettings {
 				...(partial.detectors?.sender_graph ?? {}),
 			},
 		},
+		send_risk: {
+			...DEFAULT_SECURITY_SETTINGS.send_risk,
+			...(partial.send_risk ?? {}),
+		},
 	};
 }
 

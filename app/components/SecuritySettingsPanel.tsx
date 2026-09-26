@@ -341,6 +341,28 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 				/>
 			</div>
 
+			{/* Outbound send risk */}
+			<div className="border-t border-line pt-5">
+				<div className="text-xs font-medium text-ink mb-2">Outbound send risk</div>
+				<p className="text-xs text-ink-3 mb-3">
+					Every send to an external address asks for passkey step-up. When on, a send
+					whose external recipients are all established correspondents — written to at
+					least twice, first more than 7 days ago, last within a year — skips that
+					step-up. Keywords, risky attachments, lookalike domains, and replies to
+					flagged mail still require it, and agent drafts and MCP sends never get this
+					trust. Leave off if a stolen session writing to your existing vendors is a
+					concern: that is the case step-up exists for. Applies whether or not inbound
+					scanning is enabled.
+				</p>
+				<Switch
+					label="Skip step-up for established correspondents"
+					checked={s.send_risk?.trust_known_recipients ?? false}
+					onCheckedChange={(v) => patch({
+						send_risk: { ...s.send_risk, trust_known_recipients: v },
+					})}
+				/>
+			</div>
+
 			{/* Business hours */}
 			<div className="border-t border-line pt-5">
 				<div className="text-xs font-medium text-ink mb-2">Business hours</div>

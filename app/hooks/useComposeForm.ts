@@ -19,6 +19,7 @@ import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
 import api from "~/services/api";
 import { requestStepUpConfirmation, StepUpNoPasskeyError } from "~/lib/step-up-confirm";
+import { requiredRiskMessage, serverRequiredRisk } from "~/lib/send-risk-preview";
 
 function appendUniqueAddress(
 	addresses: string[],
@@ -249,6 +250,14 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			setPreflight(null);
 			return;
 		}
+		// The message a reply/forward will be sent against — the same id
+		// handleSend routes to /reply or /forward — so the preview sees the
+		// flagged-thread rule the send gate applies.
+		const mode = composeOptions.mode;
+		const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
+		const inReplyTo = (mode === "reply" || mode === "reply-all" || mode === "forward") && originalId
+			? originalId
+			: undefined;
 		const timer = setTimeout(async () => {
 			setIsPreflighting(true);
 			try {
@@ -256,14 +265,18 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 				// preview validates the exact payload the send will use — a
 				// multi-address Cc/Bcc must be sent as an array, not a raw
 				// comma-joined string (which fails per-address email validation).
+				// `html` is what the gate classifies (links included); `text`
+				// keeps the request valid for an empty editor.
 				const result = await api.preflightEmail(mailboxId, {
 					to: toEmailListValue(splitEmailList(to)),
 					cc: toEmailListValue(splitEmailList(cc)),
 					bcc: toEmailListValue(splitEmailList(bcc)),
 					from: mailboxId,
 					subject: latestSubjectRef.current || ".",
+					html: latestBodyRef.current || undefined,
 					text: htmlToPlainText(latestBodyRef.current) || " ",
 					draft_id: composeOptions.draftEmail?.id,
+					in_reply_to: inReplyTo,
 				});
 				setPreflight(result);
 			} catch {
@@ -357,6 +370,15 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			feedback.success("Email sent!");
 			onClose();
 		} catch (err: unknown) {
+			// The gate wanted a higher tier than this send stepped up for:
+			// adopt its verdict so the next attempt asks for the right one.
+			const required = serverRequiredRisk(err);
+			if (required) {
+				setPreflight(required);
+				const message = requiredRiskMessage(required);
+				setError(message); feedback.error(message);
+				return;
+			}
 			const message = err instanceof StepUpNoPasskeyError
 				? "No passkey enrolled. Add one in Settings → Passkeys, then send again."
 				: (err instanceof Error ? err.message : null) || "Failed to send email.";

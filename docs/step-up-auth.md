@@ -38,15 +38,50 @@ see `workers/lib/access-identity.ts`). `sub` is the per-user trust anchor; `emai
 is present only for interactive SSO sessions and gates enrollment away from service
 tokens / the MCP server.
 
-### Tier classification (unchanged)
+### Tier classification
 
-The composer classifies drafts into three tiers via `workers/security/send-risk.ts`:
+Every send is classified into three tiers by `classifySend` in
+`workers/security/send-risk.ts`. `assessSendRisk` (`workers/lib/send-risk-assess.ts`)
+gathers the mailbox state the stateful rules need and is called by both the preflight
+endpoint and the send gate, so the tier the composer shows is the tier the gate enforces.
 
 | Tier | Trigger | Action |
 |---|---|---|
-| 0 | Internal-only recipients, trusted reply | No restriction |
-| 1 | External recipient, > 10 recipients, or novel link domains | WebAuthn step-up required |
-| 2 | BEC/credential keywords, macro attachment, or agent-authored Tier-1 | WebAuthn step-up required + composer confirm phrase |
+| 0 | Internal-only recipients; external recipients who are all established correspondents *when opted in* (below) | No restriction |
+| 1 | External recipient, > 10 recipients, macro-enabled Office or disk-image attachment, lookalike/IDN link, bloom-only threat-intel link hit, reply/forward of a *tagged* message to an external recipient, reply/forward of a flagged (quarantined, blocked, phishing, or BEC) message to internal recipients only | WebAuthn step-up required |
+| 2 | BEC/credential keywords, executable or operator-blocklisted attachment, lookalike recipient domain, confirmed threat-intel link hit, reply/forward of a flagged message to an external recipient, or agent-authored Tier-1 | WebAuthn step-up required + composer confirm phrase |
+
+**Stateful signals.** The mailbox DO keeps a `recipient_graph` (migration 32): one
+row per address the mailbox has sent to, written only when a row lands in SENT — so
+history can only grow through sends the gate already allowed, and inbound mail never
+feeds it. It drives:
+
+- **First-time recipients** — named in the reasons (no tier change).
+- **Lookalike recipient domain** — a domain the mailbox has never sent to that is a
+  near-miss (edit distance, `rn`/`vv`/`0`/`1` confusables) of a domain it writes to
+  regularly, or the mailbox's own name under another suffix (`acme.co` for
+  `acme.com`). Once a user confirms a send to a domain it is not re-flagged.
+- **Established-correspondent trust** (opt-in, `security.send_risk.trust_known_recipients`,
+  default **off**) — when every external recipient has been sent to at least twice,
+  first more than 7 days ago and last within a year, the external-recipient rule alone
+  does not require step-up. Every other rule still applies. Agent-authored drafts and
+  MCP sends never get this trust. Off by default because step-up on every external
+  send is what stops a stolen session from writing to the vendors the mailbox already
+  knows.
+
+The flagged-thread rule reads the stored verdict of the message being replied to or
+forwarded (the route's email id, or `in_reply_to` on `POST /emails` and preflight).
+Each lookup is best-effort: a failed read drops only the rules that depend on it and
+never lowers the tier below what the stateless rules decide.
+
+**Audit.** Every SENT row stores the gate decision in `emails.send_risk` as
+`{ v, tier, reasons, confirmed }`, where `confirmed` records whether a step-up token
+was verified. The email view shows it as a "send risk" badge.
+
+**Tier mismatches.** If the gate computes a higher tier than the client stepped up for
+(a body edited after the last preview, say), it answers `401 confirmation_required`
+with its `risk`. The composer adopts that tier — asking for the confirm phrase at
+Tier 2 — so the next attempt steps up at the right level.
 
 The send gate (`workers/lib/send-risk-gate.ts`) and the one-shot confirm-token
 contract (`workers/lib/confirm-token.ts`: `payloadHash` binding, HS256, 60 s TTL,

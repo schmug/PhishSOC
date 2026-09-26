@@ -29,7 +29,7 @@ import {
 import { verifyDraft } from "./ai";
 import { resolveMailboxSettings } from "./mailbox-settings";
 import { sendEmail } from "../email-sender";
-import { enforceSendRiskConfirmation } from "./send-risk-gate";
+import { enforceSendRiskConfirmation, sendRiskRecord } from "./send-risk-gate";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 
@@ -474,8 +474,11 @@ export async function toolSendReply(
 			bcc: params.bcc,
 			subject: params.subject,
 			body: params.bodyHtml,
+			originalRef: params.originalEmailId,
+			channel: "mcp",
 		},
 		(jti) => (stub as any).consumeJti(jti),
+		stub,
 	);
 	if (!gate.ok) {
 		const body = gate.body;
@@ -540,6 +543,7 @@ export async function toolSendReply(
 				references.length > 0 ? JSON.stringify(references) : null,
 			thread_id: threadId,
 			message_id: outgoingMessageId,
+			send_risk: sendRiskRecord(gate),
 		},
 		[],
 	);
@@ -595,8 +599,10 @@ export async function toolSendEmail(
 			subject: params.subject,
 			body: params.bodyHtml,
 			attachments: params.attachments?.map((a) => ({ filename: a.filename })),
+			channel: "mcp",
 		},
 		(jti) => (stub as any).consumeJti(jti),
+		stub,
 	);
 	if (!gate.ok) {
 		const body = gate.body;
@@ -664,6 +670,7 @@ export async function toolSendEmail(
 			email_references: null,
 			thread_id: messageId,
 			message_id: outgoingMessageId,
+			send_risk: sendRiskRecord(gate),
 		},
 		sentAttachments,
 	);

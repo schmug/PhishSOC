@@ -656,6 +656,57 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_sidecar_audit_gmail_message_id ON sidecar_audit(gmail_message_id);
         `,
 	},
+	{
+		// Outbound send-risk history (follow-up to #15). `emails.send_risk`
+		// holds the JSON send-risk record (tier, reasons, whether a step-up
+		// token was verified) for rows written to SENT, so every outbound
+		// message carries the gate decision that let it through. NULL for
+		// inbound mail and pre-migration sends.
+		//
+		// `recipient_graph` is the outbound mirror of `sender_reputation`:
+		// one row per address this mailbox has sent to, upserted by
+		// `createEmail` whenever a SENT row is written (see
+		// workers/durableObject/recipient-graph.ts). It powers the stateful
+		// send-risk signals — first-time recipient, lookalike recipient
+		// domain, and the opt-in established-correspondent trust.
+		//
+		// The trailing INSERT backfills the graph from existing SENT rows so
+		// long-standing correspondents are not reported as first-time on the
+		// first send after deploy. Recipient columns are the lowercased,
+		// ", "-joined validated addresses every send path writes; the
+		// recursive CTE splits them on commas. Entries that do not look like
+		// a bare address are skipped.
+		name: "32_send_risk_recipient_graph",
+		sql: `
+            ALTER TABLE emails ADD COLUMN send_risk TEXT;
+            CREATE TABLE IF NOT EXISTS recipient_graph (
+                address TEXT PRIMARY KEY,
+                domain TEXT NOT NULL,
+                send_count INTEGER NOT NULL DEFAULT 1,
+                first_sent TEXT NOT NULL,
+                last_sent TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recipient_graph_domain ON recipient_graph(domain);
+            WITH RECURSIVE split(sent_at, rest, addr) AS (
+                SELECT date,
+                       lower(coalesce(recipient, '') || ',' || coalesce(cc, '') || ',' || coalesce(bcc, '')) || ',',
+                       ''
+                FROM emails
+                WHERE folder_id = 'sent' AND date IS NOT NULL
+                UNION ALL
+                SELECT sent_at,
+                       substr(rest, instr(rest, ',') + 1),
+                       trim(substr(rest, 1, instr(rest, ',') - 1))
+                FROM split
+                WHERE rest <> ''
+            )
+            INSERT INTO recipient_graph (address, domain, send_count, first_sent, last_sent)
+            SELECT addr, substr(addr, instr(addr, '@') + 1), COUNT(*), MIN(sent_at), MAX(sent_at)
+            FROM split
+            WHERE addr LIKE '_%@_%' AND instr(addr, ' ') = 0 AND instr(addr, '<') = 0
+            GROUP BY addr;
+        `,
+	},
 ];
 
 /**
