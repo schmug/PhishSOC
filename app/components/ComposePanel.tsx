@@ -39,9 +39,13 @@ export default function ComposePanel({
 	const { composeOptions } = useUIStore();
 	const showFromPicker = !!fromPicker && composeOptions.mode === "new" && !composeOptions.draftEmail;
 	const [fromId, setFromId] = useState<string | null>(fromPicker?.defaultId ?? null);
-	const mailboxId = showFromPicker ? (fromId ?? undefined) : (mailboxIdProp ?? params.mailboxId);
+	// A default outside the options (deep link to a sidecar mailbox, list not
+	// loaded yet) would render the first option while sending from another
+	// mailbox. Treat it as unpicked.
+	const pickedFromId = fromId && fromPicker?.options.some((o) => o.id === fromId) ? fromId : null;
+	const mailboxId = showFromPicker ? (pickedFromId ?? undefined) : (mailboxIdProp ?? params.mailboxId);
 	const folder = folderProp ?? params.folder;
-	const fromMissing = showFromPicker && !fromId;
+	const fromMissing = showFromPicker && !pickedFromId;
 
 	const {
 		to,
@@ -116,7 +120,7 @@ export default function ComposePanel({
 								</label>
 								<select
 									id="compose-from"
-									value={fromId ?? ""}
+									value={pickedFromId ?? ""}
 									onChange={(e) => {
 										const v = e.target.value || null;
 										setFromId(v);

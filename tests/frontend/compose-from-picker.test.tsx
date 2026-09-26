@@ -124,6 +124,20 @@ describe("Compose From picker", () => {
 		expect(sendMutate.mock.calls[0][0].email.html as string).toContain("SIG-sales@b.test");
 	});
 
+	it("treats a default that is not an option as unpicked instead of sending from it", async () => {
+		const user = userEvent.setup();
+		renderPicker("gw@c.test");
+		const select = await screen.findByLabelText("From");
+		expect(select).toHaveValue("");
+		expect(screen.getByTestId("send-button-tier0")).toBeDisabled();
+		await user.selectOptions(select, "ops@a.test");
+		await user.type(screen.getByPlaceholderText(/recipient@example.com/i), "dest@ext.test");
+		await user.type(screen.getByPlaceholderText(/email subject/i), "Quote");
+		await user.click(screen.getByTestId("send-button-tier0"));
+		await waitFor(() => expect(sendMutate).toHaveBeenCalledTimes(1));
+		expect(sendMutate.mock.calls[0][0].mailboxId).toBe("ops@a.test");
+	});
+
 	it("hides the picker for replies", async () => {
 		renderPicker("sales@b.test", "reply");
 		await screen.findByTestId("send-button-tier0");
