@@ -160,7 +160,7 @@ export function sanitizeForClassifier(text: string): string {
  * network 500, JSON-parse-fail inside `parseClassifierOutput`) still
  * fail-closed to `suspicious`.
  */
-function isClassifierTimeout(e: unknown): boolean {
+export function isClassifierTimeout(e: unknown): boolean {
 	if (!(e instanceof Error)) return false;
 	if (e.message === "classify-timeout") return true;
 	// Fetch / Workers-AI propagated abort. `name` covers both the Web
@@ -256,7 +256,7 @@ ${sanitizedBody}
 }
 
 /** Rejects with the `classify-timeout` sentinel that `isClassifierTimeout` recognizes. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 	return Promise.race([
 		promise,
 		new Promise<never>((_, reject) =>
@@ -339,22 +339,36 @@ export function parseClassifierOutput(raw: unknown): ClassificationResult {
 	} else {
 		rawStr = "";
 	}
-	const trimmed = rawStr.trim();
-	// Try to locate the first { ... } block if the model wrapped it.
-	const match = trimmed.match(/\{[\s\S]*\}/);
-	if (!match) {
-		return { label: "suspicious", confidence: 0.3, reasoning: "classifier output not JSON" };
+	const parsed = extractClassifierJson(rawStr);
+	if (!parsed.ok) {
+		return { label: "suspicious", confidence: 0.3, reasoning: `classifier output ${parsed.error}` };
 	}
+	const obj = parsed.value;
+	const label = normalizeLabel(obj.label);
+	const confidence = typeof obj.confidence === "number"
+		? Math.max(0, Math.min(1, obj.confidence))
+		: 0.5;
+	const reasoning = typeof obj.reasoning === "string" ? obj.reasoning.slice(0, 500) : "";
+	return { label, confidence, reasoning };
+}
+
+/**
+ * Locate and parse the first `{ ... }` block in a model's text output.
+ * Shared with the outbound send-risk classifier (`send-risk-llm.ts`), which
+ * applies its own label set to the parsed object.
+ */
+export function extractClassifierJson(
+	raw: string,
+): { ok: true; value: Record<string, unknown> } | { ok: false; error: "not JSON" | "malformed" } {
+	// Try to locate the first { ... } block if the model wrapped it.
+	const match = raw.trim().match(/\{[\s\S]*\}/);
+	if (!match) return { ok: false, error: "not JSON" };
 	try {
-		const obj = JSON.parse(match[0]);
-		const label = normalizeLabel(obj.label);
-		const confidence = typeof obj.confidence === "number"
-			? Math.max(0, Math.min(1, obj.confidence))
-			: 0.5;
-		const reasoning = typeof obj.reasoning === "string" ? obj.reasoning.slice(0, 500) : "";
-		return { label, confidence, reasoning };
+		const value = JSON.parse(match[0]);
+		if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, error: "malformed" };
+		return { ok: true, value };
 	} catch {
-		return { label: "suspicious", confidence: 0.3, reasoning: "classifier output malformed" };
+		return { ok: false, error: "malformed" };
 	}
 }
 

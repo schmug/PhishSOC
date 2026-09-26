@@ -16,6 +16,7 @@ import {
 	type MitigationConfig,
 } from "./verdict";
 import { DEFAULT_ATTACHMENT_POLICY, type AttachmentPolicy } from "./attachments";
+import { DEFAULT_CLASSIFIER_MODEL } from "../../shared/mailbox-settings";
 
 /**
  * Business-hours definition for the off-hours scrutiny tier.
@@ -153,6 +154,19 @@ export interface SendRiskSettings {
 	 * BEC case step-up exists for.
 	 */
 	trust_known_recipients: boolean;
+	/**
+	 * Outbound LLM classifier (slice 3): classifies the text the user wrote
+	 * as safe / victim_response / malicious_outbound / data_exposure /
+	 * suspicious. Its verdict can only raise the tier. Default true: it can add
+	 * step-up but never remove it.
+	 */
+	llm_enabled: boolean;
+	/**
+	 * Workers AI chat model for the outbound classifier. Independent of the
+	 * inbound `classifierModel` and its `typesafe/jev` opt-in: outbound mail
+	 * is the organisation's own data, so `typesafe/*` models are ignored here.
+	 */
+	classifier_model: string;
 }
 
 /**
@@ -193,6 +207,8 @@ export const DEFAULT_DETECTOR_SETTINGS: DetectorSettings = {
 
 export const DEFAULT_SEND_RISK_SETTINGS: SendRiskSettings = {
 	trust_known_recipients: false,
+	llm_enabled: true,
+	classifier_model: DEFAULT_CLASSIFIER_MODEL,
 };
 
 export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {

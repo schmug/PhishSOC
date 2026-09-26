@@ -14,18 +14,36 @@
  * depend on it and never raises the send above what the stateless rules
  * decide; established-correspondent trust needs recipient history, so it is
  * unavailable when the history read fails.
+ *
+ * The outbound LLM verdict (slice 3) is gathered here too, so preflight and
+ * the gate share it. Preflight runs the model with a full budget and caches
+ * the verdict in the DO keyed on the classifier input; the gate reuses a
+ * cached verdict, and on a miss runs the model with a tight budget.
  */
 
 import { classifySend, type ClassifySendInput, type SendRisk, type SendRiskContext } from "../security/send-risk";
 import { extractUrls } from "../security/urls";
 import { checkUrlsAgainstFeeds } from "../intel/feeds";
 import { parseRecipientList, type SendContextRows } from "../durableObject/recipient-graph";
+import type { CachedOutboundVerdict } from "../durableObject/send-risk-llm-cache";
+import {
+	GATE_BUDGET_MS,
+	PREFLIGHT_BUDGET_MS,
+	buildOutboundClassifierInput,
+	classifyOutbound,
+	outboundCacheKey,
+	outboundModel,
+	type OriginalMessage,
+} from "../security/send-risk-llm";
+import type { MailboxSecuritySettings } from "../security/defaults";
 import { resolveMailboxSettings } from "./mailbox-settings";
 import type { Env } from "../types";
 
-/** The one MailboxDO method the assessment reads. */
+/** The MailboxDO methods the assessment uses. The cache methods are optional: absent = no caching. */
 export interface SendContextStub {
 	getSendContext(args: { addresses: string[]; originalRef?: string | null }): Promise<SendContextRows>;
+	getSendRiskLlmCache?(key: string): Promise<CachedOutboundVerdict | null>;
+	putSendRiskLlmCache?(key: string, verdict: CachedOutboundVerdict): Promise<void>;
 }
 
 export interface AssessSendRiskInput extends Omit<ClassifySendInput, "context"> {
@@ -41,6 +59,12 @@ export interface AssessSendRiskInput extends Omit<ClassifySendInput, "context"> 
 	 * applied to "api" sends — an MCP client acts without a human in the loop.
 	 */
 	channel?: "api" | "mcp";
+	/**
+	 * "preflight" gives the LLM classifier its full budget and warms the
+	 * verdict cache; "gate" (default) prefers the cache and otherwise runs the
+	 * model with a tight budget, since the user is waiting on Send.
+	 */
+	phase?: "preflight" | "gate";
 }
 
 export type AssessEnv = Pick<Env, "BLOOM_KV"> & Partial<Env>;
@@ -70,6 +94,44 @@ function parseThreadVerdict(raw: string | null | undefined): SendRiskContext["th
 	}
 }
 
+/**
+ * The outbound LLM verdict for this send, or undefined when the classifier
+ * is off, there is no model binding, or the user wrote nothing to classify.
+ */
+async function gatherLlmVerdict(
+	env: AssessEnv,
+	stub: SendContextStub | undefined,
+	input: AssessSendRiskInput,
+	settings: MailboxSecuritySettings["send_risk"] | undefined,
+	original: OriginalMessage | null,
+): Promise<SendRiskContext["llm"]> {
+	// A failed settings read leaves this on: the verdict can only raise the tier.
+	if (settings?.llm_enabled === false) return undefined;
+	const classifierInput = buildOutboundClassifierInput({
+		subject: input.subject,
+		body: input.body,
+		original,
+		agentAuthored: input.createdBy === "agent",
+	});
+	if (!classifierInput) return undefined;
+
+	const model = outboundModel(settings?.classifier_model);
+	const key = await outboundCacheKey(model, classifierInput);
+	const cached = stub?.getSendRiskLlmCache
+		? await bestEffort("llm cache", () => stub.getSendRiskLlmCache!(key))
+		: null;
+	if (cached) return cached;
+
+	const timeoutMs = input.phase === "preflight" ? PREFLIGHT_BUDGET_MS : GATE_BUDGET_MS;
+	const result = await classifyOutbound(env.AI, classifierInput, { model, timeoutMs });
+	if (!result) return undefined;
+	if (result.cacheable && stub?.putSendRiskLlmCache) {
+		const verdict = result.verdict as CachedOutboundVerdict;
+		await bestEffort("llm cache write", () => stub.putSendRiskLlmCache!(key, verdict));
+	}
+	return result.verdict;
+}
+
 export async function gatherSendContext(
 	env: AssessEnv,
 	stub: SendContextStub | undefined,
@@ -92,6 +154,8 @@ export async function gatherSendContext(
 		m ? [{ host: urls[i].hostname, feedId: m.feedId, confirmed: m.confirmed }] : [],
 	);
 
+	const llm = await gatherLlmVerdict(env, stub, input, security?.send_risk, rows?.original ?? null);
+
 	return {
 		recipientHistory: rows ? Object.fromEntries(rows.recipients.map((r) => [r.address, r])) : undefined,
 		domainSendCounts: rows?.domainSendCounts,
@@ -100,6 +164,7 @@ export async function gatherSendContext(
 		feedHits,
 		customBlockedExtensions: security?.attachment_policy?.custom_blocklist_extensions ?? [],
 		trustKnownRecipients: input.channel === "api" && security?.send_risk?.trust_known_recipients === true,
+		...(llm ? { llm } : {}),
 	};
 }
 

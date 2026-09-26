@@ -193,6 +193,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const lastInitRef = useRef<{ sig: string; body: string } | null>(null);
 	const latestSubjectRef = useRef(subject);
 	const latestBodyRef = useRef(body);
+	const lastPreflightRecipientsRef = useRef("");
+	const preflightSeqRef = useRef(0);
 	const isDraftEdit = !!composeOptions.draftEmail;
 
 	const formTitle = useMemo(() => {
@@ -258,7 +260,15 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		const inReplyTo = (mode === "reply" || mode === "reply-all" || mode === "forward") && originalId
 			? originalId
 			: undefined;
+		// Recipient changes preview quickly. Body and subject edits wait for a
+		// pause in typing: they re-run the server's AI check of the text, whose
+		// cached verdict the send gate reuses instead of waiting on the model.
+		const recipientsKey = [mailboxId, to, cc, bcc].join("\n");
+		const delay = recipientsKey === lastPreflightRecipientsRef.current ? 1500 : 600;
+		lastPreflightRecipientsRef.current = recipientsKey;
 		const timer = setTimeout(async () => {
+			// A slow earlier preview must not overwrite a newer one.
+			const seq = ++preflightSeqRef.current;
 			setIsPreflighting(true);
 			try {
 				// Normalise the same way the send path does so the live risk
@@ -278,16 +288,16 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 					draft_id: composeOptions.draftEmail?.id,
 					in_reply_to: inReplyTo,
 				});
-				setPreflight(result);
+				if (seq === preflightSeqRef.current) setPreflight(result);
 			} catch {
 				console.warn("[preflight] network error, defaulting to Tier 0");
-				setPreflight(null);
+				if (seq === preflightSeqRef.current) setPreflight(null);
 			} finally {
-				setIsPreflighting(false);
+				if (seq === preflightSeqRef.current) setIsPreflighting(false);
 			}
-		}, 600);
+		}, delay);
 		return () => clearTimeout(timer);
-	}, [to, cc, bcc, mailboxId]);
+	}, [to, cc, bcc, mailboxId, subject, body]);
 
 	const handleSaveDraft = async () => {
 		if (!mailboxId || isSending) return; setIsSavingDraft(true); setError(null);

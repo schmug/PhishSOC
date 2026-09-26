@@ -36,6 +36,12 @@ export interface SendContextRows {
 	 * or null when there is no such message or it was never scored.
 	 */
 	originalVerdict: string | null;
+	/**
+	 * Sender, subject and (capped) body of that message. The outbound LLM
+	 * classifier (slice 3) checks a quoted block against it before treating
+	 * the block as quoted context rather than text the user wrote.
+	 */
+	original?: { sender: string | null; subject: string | null; body: string | null } | null;
 }
 
 /** Addresses/domains looked up per send. A send beyond this is already Tier 1 on count alone. */
@@ -88,16 +94,30 @@ function placeholders(n: number): string {
 	return Array.from({ length: n }, (_, i) => `?${i + 1}`).join(", ");
 }
 
+/** Body characters returned for quote verification. A longer quoted original is treated as authored text. */
+export const ORIGINAL_BODY_CAP = 200_000;
+
+type OriginalRow = {
+	security_verdict: string | null;
+	folder_id: string;
+	in_reply_to: string | null;
+	sender: string | null;
+	subject: string | null;
+	body: string | null;
+};
+
+const ORIGINAL_COLUMNS = `security_verdict, folder_id, in_reply_to, sender, subject, substr(body, 1, ${ORIGINAL_BODY_CAP}) AS body`;
+
 /**
- * Resolve the verdict of the message a send replies to or forwards.
+ * Resolve the message a send replies to or forwards.
  * `originalRef` is an email row id (reply/forward routes, the composer) or
  * an RFC Message-ID (`in_reply_to` from API clients). A draft reference
  * resolves through its own `in_reply_to`, mirroring `resolveOriginalEmail`.
  */
-function resolveOriginalVerdict(sql: SqlLike, originalRef: string): string | null {
-	type Row = { security_verdict: string | null; folder_id: string; in_reply_to: string | null };
+function resolveOriginal(sql: SqlLike, originalRef: string): OriginalRow | undefined {
+	type Row = OriginalRow;
 	const byId = (id: string) =>
-		[...sql.exec<Row>(`SELECT security_verdict, folder_id, in_reply_to FROM emails WHERE id = ?1 LIMIT 1`, id)][0];
+		[...sql.exec<Row>(`SELECT ${ORIGINAL_COLUMNS} FROM emails WHERE id = ?1 LIMIT 1`, id)][0];
 
 	let row = byId(originalRef);
 	if (row && row.folder_id === Folders.DRAFT && row.in_reply_to) {
@@ -107,12 +127,12 @@ function resolveOriginalVerdict(sql: SqlLike, originalRef: string): string | nul
 		const messageId = originalRef.trim().replace(/^<|>$/g, "");
 		if (messageId) {
 			row = [...sql.exec<Row>(
-				`SELECT security_verdict, folder_id, in_reply_to FROM emails WHERE message_id = ?1 LIMIT 1`,
+				`SELECT ${ORIGINAL_COLUMNS} FROM emails WHERE message_id = ?1 LIMIT 1`,
 				messageId,
 			)][0];
 		}
 	}
-	return row?.security_verdict ?? null;
+	return row;
 }
 
 /** Gather everything the send-risk classifier needs from this mailbox in one read. */
@@ -151,12 +171,13 @@ export function _getSendContextImpl(
 		),
 	].map((r) => r.domain);
 
-	const originalVerdict = args.originalRef ? resolveOriginalVerdict(sql, args.originalRef) : null;
+	const original = args.originalRef ? resolveOriginal(sql, args.originalRef) : undefined;
 
 	return {
 		recipients: recipients.map((r) => ({ ...r, send_count: Number(r.send_count) })),
 		domainSendCounts,
 		knownDomains,
-		originalVerdict,
+		originalVerdict: original?.security_verdict ?? null,
+		original: original ? { sender: original.sender, subject: original.subject, body: original.body } : null,
 	};
 }

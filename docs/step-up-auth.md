@@ -50,6 +50,7 @@ endpoint and the send gate, so the tier the composer shows is the tier the gate 
 | 0 | Internal-only recipients; external recipients who are all established correspondents *when opted in* (below) | No restriction |
 | 1 | External recipient, > 10 recipients, macro-enabled Office or disk-image attachment, lookalike/IDN link, bloom-only threat-intel link hit, reply/forward of a *tagged* message to an external recipient, reply/forward of a flagged (quarantined, blocked, phishing, or BEC) message to internal recipients only | WebAuthn step-up required |
 | 2 | BEC/credential keywords, executable or operator-blocklisted attachment, lookalike recipient domain, confirmed threat-intel link hit, reply/forward of a flagged message to an external recipient, or agent-authored Tier-1 | WebAuthn step-up required + composer confirm phrase |
+| LLM (raise only) | AI classifier on the text the user wrote: `victim_response` or `malicious_outbound` → 2; `data_exposure` → 2 to an external recipient, 1 internal-only; `suspicious` → 1; `safe` → no change. Timeout → `llm_unavailable` reason, no change; other model error → 1 | Final tier is `max(rules, LLM)`, then the agent bump |
 
 **Stateful signals.** The mailbox DO keeps a `recipient_graph` (migration 32): one
 row per address the mailbox has sent to, written only when a row lands in SENT — so
@@ -73,6 +74,44 @@ The flagged-thread rule reads the stored verdict of the message being replied to
 forwarded (the route's email id, or `in_reply_to` on `POST /emails` and preflight).
 Each lookup is best-effort: a failed read drops only the rules that depend on it and
 never lowers the tier below what the stateless rules decide.
+
+**Outbound LLM classifier** (`workers/security/send-risk-llm.ts`, default **on**,
+`security.send_risk.llm_enabled`). A Workers AI chat model classifies what the user
+wrote as `safe`, `victim_response` (complying with a scam: payment details, gift-card
+codes, passwords or MFA codes), `malicious_outbound` (the text is itself phishing or
+spam), `data_exposure` (secrets or personal data) or `suspicious`. Misdirected mail
+is left to the rules above. The verdict enters `classifySend` as `context.llm` and can
+only raise the tier and add a reason (`AI classifier: victim_response (0.87)`), never
+lower it or remove one. It runs on every channel, API and MCP; agent-authored drafts
+get an extra prompt hint.
+
+- **Only authored text.** A reply or forward quote (the `<blockquote>` from
+  `buildQuotedReplyBlock`, or the composer's "Forwarded message:" block) is split out
+  and passed as separately delimited context, so forwarding a phish to the security
+  team is not `malicious_outbound`. A block counts as a quote only when its text is
+  found in the message being replied to (`getSendContext` returns that message's
+  sender, subject and body); an edited quote, or anything else in quote markup, is
+  classified as authored text. A reply subject equal to the original's is treated as
+  context too. Both parts go through `sanitizeForClassifier`.
+- **Model.** `security.send_risk.classifier_model`, default `DEFAULT_CLASSIFIER_MODEL`.
+  It does not inherit the inbound `classifierModel`, and `typesafe/*` models are
+  ignored: outbound mail is the organisation's own data and must not leave for a
+  third-party model.
+- **Caching.** Preflight runs the model with a 5 s budget and stores the verdict in
+  the mailbox DO (`send_risk_llm_cache`, migration 33) for 15 minutes, keyed on a
+  SHA-256 of the model and the classifier input (subject, authored text, quoted
+  context, agent flag). The key ignores recipients and is not the step-up payload
+  hash, so a preview taken before recipients settle still matches the send. The
+  composer re-runs preflight 1.5 s after the subject or body stops changing (600 ms
+  after a recipient change), so the cache is usually warm. The gate uses a cached
+  verdict; on a miss it runs the model with a 2.5 s budget. Timeouts, errors and
+  unparseable output are never cached.
+- **Fail modes.** Timeout or AbortError → `llm_unavailable` reason, no tier change
+  (the rules still apply). Any other model error → tier 1 (`llm_error`). Unparseable
+  output or an unknown label → `suspicious`.
+- **Default on** because it can add step-up but never remove it. The cost is extra
+  step-up when the model over-flags, mostly on internal sends, which the rules leave
+  at tier 0. Turn it off per mailbox, domain or org in Security settings.
 
 **Audit.** Every SENT row stores the gate decision in `emails.send_risk` as
 `{ v, tier, reasons, confirmed }`, where `confirmed` records whether a step-up token

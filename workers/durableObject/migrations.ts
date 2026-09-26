@@ -706,6 +706,23 @@ export const mailboxMigrations: Migration[] = [
             WHERE addr LIKE '_%@_%' AND instr(addr, ' ') = 0 AND instr(addr, '<') = 0
             GROUP BY addr;
         `,
+	},	{
+		// Outbound LLM send-risk verdict cache (slice 3). Preflight classifies
+		// the text the user wrote and stores the verdict here so the send gate
+		// usually reuses it instead of waiting on the model. `key` is a SHA-256
+		// of the classifier input (model + subject + new text + quoted
+		// context), not the step-up payload hash. Rows older than the TTL in
+		// `send-risk-llm-cache.ts` are ignored on read and pruned on write.
+		name: "33_send_risk_llm_cache",
+		sql: `
+            CREATE TABLE IF NOT EXISTS send_risk_llm_cache (
+                key TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_send_risk_llm_cache_created ON send_risk_llm_cache(created_at);
+        `,
 	},
 ];
 

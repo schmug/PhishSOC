@@ -11,6 +11,10 @@
  *            attachment, lookalike recipient domain, reply to a quarantined /
  *            phishing / BEC message, link on a threat-intel feed)
  *
+ * The outbound LLM verdict (slice 3, `context.llm`) can only raise the tier
+ * these rules choose: victim_response / malicious_outbound → 2,
+ * data_exposure → 2 external / 1 internal-only, suspicious → 1.
+ *
  * This function stays pure and synchronous. Signals that need mailbox state
  * (recipient history, the replied-to message's verdict, feed hits, settings)
  * arrive precomputed in `input.context`, gathered by `assessSendRisk` in
@@ -59,9 +63,19 @@ export interface SendRiskContext {
 	 * themselves require step-up. Every other rule still applies.
 	 */
 	trustKnownRecipients?: boolean;
+	/**
+	 * Outbound LLM verdict on the text the user wrote (slice 3, gathered by
+	 * `assessSendRisk`). Absent = classifier disabled or nothing to classify.
+	 * "unavailable" = timeout (adds nothing); "error" = failed call (tier 1).
+	 */
+	llm?: { label: OutboundLlmLabel | "unavailable" | "error"; confidence: number };
 	/** Clock for the history-age checks (ms). Defaults to `Date.now()`. */
 	now?: number;
 }
+
+/** Outbound classifier labels. Misdirected mail is left to the deterministic rules. */
+export const OUTBOUND_LLM_LABELS = ["safe", "victim_response", "malicious_outbound", "data_exposure", "suspicious"] as const;
+export type OutboundLlmLabel = (typeof OUTBOUND_LLM_LABELS)[number];
 
 export interface ClassifySendInput {
 	/** Primary recipient(s) — string or array of RFC-5322 address strings. */
@@ -313,6 +327,32 @@ export function classifySend(input: ClassifySendInput): SendRisk {
 	const homograph = extractUrls(body).find((u) => u.is_homograph);
 	if (homograph) {
 		raise(1, `Lookalike or internationalized link: ${homograph.hostname}`);
+	}
+
+	// ── Outbound LLM verdict (slice 3): raise-only ───────────────────────────
+	const llm = ctx?.llm;
+	if (llm) {
+		const why = `AI classifier: ${llm.label} (${llm.confidence.toFixed(2)})`;
+		switch (llm.label) {
+			case "victim_response":
+			case "malicious_outbound":
+				raise(2, why);
+				break;
+			case "data_exposure":
+				raise(external.length > 0 ? 2 : 1, why);
+				break;
+			case "suspicious":
+				raise(1, why);
+				break;
+			case "unavailable":
+				// Timeout: the classifier never answered. Recorded, no tier.
+				reasons.push("llm_unavailable");
+				break;
+			case "error":
+				// Fail closed like inbound Rule 5: a broken classifier counts as suspicious.
+				raise(1, "llm_error: classifier failed, treated as suspicious");
+				break;
+		}
 	}
 
 	// ── Agent-authored bump (issue #266) ─────────────────────────────────────
