@@ -502,6 +502,9 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 		case "gateway":
 			// Org-tier ARC sealer identity — strip only the empty object.
 			return deepEqual(value, {});
+		case "hideFromAllInboxes":
+			// Shown by default — strip `false` so absent-key semantics hold.
+			return value === false;
 		default:
 			return false;
 	}

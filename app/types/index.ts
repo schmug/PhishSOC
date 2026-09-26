@@ -154,6 +154,8 @@ export interface MailboxSettings {
 	intel?: IntelSettings;
 	yaramail_scanner?: YaraMailScannerSettings;
 	sidecar?: SidecarSettings;
+	/** Leave this mailbox out of the /inbox All inboxes view. */
+	hideFromAllInboxes?: boolean;
 }
 
 export interface Mailbox {
