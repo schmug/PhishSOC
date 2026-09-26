@@ -24,6 +24,7 @@ import type {
 	HubSharingGroupsResponse,
 	Mailbox,
 	OrgOverview,
+	UnifiedInboxResponse,
 } from "~/types";
 
 /** The send fields a WebAuthn step-up binds its challenge to (#376). */
@@ -276,6 +277,10 @@ const api = {
 	// Org-scope search across every mailbox the caller can see (#197).
 	searchOrgEmails: (params: Record<string, string>) =>
 		get<EmailListResponse>("/api/v1/org/search", { params }),
+
+	// Unified All inboxes (spec 2026-09-26).
+	listUnifiedInbox: ({ before }: { before: string | null }) =>
+		get<UnifiedInboxResponse>("/api/v1/inbox", { params: before ? { before } : {} }),
 
 	// Dashboard
 	getDashboardSummary: (mailboxId: string, opts?: { signal?: AbortSignal }) =>
