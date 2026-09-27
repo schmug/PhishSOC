@@ -34,7 +34,8 @@ export function normalizeHost(host: string): string | null {
  * Lossless canonical form of an http(s) URL, used for url-kind feed entries
  * at ingest and for links at lookup. `new URL` lowercases the scheme and
  * host, drops a default port and resolves dot segments; on top of that this
- * applies `normalizeHost`, removes an empty `?` and an empty `#`, decodes
+ * applies `normalizeHost`, removes userinfo (`user:pass@` names the same
+ * resource), removes an empty `?` and an empty `#`, decodes
  * percent-escapes of unreserved path characters and uppercases the hex of the
  * remaining path escapes (RFC 3986 §6.2.2). The query and a non-empty
  * fragment are kept unchanged: dropping either is lossy (see the derived tier
@@ -52,6 +53,8 @@ export function canonicalFeedUrl(raw: string): string | null {
 	const host = normalizeHost(u.hostname);
 	if (!host) return null;
 	u.hostname = host;
+	u.username = "";
+	u.password = "";
 	if (u.search === "") u.search = "";
 	if (u.hash === "") u.hash = "";
 	u.pathname = u.pathname.replace(/%([0-9A-Fa-f]{2})/g, (_escape, hex: string) => {

@@ -19,7 +19,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkUrlAgainstFeeds, refreshAllFeeds } from "../../workers/intel/feeds";
+import { checkUrlAgainstFeeds, FEED_BLOB_FORMAT, feedBloomKeys, refreshAllFeeds } from "../../workers/intel/feeds";
 import { addToBloom, createBloom, serializeBloom } from "../../workers/intel/bloom";
 import { clearOrgSettingsCache } from "../../workers/lib/org-settings";
 import { clearDomainSettingsCache } from "../../workers/lib/domain-settings";
@@ -33,22 +33,29 @@ const FEED_URL = "https://feeds.test.example/list.txt";
 /** Mock KV that records get/put keys and supports `get(key, "arrayBuffer")`. */
 function makeKv() {
 	const store = new Map<string, string | Uint8Array>();
+	const meta = new Map<string, unknown>();
 	const gets: string[] = [];
+	async function get(key: string, type?: string) {
+		gets.push(key);
+		const v = store.get(key);
+		if (v === undefined) return null;
+		if (type === "arrayBuffer") {
+			const bytes = typeof v === "string" ? new TextEncoder().encode(v) : v;
+			return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+		}
+		return typeof v === "string" ? v : new TextDecoder().decode(v);
+	}
 	return {
 		store,
+		meta,
 		gets,
-		async get(key: string, type?: string) {
-			gets.push(key);
-			const v = store.get(key);
-			if (v === undefined) return null;
-			if (type === "arrayBuffer") {
-				const bytes = typeof v === "string" ? new TextEncoder().encode(v) : v;
-				return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-			}
-			return typeof v === "string" ? v : new TextDecoder().decode(v);
+		get,
+		async getWithMetadata(key: string, type?: string) {
+			return { value: await get(key, type), metadata: meta.get(key) ?? null };
 		},
-		async put(key: string, value: string | Uint8Array) {
+		async put(key: string, value: string | Uint8Array, opts?: { metadata?: unknown }) {
 			store.set(key, value);
+			meta.set(key, opts?.metadata ?? null);
 		},
 	};
 }
@@ -149,10 +156,11 @@ describe("refreshFeed 304 handling", () => {
 		// A 304 is only trusted while every required blob is still alive in
 		// KV (#488) — seed both so the conditional-GET path applies.
 		const bloom = createBloom(10);
-		addToBloom(bloom, "https://evil.example/login");
+		for (const k of feedBloomKeys(["https://evil.example/login"], "url")) addToBloom(bloom, k);
 		const kv = makeKv();
 		kv.store.set("intel:testfeed:bloom", serializeBloom(bloom));
 		kv.store.set("intel:testfeed:exact-blob", JSON.stringify(["https://evil.example/login"]));
+		kv.meta.set("intel:testfeed:exact-blob", { format: FEED_BLOB_FORMAT });
 		const env = makeEnv({ mailboxSettings: urlFeedSettings(6), kv, stub });
 
 		const result = await refreshAllFeeds(env);

@@ -45,6 +45,8 @@ describe("canonicalFeedUrl", () => {
 		["https://phish.example/a%2fb%3a", "https://phish.example/a%2Fb%3A"],
 		["http://phish.example", "http://phish.example/"],
 		["  https://phish.example/login  ", "https://phish.example/login"],
+		["https://anything@phish.example/login", "https://phish.example/login"],
+		["https://user:pass@PHISH.example./login", "https://phish.example/login"],
 	])("lossless: %s → %s", (input, expected) => {
 		expect(canonicalFeedUrl(input)).toBe(expected);
 	});

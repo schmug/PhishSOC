@@ -49,6 +49,20 @@ function bloomKey(feedId: string) {
 function exactBlobKey(feedId: string) {
 	return `intel:${feedId}:exact-blob`;
 }
+
+/**
+ * Ingest format of a domain/url feed's bloom + exact blob, stored as KV
+ * metadata (`{ format }`) on the exact blob. Bump it whenever
+ * `parseFeedBody` or `feedBloomKeys` output changes: `refreshFeed` treats
+ * blobs without the current format as not intact, so the next fetch is
+ * unconditional and rebuilds them rather than a 304 renewing them forever.
+ *   1 (implicit, no metadata): raw lines, values-only bloom.
+ *   2: canonical values (`canonicalFeedUrl` / `normalizeHost`) + path keys.
+ */
+export const FEED_BLOB_FORMAT = 2;
+
+/** Request headers that can make a feed server answer 304 (lowercase). */
+const VALIDATOR_HEADERS = new Set(["if-none-match", "if-modified-since"]);
 /**
  * Storage key for `ip-cidr` feeds. Bloom filters don't fit CIDR membership
  * (an IP is checked against a *range*, not an exact string) so we materialise
@@ -206,6 +220,39 @@ export function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
 }
 
 /**
+ * Namespace for derived-tier prefilter keys in url-feed blooms. The NUL
+ * prefix never occurs in a URL, so a prefilter key can neither confirm nor
+ * register as a bloom-only hit for a real link candidate.
+ */
+const PATH_KEY_PREFIX = "\u0000path:";
+
+/** Derived-tier prefilter key for a canonical origin + path. */
+function pathKey(base: string): string {
+	return `${PATH_KEY_PREFIX}${base}`;
+}
+
+/**
+ * Strings to add to a feed's bloom: every value, plus for url feeds one
+ * `pathKey(origin + path)` per distinct path. A lookup probes the link's path
+ * key to decide whether the exact blob can hold a derived match, whatever
+ * the order or count of the entry's and link's query params. The exact blob
+ * holds values only.
+ */
+export function feedBloomKeys(values: string[], kind: "domain" | "url"): string[] {
+	if (kind !== "url") return values;
+	const paths = new Set<string>();
+	for (const v of values) {
+		try {
+			const u = new URL(v);
+			paths.add(pathKey(`${u.origin}${u.pathname}`));
+		} catch {
+			// Unparseable values still go in the bloom; they just get no path key.
+		}
+	}
+	return [...values, ...paths];
+}
+
+/**
  * Parse a CIDR-per-line body (e.g. Spamhaus DROP/EDROP).
  *
  * Format expected:
@@ -332,20 +379,48 @@ async function refreshFeed(
 					{ key: bloomKey(feed.id), type: "arrayBuffer" },
 					{ key: exactBlobKey(feed.id), type: "text" },
 				];
-	const existingBlobs: Array<{ key: string; value: ArrayBuffer | string }> = [];
+	const existingBlobs: Array<{
+		key: string;
+		value: ArrayBuffer | string;
+		metadata?: { format: number };
+	}> = [];
+	let formatCurrent = feed.kind === "ip-cidr";
 	for (const blob of requiredBlobs) {
+		if (blob.key === exactBlobKey(feed.id)) {
+			const { value, metadata } = await env.BLOOM_KV.getWithMetadata<{ format?: number }>(
+				blob.key,
+				"text",
+			);
+			formatCurrent = metadata?.format === FEED_BLOB_FORMAT;
+			if (value !== null) {
+				existingBlobs.push({ key: blob.key, value, metadata: { format: FEED_BLOB_FORMAT } });
+			}
+			continue;
+		}
 		const value =
 			blob.type === "arrayBuffer"
 				? await env.BLOOM_KV.get(blob.key, "arrayBuffer")
 				: await env.BLOOM_KV.get(blob.key, "text");
 		if (value !== null) existingBlobs.push({ key: blob.key, value });
 	}
-	const blobsIntact = existingBlobs.length === requiredBlobs.length;
+	// Intact = every required blob is alive AND carries the current ingest
+	// format. A 304 only renews what is stored, so blobs from an older build
+	// would otherwise be renewed forever and never pick up the new format.
+	const blobsIntact = existingBlobs.length === requiredBlobs.length && formatCurrent;
 
 	const headers: Record<string, string> = { ...(feed.headers ?? {}) };
 	// Conditional GET only while every required blob is still alive in KV — a
 	// 304 is only safe to trust if the data it vouches for hasn't expired.
-	if (state?.etag && blobsIntact) headers["If-None-Match"] = state.etag;
+	if (blobsIntact) {
+		if (state?.etag) headers["If-None-Match"] = state.etag;
+	} else {
+		// Only a 200 can rebuild missing or old-format blobs: drop any
+		// operator-configured validator (`intel.feeds[].headers`, any case)
+		// that could draw a 304 and fail every retry.
+		for (const name of Object.keys(headers)) {
+			if (VALIDATOR_HEADERS.has(name.toLowerCase())) delete headers[name];
+		}
+	}
 
 	const res = await fetch(feed.url, {
 		headers,
@@ -362,8 +437,13 @@ async function refreshFeed(
 		// Renew the TTLs by rewriting the just-read values, and record the
 		// refresh so the refreshHours gate keeps renewal at O(feeds) writes per
 		// interval rather than per cron run.
-		for (const { key, value } of existingBlobs) {
-			await env.BLOOM_KV.put(key, value, { expirationTtl: ttlSeconds });
+		// Intact implies the current format, so the exact blob's metadata is
+		// rewritten as-is (a put without metadata would drop it).
+		for (const { key, value, metadata } of existingBlobs) {
+			await env.BLOOM_KV.put(key, value, {
+				expirationTtl: ttlSeconds,
+				...(metadata ? { metadata } : {}),
+			});
 		}
 		await stub.upsertIntelFeedState(feed.id, {
 			url: feed.url,
@@ -406,8 +486,9 @@ async function refreshFeed(
 	const values = parseFeedBody(body, feed.kind);
 	if (values.length === 0) return { entries: 0 };
 
-	const bloom = createBloom(values.length);
-	for (const v of values) addToBloom(bloom, v);
+	const bloomKeys = feedBloomKeys(values, feed.kind);
+	const bloom = createBloom(bloomKeys.length);
+	for (const v of bloomKeys) addToBloom(bloom, v);
 	await env.BLOOM_KV.put(bloomKey(feed.id), serializeBloom(bloom), {
 		// Bounded TTL — a dead cron should eventually stop consulting stale data.
 		expirationTtl: ttlSeconds,
@@ -420,6 +501,7 @@ async function refreshFeed(
 	const exactSlice = [...new Set(values)].slice(0, EXACT_KEY_CAP);
 	await env.BLOOM_KV.put(exactBlobKey(feed.id), JSON.stringify(exactSlice), {
 		expirationTtl: ttlSeconds,
+		metadata: { format: FEED_BLOB_FORMAT },
 	});
 
 	await stub.upsertIntelFeedState(feed.id, {
@@ -523,8 +605,9 @@ export async function checkUrlAgainstFeedsForDomain(
 
 /**
  * Link query tokens above which the derived-tier bloom probes are skipped and
- * the exact blob is scanned directly. Bounds per-link hashing; padding a link
- * with extra params cannot push a listed param past the probes.
+ * the exact blob is scanned directly. Bounds per-link hashing; on a bloom
+ * without path keys, padding a link with extra params cannot push a listed
+ * param past the single-param probes.
  */
 const DERIVED_PROBE_TOKEN_CAP = 32;
 
@@ -552,14 +635,19 @@ function linkParts(canonical: string): LinkParts {
 }
 
 /**
- * Bloom prefilter strings for the derived tier: the link without its
- * fragment, and the link (with and without its fragment) carrying no query
- * or a single one of its query params. A bloom hit only triggers the
- * exact-blob scan in `findDerived`; it never counts as a match on its own.
- * Entries with 2+ params are found only when some probe loads the blob.
+ * Bloom prefilter strings for the derived tier. A bloom hit only triggers
+ * the exact-blob scan in `findDerived`; it never counts as a match on its
+ * own. Empty when the link has no query and no fragment: nothing lossy to
+ * remove.
+ *   - `pathKey(base)`: written by `feedBloomKeys` for every url entry, so it
+ *     covers entries with any number of params.
+ *   - Fallback for blooms written before path keys existed: the link without
+ *     its fragment, and the link (with and without its fragment) carrying no
+ *     query or a single one of its query params.
  */
 function derivedProbes(p: LinkParts): string[] {
-	const out = new Set<string>();
+	if (!p.query && !p.hash) return [];
+	const out = new Set<string>([pathKey(p.base)]);
 	for (const hash of p.hash ? [p.hash, ""] : [""]) {
 		if (hash !== p.hash) out.add(`${p.base}${p.query ? `?${p.query}` : ""}${hash}`);
 		if (p.tokens.length === 0) continue;
