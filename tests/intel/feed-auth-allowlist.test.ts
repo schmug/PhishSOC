@@ -39,6 +39,9 @@ function makeKv() {
 		async get(key: string) {
 			return store.get(key) ?? null;
 		},
+		async getWithMetadata(key: string) {
+			return { value: store.get(key) ?? null, metadata: null };
+		},
 		async put(key: string, value: string) {
 			store.set(key, value);
 		},

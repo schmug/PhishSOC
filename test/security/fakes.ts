@@ -239,14 +239,20 @@ export function createFakeFeedKv(feeds: FakeFeedSeed[]): KVNamespace {
 		);
 		store.set(`intel:${feed.id}:exact-blob`, JSON.stringify([...new Set(values)]));
 	}
+	const meta = new Map<string, unknown>();
+	async function get(key: string, type?: "text" | "arrayBuffer") {
+		const value = store.get(key);
+		if (value === undefined) return null;
+		if (type === "arrayBuffer") return value instanceof ArrayBuffer ? value : null;
+		return typeof value === "string" ? value : null;
+	}
 	return {
-		async get(key: string, type?: "text" | "arrayBuffer") {
-			const value = store.get(key);
-			if (value === undefined) return null;
-			if (type === "arrayBuffer") return value instanceof ArrayBuffer ? value : null;
-			return typeof value === "string" ? value : null;
+		get,
+		async getWithMetadata(key: string, type?: "text" | "arrayBuffer") {
+			return { value: await get(key, type), metadata: meta.get(key) ?? null };
 		},
-		async put(key: string, value: ArrayBuffer | Uint8Array | string) {
+		async put(key: string, value: ArrayBuffer | Uint8Array | string, opts?: { metadata?: unknown }) {
+			meta.set(key, opts?.metadata ?? null);
 			store.set(
 				key,
 				value instanceof Uint8Array

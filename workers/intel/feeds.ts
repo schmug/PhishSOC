@@ -49,6 +49,17 @@ function bloomKey(feedId: string) {
 function exactBlobKey(feedId: string) {
 	return `intel:${feedId}:exact-blob`;
 }
+
+/**
+ * Ingest format of a domain/url feed's bloom + exact blob, stored as KV
+ * metadata (`{ format }`) on the exact blob. Bump it whenever
+ * `parseFeedBody` or `feedBloomKeys` output changes: `refreshFeed` treats
+ * blobs without the current format as not intact, so the next fetch is
+ * unconditional and rebuilds them rather than a 304 renewing them forever.
+ *   1 (implicit, no metadata): raw lines, values-only bloom.
+ *   2: canonical values (`canonicalFeedUrl` / `normalizeHost`) + path keys.
+ */
+export const FEED_BLOB_FORMAT = 2;
 /**
  * Storage key for `ip-cidr` feeds. Bloom filters don't fit CIDR membership
  * (an IP is checked against a *range*, not an exact string) so we materialise
@@ -238,42 +249,6 @@ export function feedBloomKeys(values: string[], kind: "domain" | "url"): string[
 	return [...values, ...paths];
 }
 
-/** Exact-blob entries sampled by `isLegacyUrlBloom`. */
-const LEGACY_BLOOM_SAMPLE = 8;
-
-/**
- * True when a url feed's stored blobs predate this build's ingest
- * (`canonicalFeedUrl` values plus `feedBloomKeys` path keys), or do not
- * parse. The check reads what is stored, so no version marker costs an
- * extra KV write: a current bloom holds the path key of every exact-blob
- * entry, and blooms have no false negatives, so a sampled entry whose path
- * key is missing (or which does not parse as a URL) marks the blobs as
- * legacy. When a later change alters ingest output, extend this check so
- * existing blobs get rebuilt.
- */
-function isLegacyUrlBloom(bloomBuf: ArrayBuffer, exactJson: string): boolean {
-	const filter = deserializeBloom(bloomBuf);
-	if (!filter) return true;
-	let entries: unknown;
-	try {
-		entries = JSON.parse(exactJson);
-	} catch {
-		return true;
-	}
-	if (!Array.isArray(entries)) return true;
-	for (const v of entries.slice(0, LEGACY_BLOOM_SAMPLE)) {
-		if (typeof v !== "string") return true;
-		let u: URL;
-		try {
-			u = new URL(v);
-		} catch {
-			return true;
-		}
-		if (!checkBloom(filter, pathKey(`${u.origin}${u.pathname}`))) return true;
-	}
-	return false;
-}
-
 /**
  * Parse a CIDR-per-line body (e.g. Spamhaus DROP/EDROP).
  *
@@ -401,23 +376,34 @@ async function refreshFeed(
 					{ key: bloomKey(feed.id), type: "arrayBuffer" },
 					{ key: exactBlobKey(feed.id), type: "text" },
 				];
-	const existingBlobs: Array<{ key: string; value: ArrayBuffer | string }> = [];
+	const existingBlobs: Array<{
+		key: string;
+		value: ArrayBuffer | string;
+		metadata?: { format: number };
+	}> = [];
+	let formatCurrent = feed.kind === "ip-cidr";
 	for (const blob of requiredBlobs) {
+		if (blob.key === exactBlobKey(feed.id)) {
+			const { value, metadata } = await env.BLOOM_KV.getWithMetadata<{ format?: number }>(
+				blob.key,
+				"text",
+			);
+			formatCurrent = metadata?.format === FEED_BLOB_FORMAT;
+			if (value !== null) {
+				existingBlobs.push({ key: blob.key, value, metadata: { format: FEED_BLOB_FORMAT } });
+			}
+			continue;
+		}
 		const value =
 			blob.type === "arrayBuffer"
 				? await env.BLOOM_KV.get(blob.key, "arrayBuffer")
 				: await env.BLOOM_KV.get(blob.key, "text");
 		if (value !== null) existingBlobs.push({ key: blob.key, value });
 	}
-	// Intact = every required blob is alive AND was written by this build's
-	// ingest. A 304 only renews what is stored, so a legacy bloom would
-	// otherwise be renewed forever and never gain path prefilter keys.
-	const blobsIntact =
-		existingBlobs.length === requiredBlobs.length &&
-		!(
-			feed.kind === "url" &&
-			isLegacyUrlBloom(existingBlobs[0].value as ArrayBuffer, existingBlobs[1].value as string)
-		);
+	// Intact = every required blob is alive AND carries the current ingest
+	// format. A 304 only renews what is stored, so blobs from an older build
+	// would otherwise be renewed forever and never pick up the new format.
+	const blobsIntact = existingBlobs.length === requiredBlobs.length && formatCurrent;
 
 	const headers: Record<string, string> = { ...(feed.headers ?? {}) };
 	// Conditional GET only while every required blob is still alive in KV — a
@@ -439,8 +425,13 @@ async function refreshFeed(
 		// Renew the TTLs by rewriting the just-read values, and record the
 		// refresh so the refreshHours gate keeps renewal at O(feeds) writes per
 		// interval rather than per cron run.
-		for (const { key, value } of existingBlobs) {
-			await env.BLOOM_KV.put(key, value, { expirationTtl: ttlSeconds });
+		// Intact implies the current format, so the exact blob's metadata is
+		// rewritten as-is (a put without metadata would drop it).
+		for (const { key, value, metadata } of existingBlobs) {
+			await env.BLOOM_KV.put(key, value, {
+				expirationTtl: ttlSeconds,
+				...(metadata ? { metadata } : {}),
+			});
 		}
 		await stub.upsertIntelFeedState(feed.id, {
 			url: feed.url,
@@ -498,6 +489,7 @@ async function refreshFeed(
 	const exactSlice = [...new Set(values)].slice(0, EXACT_KEY_CAP);
 	await env.BLOOM_KV.put(exactBlobKey(feed.id), JSON.stringify(exactSlice), {
 		expirationTtl: ttlSeconds,
+		metadata: { format: FEED_BLOB_FORMAT },
 	});
 
 	await stub.upsertIntelFeedState(feed.id, {
