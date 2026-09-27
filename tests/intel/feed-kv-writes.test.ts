@@ -654,6 +654,36 @@ describe("blob TTL renewal on 304 (#484)", () => {
 		expect(kv.meta.get("intel:test-feed:exact-blob")).toEqual({ format: FEED_BLOB_FORMAT });
 	});
 
+	it("a forced rebuild drops configured conditional headers (any case)", async () => {
+		const captured: Array<Record<string, string>> = [];
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			captured.push({ ...((init?.headers as Record<string, string>) ?? {}) });
+			return new Response(feedBody(5), { status: 200 });
+		});
+		const kv = makeCountingKv(); // no blobs: nothing a 304 could vouch for
+		const settings = urlFeedSettings();
+		const feed = settings.intel.feeds[0] as Record<string, unknown>;
+		feed.headers = {
+			"if-none-match": '"configured"',
+			"If-Modified-Since": "Sat, 26 Sep 2026 00:00:00 GMT",
+			"X-Feed-Client": "phishsoc",
+		};
+		const { env } = makeEnv({
+			mailboxSettings: settings,
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 5,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		expect(captured).toHaveLength(1);
+		expect(captured[0]).toEqual({ "X-Feed-Client": "phishsoc" });
+	});
+
 	it("304 to an unconditional request (blobs missing) fails the refresh without marking it fresh", async () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 		vi.stubGlobal("fetch", async () => new Response(null, { status: 304 }));

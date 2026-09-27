@@ -60,6 +60,9 @@ function exactBlobKey(feedId: string) {
  *   2: canonical values (`canonicalFeedUrl` / `normalizeHost`) + path keys.
  */
 export const FEED_BLOB_FORMAT = 2;
+
+/** Request headers that can make a feed server answer 304 (lowercase). */
+const VALIDATOR_HEADERS = new Set(["if-none-match", "if-modified-since"]);
 /**
  * Storage key for `ip-cidr` feeds. Bloom filters don't fit CIDR membership
  * (an IP is checked against a *range*, not an exact string) so we materialise
@@ -408,7 +411,16 @@ async function refreshFeed(
 	const headers: Record<string, string> = { ...(feed.headers ?? {}) };
 	// Conditional GET only while every required blob is still alive in KV — a
 	// 304 is only safe to trust if the data it vouches for hasn't expired.
-	if (state?.etag && blobsIntact) headers["If-None-Match"] = state.etag;
+	if (blobsIntact) {
+		if (state?.etag) headers["If-None-Match"] = state.etag;
+	} else {
+		// Only a 200 can rebuild missing or old-format blobs: drop any
+		// operator-configured validator (`intel.feeds[].headers`, any case)
+		// that could draw a 304 and fail every retry.
+		for (const name of Object.keys(headers)) {
+			if (VALIDATOR_HEADERS.has(name.toLowerCase())) delete headers[name];
+		}
+	}
 
 	const res = await fetch(feed.url, {
 		headers,
