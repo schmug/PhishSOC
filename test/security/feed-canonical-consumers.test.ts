@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Email } from "postal-mime";
 
-import { checkUrlAgainstFeeds } from "../../workers/intel/feeds";
+import { checkUrlAgainstFeeds, refreshAllFeeds } from "../../workers/intel/feeds";
 import { analyzeCatchall } from "../../workers/security/catchall";
 import { assessSendRisk } from "../../workers/lib/send-risk-assess";
 import { runDeepScan } from "../../workers/intel/deep-scan";
@@ -70,6 +70,36 @@ describe("checkUrlAgainstFeeds — derived hits are logged", () => {
 		const hit = await checkUrlAgainstFeeds(feedEnv(), MAILBOX, "https://phish.example./login");
 		expect(hit).toMatchObject({ confirmed: true });
 		expect(info).not.toHaveBeenCalled();
+	});
+});
+
+describe("refreshAllFeeds — url feeds store a path prefilter key", () => {
+	it("a refreshed feed finds a multi-param entry from a reordered, padded link", async () => {
+		// Filler entries give the refreshed bloom production sizing; a 1-entry
+		// bloom answers most probes with a false positive.
+		const filler = Array.from({ length: 3000 }, (_, i) => `https://filler.example/${i}`);
+		const body = ["https://multi.example/p?a=1&b=2", ...filler].join("\n");
+		vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			if (new URL(url).hostname !== "feeds.example") throw new Error(`unexpected fetch: ${url}`);
+			return new Response(body, { status: 200 });
+		});
+		const env = makeFakeEnv({
+			mailboxId: MAILBOX,
+			stub: createFakeMailboxStub().stub,
+			intel: { feeds: [{ id: "probe-url", kind: "url", url: "https://feeds.example/list.txt" }] },
+			bloomKv: createFakeFeedKv([]),
+		});
+		expect(await refreshAllFeeds(env)).toEqual({ feeds: 1, entries: 3001 });
+		vi.spyOn(console, "info").mockImplementation(() => {});
+
+		const hit = await checkUrlAgainstFeeds(env, MAILBOX, "https://multi.example/p?c=3&b=2&x=9&a=1");
+		expect(hit).toMatchObject({
+			feedId: "probe-url",
+			value: "https://multi.example/p?a=1&b=2",
+			derived: true,
+			derivation: "query-superset",
+		});
 	});
 });
 

@@ -206,6 +206,39 @@ export function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
 }
 
 /**
+ * Namespace for derived-tier prefilter keys in url-feed blooms. The NUL
+ * prefix never occurs in a URL, so a prefilter key can neither confirm nor
+ * register as a bloom-only hit for a real link candidate.
+ */
+const PATH_KEY_PREFIX = "\u0000path:";
+
+/** Derived-tier prefilter key for a canonical origin + path. */
+function pathKey(base: string): string {
+	return `${PATH_KEY_PREFIX}${base}`;
+}
+
+/**
+ * Strings to add to a feed's bloom: every value, plus for url feeds one
+ * `pathKey(origin + path)` per distinct path. A lookup probes the link's path
+ * key to decide whether the exact blob can hold a derived match, whatever
+ * the order or count of the entry's and link's query params. The exact blob
+ * holds values only.
+ */
+export function feedBloomKeys(values: string[], kind: "domain" | "url"): string[] {
+	if (kind !== "url") return values;
+	const paths = new Set<string>();
+	for (const v of values) {
+		try {
+			const u = new URL(v);
+			paths.add(pathKey(`${u.origin}${u.pathname}`));
+		} catch {
+			// Unparseable values still go in the bloom; they just get no path key.
+		}
+	}
+	return [...values, ...paths];
+}
+
+/**
  * Parse a CIDR-per-line body (e.g. Spamhaus DROP/EDROP).
  *
  * Format expected:
@@ -406,8 +439,9 @@ async function refreshFeed(
 	const values = parseFeedBody(body, feed.kind);
 	if (values.length === 0) return { entries: 0 };
 
-	const bloom = createBloom(values.length);
-	for (const v of values) addToBloom(bloom, v);
+	const bloomKeys = feedBloomKeys(values, feed.kind);
+	const bloom = createBloom(bloomKeys.length);
+	for (const v of bloomKeys) addToBloom(bloom, v);
 	await env.BLOOM_KV.put(bloomKey(feed.id), serializeBloom(bloom), {
 		// Bounded TTL — a dead cron should eventually stop consulting stale data.
 		expirationTtl: ttlSeconds,
@@ -523,8 +557,9 @@ export async function checkUrlAgainstFeedsForDomain(
 
 /**
  * Link query tokens above which the derived-tier bloom probes are skipped and
- * the exact blob is scanned directly. Bounds per-link hashing; padding a link
- * with extra params cannot push a listed param past the probes.
+ * the exact blob is scanned directly. Bounds per-link hashing; on a bloom
+ * without path keys, padding a link with extra params cannot push a listed
+ * param past the single-param probes.
  */
 const DERIVED_PROBE_TOKEN_CAP = 32;
 
@@ -552,14 +587,19 @@ function linkParts(canonical: string): LinkParts {
 }
 
 /**
- * Bloom prefilter strings for the derived tier: the link without its
- * fragment, and the link (with and without its fragment) carrying no query
- * or a single one of its query params. A bloom hit only triggers the
- * exact-blob scan in `findDerived`; it never counts as a match on its own.
- * Entries with 2+ params are found only when some probe loads the blob.
+ * Bloom prefilter strings for the derived tier. A bloom hit only triggers
+ * the exact-blob scan in `findDerived`; it never counts as a match on its
+ * own. Empty when the link has no query and no fragment: nothing lossy to
+ * remove.
+ *   - `pathKey(base)`: written by `feedBloomKeys` for every url entry, so it
+ *     covers entries with any number of params.
+ *   - Fallback for blooms written before path keys existed: the link without
+ *     its fragment, and the link (with and without its fragment) carrying no
+ *     query or a single one of its query params.
  */
 function derivedProbes(p: LinkParts): string[] {
-	const out = new Set<string>();
+	if (!p.query && !p.hash) return [];
+	const out = new Set<string>([pathKey(p.base)]);
 	for (const hash of p.hash ? [p.hash, ""] : [""]) {
 		if (hash !== p.hash) out.add(`${p.base}${p.query ? `?${p.query}` : ""}${hash}`);
 		if (p.tokens.length === 0) continue;

@@ -15,7 +15,7 @@
  */
 
 import type { Env } from "../../workers/types";
-import { parseFeedBody } from "../../workers/intel/feeds";
+import { feedBloomKeys, parseFeedBody } from "../../workers/intel/feeds";
 import { addToBloom, createBloom, serializeBloom } from "../../workers/intel/bloom";
 import type { SenderReputation } from "../../workers/security/reputation";
 import type { MailboxSecuritySettings } from "../../workers/security/settings";
@@ -165,8 +165,8 @@ export interface FakeEnvParts {
 
 /**
  * Build a fake R2 bucket that serves the mailbox settings JSON plus any extra
- * objects. Only `.get()` is implemented — the security pipeline doesn't call
- * `.put()` or `.list()`.
+ * objects. `.list()` returns the mailbox key only (for `refreshAllFeeds`);
+ * `.put()` is not implemented — the security pipeline doesn't call it.
  */
 function createFakeBucket(
 	mailboxId: string,
@@ -181,6 +181,9 @@ function createFakeBucket(
 	);
 	for (const [key, value] of Object.entries(objects)) payloads.set(key, JSON.stringify(value));
 	return {
+		async list() {
+			return { objects: [{ key: `mailboxes/${mailboxId}.json` }] };
+		},
 		async get(requested: string) {
 			const payload = payloads.get(requested);
 			if (payload === undefined) return null;
@@ -199,9 +202,12 @@ function createFakeBucket(
 export interface FakeFeedSeed {
 	id: string;
 	kind: "domain" | "url";
-	/** Feed body lines, stored through the real `parseFeedBody` ingest path. */
+	/** Feed body lines, stored through the real `parseFeedBody` + `feedBloomKeys` ingest path. */
 	lines?: string[];
-	/** Values stored verbatim, skipping ingest (blobs written by an older build). */
+	/**
+	 * Values stored verbatim in the bloom and exact blob, skipping ingest and
+	 * the path prefilter keys (blobs written by an older build).
+	 */
 	rawValues?: string[];
 	/** Values added to the bloom but not the exact blob (bloom-only hits). */
 	bloomOnly?: string[];
@@ -211,17 +217,21 @@ export interface FakeFeedSeed {
  * In-memory `BLOOM_KV` holding `intel:<id>:bloom` (serialized bloom) and
  * `intel:<id>:exact-blob` (JSON array) per feed, built the same way
  * `refreshFeed` builds them. Blooms are sized for 5000 entries: a bloom sized
- * for 2 entries gives false positives on unrelated probe strings.
+ * for 2 entries gives false positives on unrelated probe strings. `put` is
+ * implemented so `refreshAllFeeds` can write into it.
  */
 export function createFakeFeedKv(feeds: FakeFeedSeed[]): KVNamespace {
 	const store = new Map<string, ArrayBuffer | string>();
 	for (const feed of feeds) {
-		const values = [
-			...parseFeedBody((feed.lines ?? []).join("\n"), feed.kind),
-			...(feed.rawValues ?? []),
-		];
+		const ingested = parseFeedBody((feed.lines ?? []).join("\n"), feed.kind);
+		const values = [...ingested, ...(feed.rawValues ?? [])];
 		const bloom = createBloom(5000);
-		for (const v of [...values, ...(feed.bloomOnly ?? [])]) addToBloom(bloom, v);
+		const bloomKeys = [
+			...feedBloomKeys(ingested, feed.kind),
+			...(feed.rawValues ?? []),
+			...(feed.bloomOnly ?? []),
+		];
+		for (const v of bloomKeys) addToBloom(bloom, v);
 		const bytes = serializeBloom(bloom);
 		store.set(
 			`intel:${feed.id}:bloom`,
@@ -235,6 +245,14 @@ export function createFakeFeedKv(feeds: FakeFeedSeed[]): KVNamespace {
 			if (value === undefined) return null;
 			if (type === "arrayBuffer") return value instanceof ArrayBuffer ? value : null;
 			return typeof value === "string" ? value : null;
+		},
+		async put(key: string, value: ArrayBuffer | Uint8Array | string) {
+			store.set(
+				key,
+				value instanceof Uint8Array
+					? (value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer)
+					: value,
+			);
 		},
 	} as unknown as KVNamespace;
 }

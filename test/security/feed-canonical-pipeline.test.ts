@@ -32,7 +32,12 @@ const DOMAIN_FEED: FakeFeedSeed = { id: "probe-domain", kind: "domain", lines: [
 const URL_FEED: FakeFeedSeed = {
 	id: "probe-url",
 	kind: "url",
-	lines: ["https://phish.example/login", "https://drive.example/open?id=AAA", "https://app.example/#/t/evil"],
+	lines: [
+		"https://phish.example/login",
+		"https://drive.example/open?id=AAA",
+		"https://app.example/#/t/evil",
+		"https://multi.example/p?a=1&b=2",
+	],
 };
 
 async function scan(
@@ -93,6 +98,8 @@ describe("exact tier → hard_block", () => {
 		"https://phish.example/login#",
 		"https://phish.example/%6Cogin",
 		"https://phish.example/x/../login",
+		"https://anything@phish.example/login",
+		"https://user:pw@phish.example./login",
 	])("url feed: %s", async (link) => {
 		const v = await scan(link, [URL_FEED]);
 		expect(v.triage).toBe("hard_block");
@@ -124,6 +131,9 @@ describe("derived tier → +20, classifier still runs", () => {
 		["https://phish.example./login?utm=1#a", "https://phish.example/login"],
 		["https://drive.example/open?id=AAA&x=1", "https://drive.example/open?id=AAA"],
 		["https://drive.example/open?x=1&id=AAA", "https://drive.example/open?id=AAA"],
+		["https://multi.example/p?b=2&a=1", "https://multi.example/p?a=1&b=2"],
+		["https://multi.example/p?a=1&b=2&c=3", "https://multi.example/p?a=1&b=2"],
+		["https://multi.example/p?c=3&b=2&x=9&a=1", "https://multi.example/p?a=1&b=2"],
 	])("%s", async (link, entry) => {
 		const v = await scan(link, [URL_FEED]);
 		expect(v.triage).toBeUndefined();
@@ -138,6 +148,12 @@ describe("derived tier → +20, classifier still runs", () => {
 		expect(v.score).toBe(65);
 		expect(v.action).toBe("quarantine");
 		expect(v.triage).toBeUndefined();
+	});
+
+	it("a blob written before the path prefilter key still finds a single-param entry", async () => {
+		const feed: FakeFeedSeed = { id: "probe-url", kind: "url", rawValues: ["https://drive.example/open?id=AAA"] };
+		const v = await scan("https://drive.example/open?x=1&id=AAA", [feed]);
+		expect(v.signals).toContain("threat-intel match (derived) (probe-url: https://drive.example/open?id=AAA)");
 	});
 
 	it("ignores a derived candidate that only the bloom holds", async () => {
@@ -156,6 +172,8 @@ describe("no match", () => {
 		"https://phish.example/login/extra",
 		"https://app.example/#/t/legit",
 		"https://app.example/",
+		"https://multi.example/p?a=1",
+		"https://multi.example/p?a=1&b=3",
 	])("url feed: %s", async (link) => {
 		const v = await scan(link, [URL_FEED]);
 		expect(v.score).toBe(5);
