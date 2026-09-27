@@ -1428,10 +1428,13 @@ async function handleHoneypotInbound(
 	// is not threat intel. Only the DMARC-evaluated From identity counts as the
 	// sender's domain (see authenticatedSender). (A fuller cross-mailbox
 	// allowlist-overlap check is a follow-up; this is the cheap, high-value guard.)
-	const identity = authenticatedSender(
-		parsedEmail.from?.address ?? "",
-		parseAuthResults(parsedEmail.headers, { trustedAuthservIds }),
-	);
+	// Only a header.from from a trusted authserv-id may narrow the sender
+	// identity; an untrusted (possibly forged) header.from is discarded so it
+	// can't flip a genuine owned-domain sender from suppressed to published.
+	// Absent a trusted header.from we fall back to the shape-checked sender —
+	// the spoof `"x@owned"@attacker` still fails the shape check and publishes.
+	const auth = parseAuthResults(parsedEmail.headers, { trustedAuthservIds });
+	const identity = authenticatedSender(parsedEmail.from?.address ?? "", auth.trusted ? auth : {});
 	if (identity && (await getOwnedDomains(env)).includes(identity.domain)) return;
 
 	const creds = await loadHubCredentials(

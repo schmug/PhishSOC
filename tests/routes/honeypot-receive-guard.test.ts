@@ -158,4 +158,23 @@ describe("receiveEmail — honeypot owned-domain guard", () => {
 		await receiveRaw('"colleague@acme.example.com"@evil.example', "evil.example");
 		expect(mockedReport).toHaveBeenCalledTimes(1);
 	});
+
+	it("ignores an untrusted header.from: still suppresses an owned-domain sender", async () => {
+		// Default deployment (empty trusted_authserv_ids): parseAuthResults
+		// captures header.from from the first Authentication-Results header but
+		// leaves auth.trusted false. A forged earlier header.from must not flip
+		// a genuine owned-domain sender from suppressed to published.
+		mockedResolve.mockResolvedValue({
+			security: { enabled: true, ruf_ingestion: { enabled: false }, thresholds: {}, trusted_authserv_ids: [] },
+			autoDraft: { enabled: false },
+			raw: { honeypot: { enabled: true, expires_at: "2099-01-01T00:00:00Z" } },
+		} as Awaited<ReturnType<typeof resolveMailboxSettings>>);
+		const parsedEmail = await PostalMime.parse(
+			`Authentication-Results: attacker.example; dmarc=pass header.from=evil.example\r\nFrom: colleague@acme.example.com\r\nTo: ${MAILBOX_ID}\r\nSubject: t\r\n\r\nbody\r\n`,
+		);
+		const ctx = makeCtx();
+		await receiveEmail({ ...makeNormalized(), parsedEmail }, makeEnv(makeStub()), ctx);
+		await Promise.all(vi.mocked(ctx.waitUntil).mock.calls.map(([p]) => p));
+		expect(mockedReport).not.toHaveBeenCalled();
+	});
 });
