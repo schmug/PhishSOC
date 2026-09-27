@@ -17,6 +17,7 @@ import ScoreRing from "~/components/phishsoc/ScoreRing";
 import VerdictPill from "~/components/phishsoc/VerdictPill";
 import { statusLabel, statusTone } from "~/components/phishsoc/verdict";
 import { useFeedback } from "~/lib/feedback";
+import { STAGE_LABELS, type StageRecord, type StageStatus } from "~/lib/stage-trace";
 
 interface CaseEmail {
 	case_id: string;
@@ -29,36 +30,6 @@ interface CaseObservable {
 }
 type SummaryStatus = "pending" | "ready" | "failed" | null;
 
-// Per-stage pipeline trace (issue #128). One record per pipeline stage in
-// fixed order; `getCase` parses the persisted JSON and returns either a
-// validated 7-row array or `null` (storage missing / malformed). The
-// timeline card is hidden when null/empty.
-type StageId =
-	| "auth"
-	| "url"
-	| "reputation"
-	| "intel"
-	| "triage"
-	| "llm"
-	| "verdict";
-type StageStatus = "ok" | "skipped" | "failed" | "short_circuited";
-interface StageRecord {
-	stage: StageId;
-	status: StageStatus;
-	score_contrib: number;
-	duration_ms: number;
-	reason?: string;
-}
-
-const STAGE_LABELS: Record<StageId, string> = {
-	auth: "Authentication",
-	url: "URL extraction",
-	reputation: "Sender reputation",
-	intel: "Threat intel",
-	triage: "Triage",
-	llm: "Classifier (LLM)",
-	verdict: "Verdict",
-};
 interface CaseRecord {
 	id: string;
 	created_at: string;
