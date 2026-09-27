@@ -10,6 +10,7 @@ import {
 	type BlockAction,
 } from "shared/blocklist";
 import { useFeedback } from "~/lib/feedback";
+import api, { ApiError } from "~/services/api";
 import type { Email } from "~/types";
 
 /**
@@ -57,25 +58,15 @@ export default function BlockSenderButton({
 			const body: Record<string, unknown> = { match, action, move_existing: moveExisting };
 			if (action === "reject") body.reason = reason;
 			if (needsConfirm && confirmed) body.confirm_shared_domain = true;
-			const res = await fetch(`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/blocklist`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(body),
-			});
-			const data = (await res.json().catch(() => ({}))) as {
-				error?: string;
-				code?: string;
-				moved?: number;
-			};
-			if (res.status === 400 && data.code === "shared_domain_unconfirmed") {
+			const data = await api.addBlockRule({ tier: "mailbox", mailboxId }, body);
+			feedback.success(`Blocked ${match}. Moved ${data.moved ?? 0} existing message(s) to Spam.`);
+			setOpen(false);
+		} catch (e) {
+			if (e instanceof ApiError && e.status === 400 && e.body.code === "shared_domain_unconfirmed") {
 				setServerWantsConfirm(match);
 				setConfirmed(false);
 				return;
 			}
-			if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-			feedback.success(`Blocked ${match}. Moved ${data.moved ?? 0} existing message(s) to Spam.`);
-			setOpen(false);
-		} catch (e) {
 			feedback.error(`Block failed: ${(e as Error).message}`);
 		} finally {
 			setPending(false);

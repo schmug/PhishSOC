@@ -200,3 +200,20 @@ describe("SecurityVerdictPanel — send-risk badge", () => {
 		expect(screen.queryByTestId("send-risk-badge")).toBeNull();
 	});
 });
+
+describe("SecurityVerdictPanel — sender blocklist rule", () => {
+	it("shows the rule that filed an allow-verdict email into Spam", () => {
+		const email = {
+			...makeEmail({ action: "allow", score: 10 }),
+			blocked_by_rule: JSON.stringify({ id: "r", match: "podview.com", tier: "mailbox" }),
+		};
+		render(<SecurityVerdictPanel email={email} />);
+		expect(screen.getByText("Blocked by rule: podview.com (mailbox)")).toBeInTheDocument();
+	});
+
+	it("renders nothing for a malformed blocked_by_rule", () => {
+		const email = { ...makeEmail({ action: "allow", score: 10 }), blocked_by_rule: "{nope" };
+		render(<SecurityVerdictPanel email={email} />);
+		expect(screen.queryByText(/Blocked by rule/)).toBeNull();
+	});
+});

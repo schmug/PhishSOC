@@ -7,6 +7,7 @@ import { useFeedback } from "~/lib/feedback";
 import { useOrgSettings, useUpdateOrgSettings } from "~/queries/org-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
+import { BlockedSendersPanel } from "~/components/BlockedSendersPanel";
 import {
 	HubSettingsPanel,
 	normalizeHubConfig,
@@ -413,6 +414,11 @@ export default function OrgSettingsRoute() {
 
 				{/* Security defaults */}
 				<SecuritySettingsPanel value={security} onChange={setSecurity} />
+
+				{/* Sender blocklist — owned by /api/v1/org/blocklist, not this form. */}
+				<div className="pp-card p-5">
+					<BlockedSendersPanel tier="org" />
+				</div>
 
 				{/* Threat-intel hub */}
 				<HubSettingsPanel

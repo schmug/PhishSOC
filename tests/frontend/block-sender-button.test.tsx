@@ -15,7 +15,7 @@ import type { Email } from "~/types";
 import { renderWithProviders } from "./test-utils";
 
 const MAILBOX = "clodcast@cortech.online";
-const BLOCK_PATH = `/api/v1/mailboxes/${encodeURIComponent(MAILBOX)}/blocklist`;
+const BLOCK_PATH = `/api/v1/mailboxes/${MAILBOX}/blocklist`;
 
 function makeEmail(over: Partial<Email> = {}): Email {
 	return {
@@ -37,7 +37,7 @@ beforeEach(() => {
 		"fetch",
 		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = new URL(String(input), window.location.origin);
-			if (url.pathname === BLOCK_PATH && init?.method === "POST") {
+			if (decodeURIComponent(url.pathname) === BLOCK_PATH && init?.method === "POST") {
 				posts.push(JSON.parse(String(init.body)));
 				const r = responses.shift() ?? { status: 201, body: { rule: { match: "x" }, moved: 2 } };
 				return new Response(JSON.stringify(r.body), { status: r.status, headers: { "content-type": "application/json" } });

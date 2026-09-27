@@ -12,6 +12,7 @@ import { useOrgSettings } from "~/queries/org-settings";
 import { useDomainSettings } from "~/queries/domain-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
+import { BlockedSendersPanel } from "~/components/BlockedSendersPanel";
 import { AclMembersPanel } from "~/components/AclMembersPanel";
 import { PasskeyPanel } from "~/components/PasskeyPanel";
 import {
@@ -840,6 +841,11 @@ export default function SettingsRoute() {
 							setSecurityOverride(true);
 						}}
 					/>
+				</div>
+
+				{/* Sender blocklist — owned by /blocklist endpoints, not this form. */}
+				<div className="pp-card p-5">
+					<BlockedSendersPanel tier="mailbox" mailboxId={mailboxId!} />
 				</div>
 
 				{/* Threat-intel hub (#97) — block-level inheritance. */}

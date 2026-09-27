@@ -27,9 +27,31 @@ export default function SecurityVerdictPanel({ email }: { email: Email }) {
 	return (
 		<>
 			<VerdictCard email={email} />
+			<BlockedByRuleBadge raw={email.blocked_by_rule} />
 			<RelayStatusBadge status={email.relay_status} />
 			<SendRiskBadge raw={email.send_risk} />
 		</>
+	);
+}
+
+/** Sender-blocklist `spam` rule that filed this message (spec
+ *  2026-09-27-sender-blocklist). Standalone because VerdictCard hides
+ *  itself for `allow` verdicts, which is what most blocked-to-Spam mail gets. */
+function BlockedByRuleBadge({ raw }: { raw: string | null | undefined }) {
+	if (!raw) return null;
+	let rule: { match?: unknown; tier?: unknown };
+	try {
+		rule = JSON.parse(raw) as { match?: unknown; tier?: unknown };
+	} catch {
+		return null;
+	}
+	if (typeof rule.match !== "string" || typeof rule.tier !== "string") return null;
+	return (
+		<div className="px-4 md:px-6 pt-3">
+			<div className="rounded-lg border border-line bg-paper-2 px-3 py-2 text-xs text-ink-2">
+				{`Blocked by rule: ${rule.match} (${rule.tier})`}
+			</div>
+		</div>
 	);
 }
 
