@@ -201,7 +201,7 @@ export interface FakeFeedSeed {
 	kind: "domain" | "url";
 	/** Feed body lines, stored through the real `parseFeedBody` ingest path. */
 	lines?: string[];
-	/** Values stored verbatim, bypassing ingest (blobs written by an older build). */
+	/** Values stored verbatim, skipping ingest (blobs written by an older build). */
 	rawValues?: string[];
 	/** Values added to the bloom but not the exact blob (bloom-only hits). */
 	bloomOnly?: string[];
