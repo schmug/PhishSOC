@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
+import PostalMime from "postal-mime";
 import { evaluateTriage } from "../../workers/security/triage";
 import { DEFAULT_SECURITY_SETTINGS } from "../../workers/security/settings";
-import type { AuthVerdict } from "../../workers/security/auth";
+import { parseAuthResults, type AuthVerdict } from "../../workers/security/auth";
 
 // A DMARC pass from a trusted authserv-id (verdict.trusted set by
 // parseAuthResults when a configured allowlist matched). Hard-allow requires
 // this; see the F-004 regression test below.
 const dmarcPass: AuthVerdict = { spf: "pass", dkim: "pass", dmarc: "pass", trusted: true };
+// A trusted DMARC pass that also reports the evaluated From domain — what
+// Cloudflare Email Routing emits on every dmarc=pass. Hard-allow now requires
+// header.from (fail closed), so allowlist tests must carry the domain they match.
+const dmarcPassFrom = (headerFrom: string): AuthVerdict => ({ ...dmarcPass, headerFrom });
 // A DMARC pass that is NOT from a trusted authserv-id (e.g. a forged header on
 // a deployment with no trustedAuthservIds configured).
 const dmarcPassUntrusted: AuthVerdict = { spf: "pass", dkim: "pass", dmarc: "pass" };
@@ -102,7 +107,7 @@ describe("evaluateTriage — hard allow", () => {
 		const r = evaluateTriage({
 			...baseInputs,
 			sender: "ceo@trusted.com",
-			auth: dmarcPass,
+			auth: dmarcPassFrom("trusted.com"),
 			reputation: null,
 			intelMatch: null,
 			settings: { ...baseSettings, allowlist_senders: ["ceo@trusted.com"] },
@@ -130,7 +135,7 @@ describe("evaluateTriage — hard allow", () => {
 		const r = evaluateTriage({
 			...baseInputs,
 			sender: "anyone@trusted.com",
-			auth: dmarcPass,
+			auth: dmarcPassFrom("trusted.com"),
 			reputation: null,
 			intelMatch: null,
 			settings: { ...baseSettings, allowlist_domains: ["trusted.com"] },
@@ -142,7 +147,7 @@ describe("evaluateTriage — hard allow", () => {
 		const r = evaluateTriage({
 			...baseInputs,
 			sender: "bot@mail.trusted.com",
-			auth: dmarcPass,
+			auth: dmarcPassFrom("mail.trusted.com"),
 			reputation: null,
 			intelMatch: null,
 			settings: { ...baseSettings, allowlist_domains: ["trusted.com"] },
@@ -154,7 +159,7 @@ describe("evaluateTriage — hard allow", () => {
 		const r = evaluateTriage({
 			...baseInputs,
 			sender: "colleague@work.com",
-			auth: dmarcPass,
+			auth: dmarcPassFrom("work.com"),
 			reputation: {
 				sender: "colleague@work.com",
 				first_seen: "",
@@ -199,6 +204,76 @@ describe("evaluateTriage — hard allow", () => {
 			settings: baseSettings,
 		});
 		expect(r.shortcircuit).toBeUndefined();
+	});
+});
+
+// Hard-allow must only trust the domain that DMARC actually evaluated. These
+// run real MIME through postal-mime + parseAuthResults (the pipeline's own
+// path) so the From-parsing behaviour is pinned, not assumed.
+describe("evaluateTriage — hard allow binds to the DMARC-evaluated From domain", () => {
+	const trusted = ["mx.cloudflare.net"];
+	const ar = (headerFrom: string | null) =>
+		`Authentication-Results: mx.cloudflare.net; dkim=pass header.d=sender.example header.s=s1; dmarc=pass${headerFrom ? ` header.from=${headerFrom}` : ""}; spf=pass smtp.mailfrom=b@sender.example\r\n`;
+
+	async function triageRaw(
+		fromHeaders: string,
+		opts: { headerFrom?: string | null; settings?: Partial<typeof baseSettings>; historyCount?: number } = {},
+	) {
+		const raw = `${ar(opts.headerFrom === undefined ? "sender.example" : opts.headerFrom)}${fromHeaders}To: me@mailbox.example\r\nSubject: t\r\n\r\nbody\r\n`;
+		const parsed = await PostalMime.parse(raw);
+		const sender = (parsed.from?.address || "").toLowerCase();
+		const auth = parseAuthResults(parsed.headers, { trustedAuthservIds: trusted });
+		return evaluateTriage({
+			...baseInputs,
+			sender,
+			auth,
+			reputation: opts.historyCount
+				? { sender, first_seen: "", last_seen: "", message_count: opts.historyCount, avg_score: 0, flagged: false }
+				: null,
+			intelMatch: null,
+			settings: { ...baseSettings, allowlist_domains: ["allowed.example"], ...opts.settings },
+		});
+	}
+
+	it.each([
+		['From: "ceo@allowed.example"@sender.example\r\n'],
+		["From: Name <a@allowed.example> <b@sender.example>\r\n"],
+		["From: a@allowed.example, b@sender.example\r\n"],
+		["From: b@sender.example\r\nFrom: a@allowed.example\r\n"],
+		["From: <ceo@allowed.example>@sender.example\r\n"],
+	])("does not hard-allow %j when DMARC evaluated a different domain", async (from) => {
+		const r = await triageRaw(from);
+		expect(r.shortcircuit).toBeUndefined();
+	});
+
+	it("does not sender-allowlist an address whose domain DMARC did not evaluate", async () => {
+		const r = await triageRaw("From: Name <a@allowed.example> <b@sender.example>\r\n", {
+			settings: { allowlist_domains: [], allowlist_senders: ["a@allowed.example"] },
+		});
+		expect(r.shortcircuit).toBeUndefined();
+	});
+
+	it("does not history-allow an address whose domain DMARC did not evaluate", async () => {
+		const r = await triageRaw("From: Name <a@allowed.example> <b@sender.example>\r\n", {
+			settings: { allowlist_domains: [], trusted_auto_allow_min_messages: 10 },
+			historyCount: 50,
+		});
+		expect(r.shortcircuit).toBeUndefined();
+	});
+
+	it("does not hard-allow a multi-@ address when the authserv reports no header.from", async () => {
+		const r = await triageRaw('From: "ceo@allowed.example"@sender.example\r\n', { headerFrom: null });
+		expect(r.shortcircuit).toBeUndefined();
+	});
+
+	it("still hard-allows an allowlisted sender whose domain DMARC evaluated", async () => {
+		const r = await triageRaw("From: Someone <user@allowed.example>\r\n", { headerFrom: "allowed.example" });
+		expect(r.shortcircuit?.tier).toBe("hard_allow");
+	});
+
+	it("still hard-allows a subdomain of an allowlisted domain", async () => {
+		const r = await triageRaw("From: user@mail.allowed.example\r\n", { headerFrom: "mail.allowed.example" });
+		expect(r.shortcircuit?.tier).toBe("hard_allow");
 	});
 });
 

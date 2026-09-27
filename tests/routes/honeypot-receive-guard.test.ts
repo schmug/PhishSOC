@@ -6,7 +6,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Email } from "postal-mime";
+import PostalMime, { type Email } from "postal-mime";
 import type { NormalizedInbound } from "../../workers/providers/types";
 import type { Env } from "../../workers/types";
 
@@ -30,12 +30,28 @@ vi.mock("../../workers/security/yaramail-signal", () => ({
 	fireYaraScan: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../workers/providers/cf-routing", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../workers/providers/cf-routing")>();
+	return { ...actual, getOwnedDomains: vi.fn().mockResolvedValue(["acme.example.com"]) };
+});
+
+vi.mock("../../workers/lib/hub-config", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../workers/lib/hub-config")>();
+	return { ...actual, loadHubCredentials: vi.fn().mockResolvedValue({ cfg: { auto_report: true }, apiKey: "k" }) };
+});
+
+vi.mock("../../workers/intel/honeypot-report", () => ({
+	reportHoneypotInbound: vi.fn().mockResolvedValue({ posted: true }),
+}));
+
 import { receiveEmail } from "../../workers/index";
 import { resolveMailboxSettings } from "../../workers/lib/mailbox-settings";
 import { runSecurityPipeline } from "../../workers/security";
+import { reportHoneypotInbound } from "../../workers/intel/honeypot-report";
 
 const mockedResolve = vi.mocked(resolveMailboxSettings);
 const mockedPipeline = vi.mocked(runSecurityPipeline);
+const mockedReport = vi.mocked(reportHoneypotInbound);
 
 const MAILBOX_ID = "alice@acme.example.com";
 
@@ -111,5 +127,35 @@ describe("receiveEmail — honeypot guard", () => {
 		await receiveEmail(makeNormalized(), makeEnv(stub), makeCtx());
 
 		expect(mockedPipeline).not.toHaveBeenCalled();
+	});
+});
+
+describe("receiveEmail — honeypot owned-domain guard", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockedResolve.mockResolvedValue({
+			security: { enabled: true, ruf_ingestion: { enabled: false }, thresholds: {}, trusted_authserv_ids: ["mx.cloudflare.net"] },
+			autoDraft: { enabled: false },
+			raw: { honeypot: { enabled: true, expires_at: "2099-01-01T00:00:00Z" } },
+		} as Awaited<ReturnType<typeof resolveMailboxSettings>>);
+	});
+
+	async function receiveRaw(from: string, headerFrom: string) {
+		const parsedEmail = await PostalMime.parse(
+			`Authentication-Results: mx.cloudflare.net; dmarc=pass header.from=${headerFrom}\r\nFrom: ${from}\r\nTo: ${MAILBOX_ID}\r\nSubject: t\r\n\r\nbody\r\n`,
+		);
+		const ctx = makeCtx();
+		await receiveEmail({ ...makeNormalized(), parsedEmail }, makeEnv(makeStub()), ctx);
+		await Promise.all(vi.mocked(ctx.waitUntil).mock.calls.map(([p]) => p));
+	}
+
+	it("does not publish mail from an owned domain", async () => {
+		await receiveRaw("colleague@acme.example.com", "acme.example.com");
+		expect(mockedReport).not.toHaveBeenCalled();
+	});
+
+	it("publishes when the owned domain is not the domain DMARC evaluated", async () => {
+		await receiveRaw('"colleague@acme.example.com"@evil.example', "evil.example");
+		expect(mockedReport).toHaveBeenCalledTimes(1);
 	});
 });

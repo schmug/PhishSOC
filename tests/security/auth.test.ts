@@ -136,6 +136,35 @@ describe("parseAuthResults — authserv-id gating", () => {
 	});
 });
 
+describe("parseAuthResults — DMARC header.from", () => {
+	it("captures header.from from the dmarc result, lowercased", () => {
+		const v = parseAuthResults(
+			[header("Authentication-Results", "mx.cloudflare.net; dkim=pass header.d=Sender.Example header.s=s1; dmarc=pass header.from=Sender.Example policy.dmarc=reject; spf=pass smtp.mailfrom=b@sender.example")],
+			{ trustedAuthservIds: ["mx.cloudflare.net"] },
+		);
+		expect(v.headerFrom).toBe("sender.example");
+	});
+
+	it("takes header.from from the trusted header, not an untrusted one before it", () => {
+		const v = parseAuthResults(
+			[
+				header("Authentication-Results", "other.example; dmarc=pass header.from=allowed.example"),
+				header("Authentication-Results", "mx.cloudflare.net; dmarc=pass header.from=sender.example"),
+			],
+			{ trustedAuthservIds: ["mx.cloudflare.net"] },
+		);
+		expect(v.headerFrom).toBe("sender.example");
+	});
+
+	it("leaves headerFrom unset when the dmarc result carries no header.from", () => {
+		const v = parseAuthResults(
+			[header("Authentication-Results", "mx.cloudflare.net; dkim=pass header.d=sender.example header.s=s1; dmarc=pass")],
+			{ trustedAuthservIds: ["mx.cloudflare.net"] },
+		);
+		expect(v.headerFrom).toBeUndefined();
+	});
+});
+
 describe("parseAuthResults — DKIM selector observations", () => {
 	it("returns an empty observations list when no Authentication-Results header is present", () => {
 		const v = parseAuthResults([header("From", "a@b.com")]);
