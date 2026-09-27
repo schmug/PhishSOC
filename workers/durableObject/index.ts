@@ -36,6 +36,7 @@ import {
 	type SidecarStateRow,
 	type SidecarEventRow,
 } from "./sidecar-state";
+import { _appendBlockedLogImpl, _listBlockedLogImpl, _moveEmailsFromSenderImpl, type BlockedLogInput } from "./blocked-log";
 import {
 	_getSendContextImpl,
 	_recordSentRecipientsImpl,
@@ -128,6 +129,8 @@ interface EmailData {
 	 */
 	provider_message_id?: string | null;
 	raw_headers?: string | null;
+	/** Sender-blocklist rule that filed this message into Spam (JSON {id, match, tier}). */
+	blocked_by_rule?: string | null;
 	/**
 	 * Provenance of the row (issue #266): "agent" when the draft was
 	 * authored by the agent's draft_reply / draft_email tools, "user"
@@ -676,6 +679,20 @@ export class MailboxDO extends DurableObject<Env> {
 		return true;
 	}
 
+	// ── Sender blocklist (spec 2026-09-27-sender-blocklist) ─────────────
+	async appendBlockedLog(row: BlockedLogInput) {
+		_appendBlockedLogImpl(this.ctx.storage.sql as SqlLike, row);
+	}
+
+	async listBlockedLog(limit = 50) {
+		return _listBlockedLogImpl(this.ctx.storage.sql as SqlLike, limit);
+	}
+
+	/** Retroactive block: file existing Inbox/Archive mail from `match` into `toFolder`. */
+	async moveEmailsFromSender(match: string, toFolder: string) {
+		return _moveEmailsFromSenderImpl(this.ctx.storage.sql as SqlLike, match, [Folders.INBOX, Folders.ARCHIVE], toFolder);
+	}
+
 	// ── API-sidecar mode (issue #31) ────────────────────────────────────
 
 	async getSidecarState() {
@@ -1000,6 +1017,7 @@ export class MailboxDO extends DurableObject<Env> {
 				message_id: email.message_id ?? null,
 				provider_message_id: email.provider_message_id ?? null,
 				raw_headers: email.raw_headers ?? null,
+				blocked_by_rule: email.blocked_by_rule ?? null,
 				created_by: email.created_by ?? "user",
 				send_risk: email.send_risk ?? null,
 			})

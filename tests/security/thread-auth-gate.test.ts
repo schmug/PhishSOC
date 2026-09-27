@@ -226,6 +226,22 @@ describe("receiveEmail — subject-match thread-auth gate (issue #463 / GHSA-m9f
 		expect(stub.findThreadBySubject).not.toHaveBeenCalled();
 	});
 
+	it("blocklist spam rule: no subject-merge, so a blocked sender never joins an Inbox thread", async () => {
+		mockedPipeline.mockResolvedValue({ verdict: { action: "allow", score: 5, signals: [], explanation: "" }, skipped: false } as never);
+		mockedResolve.mockResolvedValue({
+			...BASE_SETTINGS,
+			raw: { blocklist: [{ id: "r1", match: "alice@example.com", action: "spam", created_at: "t" }] },
+		} as never);
+		const stub = makeMailboxStub(EXISTING_THREAD_ID);
+		const email = makeEmail(makeAuthHeader("pass", "pass", "pass"));
+		await receiveEmail(makeNormalized(email), makeEnv(stub), makeCtx());
+
+		expect(stub.createEmail).toHaveBeenCalledWith("spam", expect.anything(), expect.anything());
+		const stored = stub.createEmail.mock.calls[0][1] as { id: string; thread_id: string };
+		expect(stored.thread_id).not.toBe(EXISTING_THREAD_ID);
+		expect(stub.findThreadBySubject).not.toHaveBeenCalled();
+	});
+
 	it("quarantined + subject-matched: detachEmailFromThread IS called", async () => {
 		mockedPipeline.mockResolvedValue({ verdict: { action: "quarantine", score: 80, signals: [], explanation: "" }, skipped: false } as never);
 		const stub = makeMailboxStub(EXISTING_THREAD_ID);

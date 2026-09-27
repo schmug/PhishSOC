@@ -34,6 +34,8 @@ export const emails = sqliteTable("emails", {
 	// Email Routing ingest and pre-#593 rows.
 	provider_message_id: text("provider_message_id"),
 	raw_headers: text("raw_headers"),
+	// Sender-blocklist rule that routed this message to Spam (JSON {id, match, tier}).
+	blocked_by_rule: text("blocked_by_rule"),
 	security_verdict: text("security_verdict"),
 	security_score: integer("security_score"),
 	security_explanation: text("security_explanation"),

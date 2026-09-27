@@ -180,6 +180,23 @@ describe("Shell folder navigation (#366)", () => {
 		expect(folderLinks[2]).toContain("/emails/zebra-list");
 	});
 
+	it("sorts Spam with the system folders, before Quarantine and ahead of custom folders", () => {
+		foldersFixture = [
+			{ id: "receipts", name: "Receipts", unreadCount: 0 },
+			{ id: "quarantine", name: "Quarantine", unreadCount: 0 },
+			{ id: "spam", name: "Spam", unreadCount: 0 },
+			{ id: "inbox", name: "Inbox", unreadCount: 0 },
+		];
+		renderShellAt();
+
+		const folderLinks = screen
+			.getAllByRole("link")
+			.filter((l) => l.getAttribute("href")?.includes("/emails/"))
+			.map((l) => l.getAttribute("href") ?? "");
+
+		expect(folderLinks.map((h) => h.split("/emails/")[1])).toEqual(["inbox", "spam", "quarantine", "receipts"]);
+	});
+
 	it("does not render any folder links when useFolders returns empty array", () => {
 		foldersFixture = [];
 		renderShellAt();

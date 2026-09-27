@@ -724,6 +724,33 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_send_risk_llm_cache_created ON send_risk_llm_cache(created_at);
         `,
 	},
+	{
+		// Sender blocklist audit log (spec 2026-09-27-sender-blocklist). One
+		// row per dropped/rejected inbound message — those are never stored,
+		// so this is the only trace. message_id UNIQUE + INSERT OR IGNORE
+		// absorbs sidecar at-least-once replays (NULLs never collide).
+		// Pruned on insert to 500 rows / 30 days (blocked-log.ts).
+		name: "34_blocked_log",
+		sql: `
+            CREATE TABLE IF NOT EXISTS blocked_log (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts         TEXT NOT NULL,
+                rule_id    TEXT NOT NULL,
+                tier       TEXT NOT NULL,
+                action     TEXT NOT NULL,
+                sender     TEXT NOT NULL,
+                subject    TEXT NOT NULL,
+                message_id TEXT UNIQUE
+            );
+            CREATE INDEX IF NOT EXISTS idx_blocked_log_ts ON blocked_log(ts DESC);
+        `,
+	},
+	{
+		// Rule that filed a message into Spam (JSON {id, match, tier}); NULL
+		// otherwise. Read by SecurityVerdictPanel. Forward-only ALTER.
+		name: "35_emails_blocked_by_rule",
+		sql: `ALTER TABLE emails ADD COLUMN blocked_by_rule TEXT;`,
+	},
 ];
 
 /**

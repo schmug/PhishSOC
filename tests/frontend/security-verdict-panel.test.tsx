@@ -203,6 +203,23 @@ describe("SecurityVerdictPanel — send-risk badge", () => {
 	});
 });
 
+describe("SecurityVerdictPanel — sender blocklist rule", () => {
+	it("shows the rule that filed an allow-verdict email into Spam", () => {
+		const email = {
+			...makeEmail({ action: "allow", score: 10 }),
+			blocked_by_rule: JSON.stringify({ id: "r", match: "podview.com", tier: "mailbox" }),
+		};
+		render(<SecurityVerdictPanel email={email} />);
+		expect(screen.getByText("Blocked by rule: podview.com (mailbox)")).toBeInTheDocument();
+	});
+
+	it("renders nothing for a malformed blocked_by_rule", () => {
+		const email = { ...makeEmail({ action: "allow", score: 10 }), blocked_by_rule: "{nope" };
+		render(<SecurityVerdictPanel email={email} />);
+		expect(screen.queryByText(/Blocked by rule/)).toBeNull();
+	});
+});
+
 /**
  * Provenance: the expanded card shows where the score came from — the
  * per-stage pipeline trace (emails.stage_trace) and the auth-results source.

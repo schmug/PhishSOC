@@ -13,6 +13,7 @@ import {
 import { useOrgSettings } from "~/queries/org-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
+import { BlockedSendersPanel } from "~/components/BlockedSendersPanel";
 import {
 	HubSettingsPanel,
 	normalizeHubConfig,
@@ -449,6 +450,11 @@ export default function DomainSettingsRoute() {
 								setSecurityOverride(true);
 							}}
 						/>
+					</div>
+
+					{/* Sender blocklist — owned by /api/v1/domains/:domain/blocklist, not this form. */}
+					<div className="pp-card p-5">
+						<BlockedSendersPanel tier="domain" domain={domain} />
 					</div>
 
 					{/* Threat-intel hub */}

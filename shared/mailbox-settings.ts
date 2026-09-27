@@ -1,6 +1,7 @@
 // shared/mailbox-settings.ts
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
+import { Blocklist } from "./blocklist";
 import { z } from "zod";
 
 /**
@@ -420,6 +421,8 @@ export const MailboxSettings = z.object({
   newEmailWebhook: NewEmailWebhookSettings.optional(),
   /** Leave this mailbox out of the unified All inboxes view (GET /api/v1/inbox). Mailbox tier only. */
   hideFromAllInboxes: z.boolean().optional(),
+  /** Sender block rules (spec 2026-09-27-sender-blocklist). Written ONLY by the /blocklist endpoints; general PUTs preserve it. */
+  blocklist: Blocklist.optional(),
 }).passthrough();
 
 export type MailboxSettings = z.infer<typeof MailboxSettings>;

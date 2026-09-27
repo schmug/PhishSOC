@@ -21,6 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Folders } from "shared/folders";
+import BlockSenderButton from "~/components/BlockSenderButton";
 import ReportPhishButton from "~/components/ReportPhishButton";
 import type { Email, Folder } from "~/types";
 
@@ -29,6 +30,8 @@ interface EmailPanelToolbarProps {
 	mailboxId?: string;
 	isDraftFolder: boolean;
 	isSending: boolean;
+	/** Sidecar (Gmail-polled) mailbox: blocklist `reject` degrades to drop. */
+	isSidecar?: boolean;
 	moveToFolders: Folder[];
 	lastReceivedMessage?: Email;
 	onBack: () => void;
@@ -49,6 +52,7 @@ export default function EmailPanelToolbar({
 	mailboxId,
 	isDraftFolder,
 	isSending,
+	isSidecar = false,
 	moveToFolders,
 	onBack,
 	onSendDraft,
@@ -189,6 +193,10 @@ export default function EmailPanelToolbar({
 			<MoveToFolderMenu folders={moveToFolders} onMove={onMove} />
 
 			<ReportPhishButton mailboxId={mailboxId} emailId={email.id} />
+
+			{!isDraftFolder ? (
+				<BlockSenderButton mailboxId={mailboxId} email={email} isSidecar={isSidecar} />
+			) : null}
 
 			<div className="ml-auto flex items-center gap-0.5">
 				<Tooltip content="View source" side="bottom" asChild>

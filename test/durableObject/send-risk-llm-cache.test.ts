@@ -30,8 +30,9 @@ function makeDb(): { sql: SqlLike; db: DatabaseSync } {
 }
 
 describe("send-risk LLM cache", () => {
-	it("migration 33 is the last mailbox migration", () => {
-		expect(mailboxMigrations.at(-1)?.name).toBe("33_send_risk_llm_cache");
+	it("migration 33 is registered after 32", () => {
+		const names = mailboxMigrations.map((m) => m.name);
+		expect(names.indexOf("33_send_risk_llm_cache")).toBe(names.indexOf("32_send_risk_recipient_graph") + 1);
 	});
 
 	it("misses on an unknown key", () => {

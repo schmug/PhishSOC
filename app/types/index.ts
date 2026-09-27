@@ -200,6 +200,8 @@ export interface Email {
 	has_draft?: boolean;
 	// Security pipeline verdict (null when the pipeline didn't run)
 	security_verdict?: string | null;
+	/** Sender-blocklist rule that filed this message into Spam (JSON {id, match, tier}). */
+	blocked_by_rule?: string | null;
 	security_score?: number | null;
 	security_explanation?: string | null;
 	// Per-stage pipeline trace as raw JSON (parse with ~/lib/stage-trace);
