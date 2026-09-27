@@ -15,6 +15,7 @@ import { requireMailbox, type MailboxContext } from "./lib/mailbox";
 import {
 	resolveMailboxSettings,
 	stripDefaultEqual,
+	preserveOwnedMailboxFields,
 } from "./lib/mailbox-settings";
 import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, mergeOrgSettingsPut } from "./lib/org-settings";
 import { OrgSettings } from "../shared/org-settings";
@@ -880,6 +881,10 @@ app.put("/api/v1/domains/:domain/settings", async (c) => {
 	// defaults doesn't silently shadow the org tier for every mailbox
 	// under this domain. Caught by advisor before #142 merge.
 	const stripped = stripDefaultEqual(parsed.data);
+	// blocklist is owned by /api/v1/domains/:domain/blocklist — never written here.
+	const currentDomain = await getDomainSettings(c.env, domain);
+	delete stripped.blocklist;
+	if (currentDomain.blocklist?.length) stripped.blocklist = currentDomain.blocklist;
 	const written = await putDomainSettings(c.env, domain, stripped);
 	return c.json({ domain, settings: written });
 });
@@ -1063,6 +1068,8 @@ app.post("/api/v1/mailboxes", async (c) => {
 	// the strip so fromName/signature/forwarding/autoReply still get
 	// materialised — those are strictly per-mailbox (audit Q8).
 	const cleanedSettings = stripDefaultEqual((settings ?? {}) as MailboxSettings);
+	// blocklist is owned by /blocklist; a create never seeds it.
+	delete cleanedSettings.blocklist;
 	const finalSettings = { ...defaultSettings, ...cleanedSettings };
 	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
 
@@ -1257,13 +1264,12 @@ app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const existingObj = await c.env.BUCKET.get(key);
 	if (!existingObj) return c.json({ error: "Not found" }, 404);
 	const existing = (await existingObj.json().catch(() => ({}))) as MailboxSettings;
-	// Preserve operator-managed honeypot state — this endpoint must never clear
-	// or rewrite it when a client saves unrelated mailbox settings.
-	if (existing.honeypot) {
-		settings.honeypot = existing.honeypot;
-	}
-	await c.env.BUCKET.put(key, JSON.stringify(settings));
-	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings });
+	// Preserve operator-managed honeypot state and the endpoint-owned
+	// blocklist — this endpoint must never clear or rewrite either when a
+	// client saves unrelated mailbox settings.
+	const toWrite = preserveOwnedMailboxFields(existing, settings);
+	await c.env.BUCKET.put(key, JSON.stringify(toWrite));
+	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings: toWrite });
 });
 
 // Resolved view of a mailbox's effective settings — runs the full
