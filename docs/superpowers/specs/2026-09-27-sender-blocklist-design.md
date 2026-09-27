@@ -14,8 +14,8 @@ Current state (verified 2026-09-27):
 
 - No deny-list exists. Only `allowlist_senders` / `allowlist_domains`
   (`workers/security/triage.ts:200-204`), plus intel/reputation hard-blocks.
-- `Folders.SPAM` exists (`shared/folders.ts:19`) but is excluded from
-  `SYSTEM_FOLDER_IDS` and nothing writes to it.
+- `Folders.SPAM` exists (`shared/folders.ts:19`) and is listed in the
+  sidebar, but it is not in `SYSTEM_FOLDER_IDS` and ingest never writes to it.
 - Nothing calls `setReject`. Every inbound message is stored first
   (`stub.createEmail`, `workers/index.ts` in `receiveEmail`) and then scored.
 - No List-Unsubscribe handling.
@@ -155,8 +155,11 @@ The `ReceiveEmailResult` type gains an optional `blocked` field. The
 sidecar caller (`workers/providers/workspace.ts:345`) treats `blocked`
 results as processed with no verdict.
 
-Hoisting `resolveMailboxSettings` replaces the 3 existing per-message calls
-in `receiveEmail` with one; no new R2 read per message.
+The blocklist check adds one guarded `resolveMailboxSettings` call.
+`receiveEmail` already makes ~6 such calls per message (`org-settings` and
+`domain-settings` reads are ETag-cached); consolidating them is the
+follow-up already noted in the new-email-webhook comment in
+`receiveEmail`, not part of this change.
 
 ## Audit log (`blocked_log`)
 
@@ -190,9 +193,16 @@ All routes are mailbox-scoped and pass the existing mailbox ACL middleware.
 - `DELETE /api/v1/mailboxes/:mailboxId/blocklist/:ruleId` removes a
   mailbox-tier rule.
 - `GET /api/v1/mailboxes/:mailboxId/blocked-log?limit=` returns audit rows.
-- Domain and org rules are edited through the existing domain PUT and org
-  PUT settings endpoints; the field is in their schemas. Org PUT replaces
-  the whole object, so the UI sends the full list.
+- `POST /api/v1/org/blocklist`, `DELETE /api/v1/org/blocklist/:ruleId`,
+  `POST /api/v1/domains/:domain/blocklist`,
+  `DELETE /api/v1/domains/:domain/blocklist/:ruleId` — same body and
+  validation, for the org and domain tiers. The domain routes apply the same
+  owned-domain gate as the domain settings PUT.
+- `blocklist` is owned by these endpoints alone. The existing mailbox PUT,
+  domain PUT and org PUT (`mergeOrgSettingsPut`) all preserve the persisted
+  `blocklist` and ignore any `blocklist` in the request body, the same way
+  `honeypot` and org `domains` are preserved today. Without this, saving an
+  unrelated settings form would wipe the blocklist.
 
 ## UI
 
@@ -208,8 +218,10 @@ All routes are mailbox-scoped and pass the existing mailbox ACL middleware.
     DMARC-pass: "This message's sender is not authenticated — the From
     address may be forged. Blocking it may block the real sender."
   - Shared-domain warning plus confirm for the list above.
-- Spam becomes a sidebar folder: add `Folders.SPAM` to `SYSTEM_FOLDER_IDS`
-  before `QUARANTINE`.
+- Spam is already listed in the sidebar (every DO folder row is), but it
+  sorts among custom folders. Add `Folders.SPAM` to `SYSTEM_FOLDER_IDS`
+  before `QUARANTINE` so it sorts with the system folders. This also adds a
+  Spam row to the per-folder policy list in `SecuritySettingsPanel`.
 - `SecuritySettingsPanel.tsx`: a **Blocked senders** section listing
   rules per tier (tier badge, match, action, created date, remove button
   at the editable tier) and the last 50 `blocked_log` rows.
