@@ -11,6 +11,15 @@ import type { Context } from "hono";
 import { requireMailbox, type MailboxContext } from "../lib/mailbox";
 import type { Env } from "../types";
 import { validateBlockRuleInput, type BlockRule, type BlockRuleInput } from "../../shared/blocklist";
+
+/** Max rules per tier — mirrors `Blocklist.max(1000)`. A blob over the cap
+ *  fails schema parse on read and the lenient reader drops the WHOLE tier,
+ *  so the cap is enforced here, before the write. */
+const BLOCKLIST_MAX = 1000;
+
+function fullResponse(c: Context) {
+	return c.json({ error: `A tier holds at most ${BLOCKLIST_MAX} block rules; remove one first.`, code: "blocklist_full" }, 400);
+}
 import { stripDefaultEqual } from "../lib/mailbox-settings";
 import { getOrgSettings, putOrgSettings } from "../lib/org-settings";
 import { getDomainSettings, putDomainSettings } from "../lib/domain-settings";
@@ -46,6 +55,7 @@ mailboxBlocklistRoutes.post("/blocklist", async (c) => {
 	if (!obj) return c.json({ error: "Not found" }, 404);
 	const current = (await obj.json().catch(() => ({}))) as Record<string, unknown> & { blocklist?: BlockRule[] };
 	const blocklist = appendRule(current.blocklist, parsed.rule, new Date().toISOString(), crypto.randomUUID());
+	if (blocklist.length > BLOCKLIST_MAX) return fullResponse(c);
 	await c.env.BUCKET.put(key, JSON.stringify(stripDefaultEqual({ ...current, blocklist })));
 	const rule = blocklist[blocklist.length - 1];
 	let moved = 0;
@@ -81,6 +91,7 @@ orgBlocklistRoutes.post("/", async (c) => {
 	if (!parsed.ok) return parsed.res;
 	const current = await getOrgSettings(c.env);
 	const blocklist = appendRule(current.blocklist, parsed.rule, new Date().toISOString(), crypto.randomUUID());
+	if (blocklist.length > BLOCKLIST_MAX) return fullResponse(c);
 	await putOrgSettings(c.env, stripDefaultEqual({ ...current, blocklist }));
 	return c.json({ rule: blocklist[blocklist.length - 1] }, 201);
 });
@@ -110,6 +121,7 @@ domainBlocklistRoutes.post("/", async (c) => {
 	if (!parsed.ok) return parsed.res;
 	const current = await getDomainSettings(c.env, domain);
 	const blocklist = appendRule(current.blocklist, parsed.rule, new Date().toISOString(), crypto.randomUUID());
+	if (blocklist.length > BLOCKLIST_MAX) return fullResponse(c);
 	await putDomainSettings(c.env, domain, stripDefaultEqual({ ...current, blocklist }));
 	return c.json({ rule: blocklist[blocklist.length - 1] }, 201);
 });

@@ -147,4 +147,19 @@ describe("blocklist endpoints", () => {
 		expect(res.status).toBe(403);
 		expect(bucket.read("domains/not-owned.example.json")).toBeUndefined();
 	});
+
+	it("POST past the 1000-rule cap → 400 blocklist_full and nothing written (mailbox + org)", async () => {
+		const full = Array.from({ length: 1000 }, (_, i) => ({ id: `r${i}`, match: `s${i}.example`, action: "drop", created_at: "t" }));
+		const before = JSON.stringify({ agentModel: "custom", blocklist: full });
+		const bucket = makeR2({ "mailboxes/a@x.com.json": before, "org/settings.json": JSON.stringify({ blocklist: full }) });
+		const res = await post(makeMailboxApp({}), "/api/v1/mailboxes/a%40x.com/blocklist", { match: "podview.com", action: "drop" }, { BUCKET: bucket });
+		expect(res.status).toBe(400);
+		expect((await res.json()).code).toBe("blocklist_full");
+		expect(bucket.read("mailboxes/a@x.com.json")).toBe(before);
+		const org = await post(app, "/api/v1/org/blocklist", { match: "podview.com", action: "drop" }, { BUCKET: bucket, DOMAINS: "" });
+		expect(org.status).toBe(400);
+		// Re-blocking an existing match replaces in place, so it is allowed at the cap.
+		const replace = await post(makeMailboxApp({}), "/api/v1/mailboxes/a%40x.com/blocklist", { match: "s1.example", action: "spam" }, { BUCKET: bucket });
+		expect(replace.status).toBe(201);
+	});
 });

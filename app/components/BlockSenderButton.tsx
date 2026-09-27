@@ -51,6 +51,18 @@ export default function BlockSenderButton({
 	const auth = parseAuth(email.security_verdict);
 	const unauthenticated = !(auth?.dmarc === "pass" && auth?.trusted === true);
 
+	// The toolbar is not remounted when the panel switches to another cached
+	// email, so the form resets from the *current* email on every open.
+	const openFresh = () => {
+		setMatch(sender);
+		setAction("spam");
+		setReason(DEFAULT_REJECT_REASON);
+		setMoveExisting(true);
+		setConfirmed(false);
+		setServerWantsConfirm(null);
+		setOpen(true);
+	};
+
 	const submit = async () => {
 		if (!mailboxId) return;
 		setPending(true);
@@ -92,7 +104,7 @@ export default function BlockSenderButton({
 					shape="square"
 					size="sm"
 					icon={<ProhibitIcon size={18} />}
-					onClick={() => setOpen(true)}
+					onClick={openFresh}
 					disabled={!mailboxId || !sender.includes("@")}
 					aria-label="Block sender"
 				/>

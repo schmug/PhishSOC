@@ -124,4 +124,13 @@ describe("BlockSenderButton", () => {
 		await waitFor(() => expect(posts).toHaveLength(2));
 		expect(posts[1]).toMatchObject({ match: "podview.com", confirm_shared_domain: true });
 	});
+
+	it("uses the current email's sender after the panel switches emails", async () => {
+		const view = renderWithProviders(<BlockSenderButton mailboxId={MAILBOX} email={makeEmail()} />);
+		view.rerender(<BlockSenderButton mailboxId={MAILBOX} email={makeEmail({ id: "e2", sender: "other@example.org" })} />);
+		await userEvent.click(screen.getByRole("button", { name: "Block sender" }));
+		await userEvent.click(screen.getByRole("button", { name: "Block" }));
+		await waitFor(() => expect(posts).toHaveLength(1));
+		expect(posts[0]).toMatchObject({ match: "other@example.org" });
+	});
 });

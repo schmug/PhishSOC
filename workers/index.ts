@@ -1689,7 +1689,12 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 		console.error("blocklist settings resolve failed (fail-open):", (e as Error).message);
 		return null;
 	});
-	const blockHit = blockSettings ? safeMatchBlocklist(blockSettings, parsedEmail.from?.address) : null;
+	// Provisioned honeypots are IOC sensors: never block (a drop hides the
+	// sender's IOCs from harvesting, a reject reveals the mailbox filters).
+	const blockHit =
+		blockSettings && !isProvisionedHoneypot(blockSettings.raw?.honeypot)
+			? safeMatchBlocklist(blockSettings, parsedEmail.from?.address)
+			: null;
 
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
 
@@ -1746,7 +1751,9 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	let threadId = emailReferences[0] || inReplyTo || messageId;
 	let subjectMatchedThread = false;
 
-	if (!inReplyTo && emailReferences.length === 0) {
+	// Blocklist `spam` mail never subject-merges into an existing (Inbox)
+	// thread — the blocked sender must not reappear inside a conversation.
+	if (!inReplyTo && emailReferences.length === 0 && !spamRule) {
 		// GHSA-m9f6-j7mm-wc4m: subject-merge requires From:-aligned,
 		// trustworthy authentication. SPF authenticates the envelope
 		// MAIL-FROM and DKIM the signing d= domain — neither is aligned to

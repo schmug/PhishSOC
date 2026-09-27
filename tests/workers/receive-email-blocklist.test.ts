@@ -185,4 +185,18 @@ describe("receiveEmail sender blocklist", () => {
 		expect(res?.blocked).toBeUndefined();
 		expect(stub.createEmail).toHaveBeenCalledWith("inbox", expect.anything(), expect.anything());
 	});
+
+	it("never blocks for an operator-provisioned honeypot (IOC sensor keeps harvesting, no reject tell)", async () => {
+		const stub = makeStub();
+		mockedResolve.mockResolvedValue(
+			makeResolvedSettings({
+				raw: { honeypot: { enabled: true, expires_at: "2099-01-01T00:00:00Z" } },
+				org: { blocklist: [REJECT] },
+			}),
+		);
+		const res = await receiveEmail(makeNormalized(), makeEnv(stub), makeCtx());
+		expect(res?.blocked).toBeUndefined();
+		expect(stub.appendBlockedLog).not.toHaveBeenCalled();
+		expect(stub.createEmail).toHaveBeenCalledWith("inbox", expect.anything(), expect.anything());
+	});
 });
