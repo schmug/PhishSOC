@@ -15,6 +15,10 @@ import { renderWithProviders } from "./test-utils";
 const MB = "clodcast@cortech.online";
 const rule = (id: string, match: string, action = "drop") => ({ id, match, action, created_at: "2026-09-27T12:00:00Z" });
 
+/** Row accessible-name matcher on whole whitespace-separated tokens — exact
+ *  equality, not a substring/regex match (CodeQL js/regex/missing-regexp-anchor). */
+const hasToken = (token: string) => (name: string) => name.split(/\s+/).includes(token);
+
 let calls: Array<{ method: string; path: string; body?: unknown }> = [];
 let routes: Record<string, { status: number; body: unknown }> = {};
 
@@ -63,19 +67,19 @@ describe("BlockedSendersPanel — mailbox tier", () => {
 		renderWithProviders(<BlockedSendersPanel tier="mailbox" mailboxId={MB} />);
 		await screen.findByRole("button", { name: "Remove podview.com" });
 		const rules = within(screen.getByRole("table", { name: "Block rules" }));
-		const own = rules.getByRole("row", { name: /podview\.com/ });
+		const own = rules.getByRole("row", { name: hasToken("podview.com") });
 		expect(within(own).getByText("mailbox")).toBeInTheDocument();
 		expect(within(own).getByRole("button", { name: "Remove podview.com" })).toBeInTheDocument();
-		const inherited = rules.getByRole("row", { name: /spam\.example/ });
+		const inherited = rules.getByRole("row", { name: hasToken("spam.example") });
 		expect(within(inherited).getByText("domain")).toBeInTheDocument();
 		expect(within(inherited).queryByRole("button")).toBeNull();
-		expect(within(rules.getByRole("row", { name: /junk\.example/ })).getByText("org")).toBeInTheDocument();
+		expect(within(rules.getByRole("row", { name: hasToken("junk.example") })).getByText("org")).toBeInTheDocument();
 	});
 
 	it("Remove deletes the rule and drops the row", async () => {
 		renderWithProviders(<BlockedSendersPanel tier="mailbox" mailboxId={MB} />);
 		await userEvent.click(await screen.findByRole("button", { name: "Remove podview.com" }));
-		await waitFor(() => expect(screen.queryByRole("row", { name: /podview\.com/ })).toBeNull());
+		await waitFor(() => expect(screen.queryByRole("row", { name: hasToken("podview.com") })).toBeNull());
 		expect(calls).toContainEqual(expect.objectContaining({ method: "DELETE", path: `/api/v1/mailboxes/${MB}/blocklist/m1` }));
 	});
 
@@ -97,7 +101,7 @@ describe("BlockedSendersPanel — org tier", () => {
 		await userEvent.type(await screen.findByLabelText("Sender or domain"), "podview.com");
 		await userEvent.selectOptions(screen.getByLabelText("Action"), "reject");
 		await userEvent.click(screen.getByRole("button", { name: "Add rule" }));
-		await screen.findByRole("row", { name: /podview\.com/ });
+		await screen.findByRole("row", { name: hasToken("podview.com") });
 		expect(calls).toContainEqual(
 			expect.objectContaining({ method: "POST", path: "/api/v1/org/blocklist", body: expect.objectContaining({ match: "podview.com", action: "reject" }) }),
 		);
