@@ -52,6 +52,7 @@ import {
 	aggregateDomainsList,
 	aggregateOrgOverview,
 	bucketThreatPressure,
+	computeLinkDomainRollup,
 	computeP95,
 	domainOf,
 	pipelineSuccessRate,
@@ -1234,6 +1235,24 @@ app.get("/api/v1/mailboxes/:mailboxId/dashboard", async (c: AppContext) => {
 		threatPressure,
 		recentCases: raw.recentCases,
 	});
+});
+
+// Link-domains dashboard panel (#740): per-host and per-registrable-domain
+// link-verdict rates for mail received in the window. Monitoring-only — see
+// the issue's "Out of scope" list. Sits behind the same `requireMailbox`
+// middleware as `/dashboard` above, so ACL denial responds identically.
+app.get("/api/v1/mailboxes/:mailboxId/link-domains", async (c: AppContext) => {
+	const daysParam = c.req.query("days");
+	let days = 30;
+	if (daysParam !== undefined) {
+		const parsed = Number(daysParam);
+		if (!Number.isInteger(parsed) || parsed < 1 || parsed > 90) {
+			return c.json({ error: "days must be an integer between 1 and 90" }, 400);
+		}
+		days = parsed;
+	}
+	const rows = await c.var.mailboxStub.getLinkDomains({ days });
+	return c.json(computeLinkDomainRollup(rows, days));
 });
 
 // Realtime event stream. Browsers can't set custom headers on `new

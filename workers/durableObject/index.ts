@@ -1100,6 +1100,7 @@ export class MailboxDO extends DurableObject<Env> {
 			display_text: string | null;
 			is_homograph: number;
 			is_shortener: number;
+			hostname?: string | null;
 		}>,
 	) {
 		if (urls.length === 0) return;
@@ -1113,6 +1114,7 @@ export class MailboxDO extends DurableObject<Env> {
 					display_text: u.display_text,
 					is_homograph: u.is_homograph,
 					is_shortener: u.is_shortener,
+					hostname: u.hostname ?? null,
 				})),
 			)
 			.run();
@@ -2290,6 +2292,38 @@ export class MailboxDO extends DurableObject<Env> {
 			topThreatSamples,
 			recentCases,
 		};
+	}
+
+	/**
+	 * Link-domains dashboard rollup (issue #740): one row per (hostname,
+	 * email) pair for URLs linked in mail received within the window, plus
+	 * that email's verdict JSON so the caller can compute the flagged/
+	 * phishing/spam breakdown. Pre-migration URLs (`hostname IS NULL`) are
+	 * excluded — this is a forward-only view, no backfill. A single joined
+	 * query rather than a per-email loop; the caller (`computeLinkDomainRollup`)
+	 * does the dedup/rollup/sort/cap work in pure JS.
+	 */
+	async getLinkDomains(opts: { days: number; now?: string }) {
+		const nowIso = opts.now ?? new Date().toISOString();
+		const windowStartIso = new Date(
+			Date.parse(nowIso) - opts.days * 24 * 60 * 60 * 1000,
+		).toISOString();
+
+		return this.db
+			.select({
+				hostname: schema.urls.hostname,
+				email_id: schema.urls.email_id,
+				security_verdict: schema.emails.security_verdict,
+			})
+			.from(schema.urls)
+			.innerJoin(schema.emails, eq(schema.urls.email_id, schema.emails.id))
+			.where(
+				and(
+					sql`${schema.urls.hostname} IS NOT NULL`,
+					sql`${schema.emails.date} >= ${windowStartIso}`,
+				),
+			)
+			.all();
 	}
 
 	// ── DMARC RUF forensic-report methods (issue #171) ──────────────────────

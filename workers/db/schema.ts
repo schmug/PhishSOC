@@ -89,6 +89,10 @@ export const urls = sqliteTable("urls", {
 	fetch_status: text("fetch_status").default("pending"),
 	verdict: text("verdict"),
 	created_at: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+	// `ExtractedUrl.hostname` verbatim, for the link-domains dashboard rollup
+	// (issue #740). NULL for rows stored before this column was added — the
+	// rollup is a forward-only view, no backfill.
+	hostname: text("hostname"),
 });
 
 // One row per `runSecurityPipeline` invocation that actually ran (skipped

@@ -341,6 +341,23 @@ export interface DashboardSummary {
 	recentCases: DashboardCase[];
 }
 
+/** One host or registrable-domain row from the link-domains rollup (#740). */
+export interface LinkDomainRow {
+	name: string;
+	emails: number;
+	flagged: number;
+	phishing: number;
+	spam: number;
+}
+
+/** `GET /api/v1/mailboxes/:mailboxId/link-domains` response (#740). Monitoring
+ * view only — see the issue's "Out of scope" list for what it does NOT feed. */
+export interface LinkDomainsSummary {
+	window_days: number;
+	hosts: LinkDomainRow[];
+	domains: LinkDomainRow[];
+}
+
 export interface OrgVerdictMix {
 	safe: number;
 	suspicious: number;

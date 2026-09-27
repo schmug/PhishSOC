@@ -524,6 +524,7 @@ async function persistAll(
 					display_text: u.display_text ?? null,
 					is_homograph: u.is_homograph ? 1 : 0,
 					is_shortener: u.is_shortener ? 1 : 0,
+					hostname: u.hostname,
 				})),
 			);
 		} catch (e) {
