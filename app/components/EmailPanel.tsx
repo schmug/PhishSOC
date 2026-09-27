@@ -383,6 +383,7 @@ export default function EmailPanel({
 				mailboxId={mailboxId}
 				isDraftFolder={isDraftFolder}
 				isSending={isSending}
+				isSidecar={Boolean(currentMailbox?.sidecar || currentMailbox?.settings?.sidecar)}
 				moveToFolders={moveToFolders}
 				onBack={closePanel}
 				onSendDraft={() => handleSendDraft()}
