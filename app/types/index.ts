@@ -204,6 +204,9 @@ export interface Email {
 	blocked_by_rule?: string | null;
 	security_score?: number | null;
 	security_explanation?: string | null;
+	// Per-stage pipeline trace as raw JSON (parse with ~/lib/stage-trace);
+	// present on the single-email and thread endpoints, not on list rows
+	stage_trace?: string | null;
 	// Inline-gateway relay outcome (#32/#581); null when the domain has no relay policy
 	relay_status?: RelayStatus | null;
 	// Outbound send-risk gate decision (JSON SendRiskRecord); set on sent mail only
@@ -241,6 +244,8 @@ export interface SecurityVerdict {
 		dkim: string;
 		dmarc: string;
 		authservId?: string;
+		/** True when a header with a trusted authserv-id was found (workers/security/auth.ts). */
+		trusted?: boolean;
 	};
 	classification: {
 		label: "safe" | "spam" | "phishing" | "bec" | "suspicious";
