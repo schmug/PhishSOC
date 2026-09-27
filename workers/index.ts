@@ -39,6 +39,8 @@ import { dmarcRoutes } from "./routes/dmarc";
 import { isTlsRptReport, ingestTlsRptReport } from "./tlsrpt/ingest";
 import { tlsrptRoutes } from "./routes/tlsrpt";
 import { caseRoutes } from "./routes/cases";
+import { safeMatchBlocklist, type ReceiveBlocked } from "./security/blocklist";
+import { sanitizeRejectReason } from "../shared/blocklist";
 import { sendEmailRoutes } from "./routes/send-email";
 import { unifiedInboxRoutes } from "./routes/unified-inbox";
 import { hubUiRoutes } from "./routes/hub-ui";
@@ -1649,6 +1651,8 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
 export interface ReceiveEmailResult {
 	messageId: string;
 	verdict: FinalVerdict | null;
+	/** Set when a sender-blocklist drop/reject rule stopped the message before storage. */
+	blocked?: ReceiveBlocked;
 }
 
 /**
@@ -1675,7 +1679,36 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	const messageId = crypto.randomUUID();
 	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return null; }
 
+	// Sender blocklist (spec 2026-09-27-sender-blocklist). Runs before any
+	// storage. Fail-open: a settings read or evaluation error delivers normally.
+	const blockSettings = await resolveMailboxSettings(env, mailboxId).catch((e) => {
+		console.error("blocklist settings resolve failed (fail-open):", (e as Error).message);
+		return null;
+	});
+	const blockHit = blockSettings ? safeMatchBlocklist(blockSettings, parsedEmail.from?.address) : null;
+
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+
+	if (blockHit && blockHit.rule.action !== "spam") {
+		// No SMTP session to reject on for API-polled (sidecar) mailboxes.
+		const action = blockHit.rule.action === "reject" && !normalized.providerMessageId ? "reject" : "drop";
+		await (stub as any)
+			.appendBlockedLog({
+				ts: new Date().toISOString(),
+				rule_id: blockHit.rule.id,
+				tier: blockHit.tier,
+				action,
+				sender: (parsedEmail.from?.address || "").toLowerCase(),
+				subject: parsedEmail.subject || "",
+				message_id: parsedEmail.messageId ? parsedEmail.messageId.trim().replace(/^<|>$/g, "") : null,
+			})
+			.catch((e: Error) => console.error("appendBlockedLog failed:", e.message));
+		const blocked: ReceiveBlocked = { action, ruleId: blockHit.rule.id, tier: blockHit.tier };
+		if (action === "reject") blocked.reason = sanitizeRejectReason(blockHit.rule.reason);
+		return { messageId, verdict: null, blocked };
+	}
+	const spamRule = blockHit?.rule.action === "spam" ? blockHit : null;
+	const inboundFolder = spamRule ? Folders.SPAM : Folders.INBOX;
 
 	const allAttachments = parsedEmail.attachments ?? [];
 	const attachmentsToStore = allAttachments.slice(0, MAX_ATTACHMENTS_PER_EMAIL);
@@ -1738,7 +1771,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 
 	const originalMessageId = parsedEmail.messageId ? extractMsgId(parsedEmail.messageId) : null;
 
-	await stub.createEmail(Folders.INBOX, {
+	await stub.createEmail(inboundFolder, {
 		id: messageId, subject: parsedEmail.subject || "",
 		sender: (parsedEmail.from?.address || "").toLowerCase(), recipient: allRecipients.join(", "),
 		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,
@@ -1749,6 +1782,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 		// Provider-native id (issue #593): dedupe fallback key for sidecar
 		// messages with no RFC Message-ID header; null for CF Email Routing.
 		provider_message_id: normalized.providerMessageId ?? null,
+		blocked_by_rule: spamRule ? JSON.stringify({ id: spamRule.rule.id, match: spamRule.rule.match, tier: spamRule.tier }) : null,
 	}, attachmentData);
 
 	// Honeypot mailboxes (#24) are IOC sensors, not real inboxes. The message is
@@ -1847,11 +1881,10 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 			env,
 			mailboxId,
 			messageId,
-			// `receiveEmail` always lands inbound mail in INBOX today. If a
-			// future filter-rule engine routes mail into other folders on
-			// receive, this destination folder must be passed through so the
-			// folder-bypass triage tier can honour per-folder policy.
-			targetFolder: Folders.INBOX,
+			// Inbound mail lands in INBOX, or SPAM when a sender-blocklist
+			// `spam` rule matched. The destination is passed through so the
+			// folder-bypass triage tier honours that folder's policy.
+			targetFolder: inboundFolder,
 			parsedEmail: {
 				subject: parsedEmail.subject,
 				from: parsedEmail.from,
@@ -1945,7 +1978,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	const finalFolder =
 		securityVerdict?.action === "quarantine" || securityVerdict?.action === "block"
 			? Folders.QUARANTINE
-			: Folders.INBOX;
+			: inboundFolder;
 	try {
 		await stub.notifyNewEmail(messageId, finalFolder);
 	} catch (e) {
@@ -2046,8 +2079,9 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	// org > default). The security pipeline above always runs; only the
 	// agent's onNewEmail fetch is skipped when the operator has disabled
 	// auto-draft for this mailbox (or for the org as a whole).
+	// Never auto-draft replies to mail the user blocked to Spam.
 	const mailboxSettings = await resolveMailboxSettings(env, mailboxId);
-	if (mailboxSettings.raw?.sidecar || !mailboxSettings.autoDraft.enabled) {
+	if (spamRule || mailboxSettings.raw?.sidecar || !mailboxSettings.autoDraft.enabled) {
 		return result;
 	}
 
