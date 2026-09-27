@@ -19,7 +19,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkUrlAgainstFeeds, refreshAllFeeds } from "../../workers/intel/feeds";
+import { checkUrlAgainstFeeds, feedBloomKeys, refreshAllFeeds } from "../../workers/intel/feeds";
 import { addToBloom, createBloom, serializeBloom } from "../../workers/intel/bloom";
 import { clearOrgSettingsCache } from "../../workers/lib/org-settings";
 import { clearDomainSettingsCache } from "../../workers/lib/domain-settings";
@@ -149,7 +149,7 @@ describe("refreshFeed 304 handling", () => {
 		// A 304 is only trusted while every required blob is still alive in
 		// KV (#488) — seed both so the conditional-GET path applies.
 		const bloom = createBloom(10);
-		addToBloom(bloom, "https://evil.example/login");
+		for (const k of feedBloomKeys(["https://evil.example/login"], "url")) addToBloom(bloom, k);
 		const kv = makeKv();
 		kv.store.set("intel:testfeed:bloom", serializeBloom(bloom));
 		kv.store.set("intel:testfeed:exact-blob", JSON.stringify(["https://evil.example/login"]));

@@ -17,7 +17,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkUrlAgainstFeeds, refreshAllFeeds } from "../../workers/intel/feeds";
+import { checkUrlAgainstFeeds, feedBloomKeys, refreshAllFeeds } from "../../workers/intel/feeds";
 import { addToBloom, createBloom, serializeBloom } from "../../workers/intel/bloom";
 import { clearOrgSettingsCache } from "../../workers/lib/org-settings";
 import { clearDomainSettingsCache } from "../../workers/lib/domain-settings";
@@ -455,7 +455,7 @@ describe("blob TTL renewal on 304 (#484)", () => {
 	/** Seed both required blobs for a url-kind feed, returning the seeded values. */
 	function seedUrlBlobs(kv: ReturnType<typeof makeCountingKv>) {
 		const bloom = createBloom(10);
-		addToBloom(bloom, "https://evil.example/phish");
+		for (const k of feedBloomKeys(["https://evil.example/phish"], "url")) addToBloom(bloom, k);
 		const bloomBytes = serializeBloom(bloom);
 		const exactJson = JSON.stringify(["https://evil.example/phish"]);
 		kv.store.set("intel:test-feed:bloom", bloomBytes);
@@ -603,6 +603,38 @@ describe("blob TTL renewal on 304 (#484)", () => {
 		expect(captured).toHaveLength(1);
 		expect(captured[0]["If-None-Match"]).toBe('"abc"');
 		// content changed → full rebuild of both blobs
+		expect([...kv.putKeys].sort()).toEqual([
+			"intel:test-feed:bloom",
+			"intel:test-feed:exact-blob",
+		]);
+	});
+
+	it("url bloom without path prefilter keys → fetch omits If-None-Match and a 200 rebuilds all blobs", async () => {
+		const captured: Array<Record<string, string>> = [];
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			captured.push({ ...((init?.headers as Record<string, string>) ?? {}) });
+			return new Response(feedBody(5), { status: 200 });
+		});
+		const kv = makeCountingKv();
+		// Blobs written by a build without `feedBloomKeys`: values only.
+		const legacy = createBloom(10);
+		addToBloom(legacy, "https://evil.example/phish");
+		kv.store.set("intel:test-feed:bloom", serializeBloom(legacy));
+		kv.store.set("intel:test-feed:exact-blob", JSON.stringify(["https://evil.example/phish"]));
+		const { env } = makeEnv({
+			mailboxSettings: urlFeedSettings(),
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 1,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		expect(captured).toHaveLength(1);
+		expect(captured[0]).not.toHaveProperty("If-None-Match");
 		expect([...kv.putKeys].sort()).toEqual([
 			"intel:test-feed:bloom",
 			"intel:test-feed:exact-blob",

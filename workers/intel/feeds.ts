@@ -238,6 +238,42 @@ export function feedBloomKeys(values: string[], kind: "domain" | "url"): string[
 	return [...values, ...paths];
 }
 
+/** Exact-blob entries sampled by `isLegacyUrlBloom`. */
+const LEGACY_BLOOM_SAMPLE = 8;
+
+/**
+ * True when a url feed's stored blobs predate this build's ingest
+ * (`canonicalFeedUrl` values plus `feedBloomKeys` path keys), or do not
+ * parse. The check reads what is stored, so no version marker costs an
+ * extra KV write: a current bloom holds the path key of every exact-blob
+ * entry, and blooms have no false negatives, so a sampled entry whose path
+ * key is missing (or which does not parse as a URL) marks the blobs as
+ * legacy. When a later change alters ingest output, extend this check so
+ * existing blobs get rebuilt.
+ */
+function isLegacyUrlBloom(bloomBuf: ArrayBuffer, exactJson: string): boolean {
+	const filter = deserializeBloom(bloomBuf);
+	if (!filter) return true;
+	let entries: unknown;
+	try {
+		entries = JSON.parse(exactJson);
+	} catch {
+		return true;
+	}
+	if (!Array.isArray(entries)) return true;
+	for (const v of entries.slice(0, LEGACY_BLOOM_SAMPLE)) {
+		if (typeof v !== "string") return true;
+		let u: URL;
+		try {
+			u = new URL(v);
+		} catch {
+			return true;
+		}
+		if (!checkBloom(filter, pathKey(`${u.origin}${u.pathname}`))) return true;
+	}
+	return false;
+}
+
 /**
  * Parse a CIDR-per-line body (e.g. Spamhaus DROP/EDROP).
  *
@@ -373,7 +409,15 @@ async function refreshFeed(
 				: await env.BLOOM_KV.get(blob.key, "text");
 		if (value !== null) existingBlobs.push({ key: blob.key, value });
 	}
-	const blobsIntact = existingBlobs.length === requiredBlobs.length;
+	// Intact = every required blob is alive AND was written by this build's
+	// ingest. A 304 only renews what is stored, so a legacy bloom would
+	// otherwise be renewed forever and never gain path prefilter keys.
+	const blobsIntact =
+		existingBlobs.length === requiredBlobs.length &&
+		!(
+			feed.kind === "url" &&
+			isLegacyUrlBloom(existingBlobs[0].value as ArrayBuffer, existingBlobs[1].value as string)
+		);
 
 	const headers: Record<string, string> = { ...(feed.headers ?? {}) };
 	// Conditional GET only while every required blob is still alive in KV — a
