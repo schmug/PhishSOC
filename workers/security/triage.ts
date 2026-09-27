@@ -51,6 +51,8 @@ export interface IntelMatchInfo {
 	feedId: string;
 	value: string;
 	confirmed: boolean;
+	/** Derived-tier feed match (see `FeedMatch.derived`). Never hard-blocks. */
+	derived?: boolean;
 }
 
 export interface TriageInputs {
@@ -168,7 +170,7 @@ function evaluateHardBlock(inputs: TriageInputs): TriageShortCircuit | null {
 	if (inputs.reputation?.flagged) {
 		reasons.push(`sender flagged (${inputs.sender})`);
 	}
-	if (inputs.intelMatch?.confirmed) {
+	if (inputs.intelMatch?.confirmed && !inputs.intelMatch.derived) {
 		reasons.push(`confirmed intel hit (${inputs.intelMatch.feedId}: ${inputs.intelMatch.value})`);
 	}
 

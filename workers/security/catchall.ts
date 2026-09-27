@@ -75,9 +75,8 @@ export async function analyzeCatchall(
 			const match = await checkUrlAgainstFeedsForDomain(env, input.domain, u.url).catch(() => null);
 			if (!match) continue;
 			score += match.confirmed ? 30 : 15;
-			signals.push(
-				`url-feed: ${match.value} in ${match.feedId}${match.confirmed ? "" : " (bloom-only)"}`,
-			);
+			const tier = match.confirmed ? "" : match.derived ? " (derived)" : " (bloom-only)";
+			signals.push(`url-feed: ${match.value} in ${match.feedId}${tier}`);
 			intelMatch.urlFeed = true;
 			break;
 		}

@@ -153,19 +153,24 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	tracer.setContrib("url", urlContrib.score, urlContrib.reasons[0]);
 
 	// ── Stage 3: intel-feed lookup ─────────────────────────────────
-	// First confirmed hit wins. Kept early (pre-triage) so the hard-block
-	// tier can short-circuit on it.
-	const intelMatch = await tracer.measureAsync("intel", async () => {
+	// Best tier across the message's links: confirmed (exact) > derived >
+	// bloom-only; the first confirmed hit wins. Kept early (pre-triage) so
+	// the hard-block tier can short-circuit on a confirmed hit. Distinct
+	// feeds with a derived hit are counted for the corroboration floor.
+	const intel = await tracer.measureAsync("intel", async () => {
 		let m: FeedMatch | null = null;
+		const derivedFeeds = new Set<string>();
 		for (const u of urls) {
 			const hit = await checkUrlAgainstFeeds(env, mailboxId, u.url).catch(() => null);
 			if (!hit) continue;
+			for (const id of hit.derivedFeedIds ?? []) derivedFeeds.add(id);
 			if (hit.confirmed) { m = hit; break; }
-			if (!m) m = hit;
+			if (!m || (hit.derived && !m.derived)) m = hit;
 		}
-		return m;
+		return { match: m, derivedFeedCount: derivedFeeds.size };
 	});
-	const intelForTriage: IntelMatchInfo | null = intelMatch?.confirmed
+	const intelMatch = intel.match;
+	const intelForTriage: IntelMatchInfo | null = intelMatch?.confirmed && !intelMatch.derived
 		? { matched: true, feedId: intelMatch.feedId, value: intelMatch.value, confirmed: true }
 		: null;
 
@@ -290,6 +295,10 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	}
 
 	// ── Stage 7: verdict aggregation + post-aggregation boosts ─────
+	// Intel-feed boost: confirmed or derived hit +20; unconfirmed bloom-only
+	// hit +5 (low-signal — bloom FPR is configured at ~1%).
+	const intelBoost = intelMatch?.confirmed || intelMatch?.derived ? 20 : intelMatch ? 5 : 0;
+	let intelFloorBoost = 0;
 	let verdict = await tracer.measureAsync("verdict", async () => {
 		let v = aggregateVerdict(
 			{
@@ -304,13 +313,25 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 			settings.thresholds,
 			settings.mitigations,
 		);
-		// Intel-feed boost. Confirmed hit bumps score by 20; unconfirmed bloom-only
-		// hit bumps by 5 (low-signal — bloom FPR is configured at ~1%).
-		const intelBoost = intelMatch?.confirmed ? 20 : intelMatch ? 5 : 0;
 		if (intelBoost > 0 && intelMatch) {
-			const label = intelMatch.confirmed ? "threat-intel match" : "threat-intel match (unconfirmed)";
+			const label = intelMatch.confirmed ? "threat-intel match"
+				: intelMatch.derived ? "threat-intel match (derived)"
+				: "threat-intel match (unconfirmed)";
 			const reason = `${label} (${intelMatch.feedId}: ${intelMatch.value})`;
 			v = applyBoost(v, intelBoost, reason, settings.thresholds);
+		}
+		// Derived hits in 2+ distinct feeds corroborate each other: floor the
+		// score at the quarantine threshold. Never a triage short-circuit —
+		// the classifier already ran, and learning_mode and the confidence
+		// demote below still apply.
+		if (intelMatch?.derived && intel.derivedFeedCount >= 2 && v.score < settings.thresholds.quarantine) {
+			intelFloorBoost = settings.thresholds.quarantine - v.score;
+			v = applyBoost(
+				v,
+				intelFloorBoost,
+				`threat-intel corroboration (derived match in ${intel.derivedFeedCount} feeds)`,
+				settings.thresholds,
+			);
 		}
 		// Off-hours boost. Small nudge (+10) so it can only tilt borderline verdicts.
 		const offHours = scoreOffHours(settings.business_hours);
@@ -338,11 +359,10 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		);
 		return v;
 	});
-	const intelBoost = intelMatch?.confirmed ? 20 : intelMatch ? 5 : 0;
 	if (intelMatch) {
 		tracer.setContrib(
 			"intel",
-			intelBoost,
+			intelBoost + intelFloorBoost,
 			`${intelMatch.feedId}:${intelMatch.value}`,
 		);
 	}

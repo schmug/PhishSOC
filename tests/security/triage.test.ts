@@ -52,6 +52,18 @@ describe("evaluateTriage — hard block", () => {
 		expect(r.shortcircuit).toBeUndefined();
 	});
 
+	it("does NOT hard-block on a derived intel match", () => {
+		const r = evaluateTriage({
+			...baseInputs,
+			sender: "x@y.com",
+			auth: dmarcFail,
+			reputation: null,
+			intelMatch: { matched: true, feedId: "f", value: "https://phish.example/login", confirmed: false, derived: true },
+			settings: baseSettings,
+		});
+		expect(r.shortcircuit).toBeUndefined();
+	});
+
 	it("hard-blocks a sender that's been flagged on this mailbox", () => {
 		const r = evaluateTriage({
 			...baseInputs,
