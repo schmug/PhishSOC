@@ -45,6 +45,7 @@ import type { FinalVerdict, VerdictThresholds } from "./verdict";
 import type { MailboxSecuritySettings } from "./settings";
 import type { AttachmentLike } from "./attachments";
 import { scoreAttachments } from "./attachments";
+import { authenticatedSender } from "./sender-identity";
 
 export interface IntelMatchInfo {
 	matched: true;
@@ -198,15 +199,24 @@ function evaluateHardAllow(inputs: TriageInputs): TriageShortCircuit | null {
 	// header would trigger hard-allow and skip the whole pipeline on any
 	// deployment that has not configured trustedAuthservIds.
 	if (!inputs.auth.trusted) return null;
+	// CRITICAL INVARIANT: every hard-allow path (sender/domain allowlist,
+	// trusted history) matches only the DMARC-evaluated From identity, and only
+	// when the trusted authserv actually reported which domain it evaluated
+	// (`header.from`). Hard-allow skips the whole pipeline, so it fails closed:
+	// an authserv that omits `header.from`, or a From the parser can't bind to
+	// it, gets fully scanned instead of trusted. See authenticatedSender.
+	if (!inputs.auth.headerFrom) return null;
+	const identity = authenticatedSender(inputs.sender, inputs.auth);
+	if (!identity) return null;
 
-	const senderMatch = inputs.settings.allowlist_senders.includes(inputs.sender);
-	const domain = inputs.sender.split("@")[1] ?? "";
-	const domainMatch = domain.length > 0 &&
-		(inputs.settings.allowlist_domains.includes(domain) ||
-			inputs.settings.allowlist_domains.some((d) => domain.endsWith("." + d)));
+	const senderMatch = inputs.settings.allowlist_senders.includes(identity.address);
+	const domain = identity.domain;
+	const domainMatch =
+		inputs.settings.allowlist_domains.includes(domain) ||
+		inputs.settings.allowlist_domains.some((d) => domain.endsWith("." + d));
 
 	const reasons: string[] = [];
-	if (senderMatch) reasons.push(`sender on allowlist (${inputs.sender})`);
+	if (senderMatch) reasons.push(`sender on allowlist (${identity.address})`);
 	else if (domainMatch) reasons.push(`domain on allowlist (${domain})`);
 	else {
 		// History-based hard-allow: long-standing trusted sender.

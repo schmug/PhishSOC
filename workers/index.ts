@@ -33,6 +33,7 @@ import {
 } from "./lib/new-email-notify";
 import { resolveNewEmailWebhook } from "./lib/new-email-webhook-policy";
 import { parseAuthResults } from "./security/auth";
+import { authenticatedSender } from "./security/sender-identity";
 import { runDeepScan } from "./intel/deep-scan";
 import { isDmarcReport, ingestDmarcReport, isDmarcRuf, ingestDmarcRuf } from "./dmarc/ingest";
 import { dmarcRoutes } from "./routes/dmarc";
@@ -1407,6 +1408,7 @@ async function handleHoneypotInbound(
 	honeypot: HoneypotConfig,
 	parsedEmail: import("postal-mime").Email,
 	stub: { countEmails(): Promise<number> },
+	trustedAuthservIds: readonly string[],
 ): Promise<void> {
 	// Already auto-disabled → stop publishing (storage still bounded by TTL reap).
 	if (honeypot.disabled) return;
@@ -1423,10 +1425,17 @@ async function handleHoneypotInbound(
 	}
 
 	// Never publish a sender on an owned domain — a misdirected internal message
-	// is not threat intel. (A fuller cross-mailbox allowlist-overlap check is a
-	// follow-up; this is the cheap, high-value guard.)
-	const senderDomain = (parsedEmail.from?.address?.split("@")[1] ?? "").toLowerCase();
-	if (senderDomain && (await getOwnedDomains(env)).includes(senderDomain)) return;
+	// is not threat intel. Only the DMARC-evaluated From identity counts as the
+	// sender's domain (see authenticatedSender). (A fuller cross-mailbox
+	// allowlist-overlap check is a follow-up; this is the cheap, high-value guard.)
+	// Only a header.from from a trusted authserv-id may narrow the sender
+	// identity; an untrusted (possibly forged) header.from is discarded so it
+	// can't flip a genuine owned-domain sender from suppressed to published.
+	// Absent a trusted header.from we fall back to the shape-checked sender —
+	// the spoof `"x@owned"@attacker` still fails the shape check and publishes.
+	const auth = parseAuthResults(parsedEmail.headers, { trustedAuthservIds });
+	const identity = authenticatedSender(parsedEmail.from?.address ?? "", auth.trusted ? auth : {});
+	if (identity && (await getOwnedDomains(env)).includes(identity.domain)) return;
 
 	const creds = await loadHubCredentials(
 		env as unknown as Record<string, unknown> & { BUCKET: R2Bucket },
@@ -1801,10 +1810,18 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	// to the hub with elevated trust, and we STOP here: no security pipeline, no
 	// deep-scan, no UI notification, and — critically — no agent/auto-draft, so a
 	// honeypot can never auto-reply and reveal itself.
-	const honeypotCfg = (await resolveMailboxSettings(env, mailboxId).catch(() => null))?.raw?.honeypot;
+	const honeypotSettings = await resolveMailboxSettings(env, mailboxId).catch(() => null);
+	const honeypotCfg = honeypotSettings?.raw?.honeypot;
 	if (isProvisionedHoneypot(honeypotCfg)) {
 		ctx.waitUntil(
-			handleHoneypotInbound(env, mailboxId, honeypotCfg, parsedEmail, stub as unknown as { countEmails(): Promise<number> }).catch(
+			handleHoneypotInbound(
+				env,
+				mailboxId,
+				honeypotCfg,
+				parsedEmail,
+				stub as unknown as { countEmails(): Promise<number> },
+				honeypotSettings?.security.trusted_authserv_ids ?? [],
+			).catch(
 				(e) => console.error(`honeypot inbound handling failed for ${mailboxId}:`, (e as Error).message),
 			),
 		);
