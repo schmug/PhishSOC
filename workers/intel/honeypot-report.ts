@@ -40,15 +40,6 @@ export interface ReportHoneypotInboundOpts {
 	parsedEmail: Email;
 }
 
-/** Parse a URL's hostname; null when it has no parseable host. */
-function hostnameOf(url: string): string | null {
-	try {
-		return new URL(url).hostname;
-	} catch {
-		return null;
-	}
-}
-
 /**
  * Publish a honeypot's inbound IOCs to the hub with elevated trust. Gated on
  * `hubConfig.auto_report` (consent) and a non-empty sender. Best-effort — the
@@ -62,9 +53,9 @@ export async function reportHoneypotInbound(
 	if (!sender) return { posted: false };
 
 	const body = opts.parsedEmail.html ?? opts.parsedEmail.text ?? "";
-	const urls = extractUrls(body)
-		.map((u) => ({ url: u.url, hostname: hostnameOf(u.url) }))
-		.filter((u): u is { url: string; hostname: string } => u.hostname !== null);
+	// `extractUrls` keeps only links with a host, already canonical
+	// (`normalizeHost`), so the hub corroborates one value per host.
+	const urls = extractUrls(body).map((u) => ({ url: u.url, hostname: u.hostname }));
 
 	const event = await buildHoneypotMispEvent({
 		orgUuid: opts.hubConfig.org_uuid,

@@ -151,7 +151,7 @@ export async function gatherSendContext(
 	]);
 
 	const feedHits = (feedMatches ?? []).flatMap((m, i) =>
-		m ? [{ host: urls[i].hostname, feedId: m.feedId, confirmed: m.confirmed }] : [],
+		m ? [{ host: urls[i].hostname, feedId: m.feedId, confirmed: m.confirmed, ...(m.derived ? { derived: true } : {}) }] : [],
 	);
 
 	const llm = await gatherLlmVerdict(env, stub, input, security?.send_risk, rows?.original ?? null);

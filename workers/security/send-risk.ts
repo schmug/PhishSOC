@@ -54,7 +54,7 @@ export interface SendRiskContext {
 	/** Verdict of the message this send replies to or forwards. */
 	thread?: { action?: string; label?: string } | null;
 	/** Threat-intel feed matches for links in the body. */
-	feedHits?: Array<{ host: string; feedId: string; confirmed: boolean }>;
+	feedHits?: Array<{ host: string; feedId: string; confirmed: boolean; derived?: boolean }>;
 	/** `attachment_policy.custom_blocklist_extensions` — treated as executables. */
 	customBlockedExtensions?: string[];
 	/**
@@ -322,6 +322,7 @@ export function classifySend(input: ClassifySendInput): SendRisk {
 	// ── Links ────────────────────────────────────────────────────────────────
 	for (const hit of ctx?.feedHits ?? []) {
 		if (hit.confirmed) raise(2, `Link on threat-intel feed: ${hit.host} (${hit.feedId})`);
+		else if (hit.derived) raise(1, `Link possibly on threat-intel feed: ${hit.host} (${hit.feedId}, derived)`);
 		else raise(1, `Link possibly on threat-intel feed: ${hit.host} (unconfirmed)`);
 	}
 	const homograph = extractUrls(body).find((u) => u.is_homograph);

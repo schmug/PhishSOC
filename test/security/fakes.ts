@@ -9,12 +9,14 @@
  * shape (Cloudflare's generated `Env` is huge and we don't need most of it);
  * individual fake surfaces are strictly typed.
  *
- * The `BLOOM_KV` binding is intentionally omitted so that
- * `checkUrlAgainstFeeds` returns `null` naturally — the test suite runs
- * without any intel-feed state.
+ * The `BLOOM_KV` binding is omitted by default so that `checkUrlAgainstFeeds`
+ * returns `null` naturally — most suites run without any intel-feed state.
+ * Suites that exercise feed matching pass `bloomKv: createFakeFeedKv(...)`.
  */
 
 import type { Env } from "../../workers/types";
+import { parseFeedBody } from "../../workers/intel/feeds";
+import { addToBloom, createBloom, serializeBloom } from "../../workers/intel/bloom";
 import type { SenderReputation } from "../../workers/security/reputation";
 import type { MailboxSecuritySettings } from "../../workers/security/settings";
 
@@ -153,21 +155,35 @@ export interface FakeEnvParts {
 	settings?: Partial<MailboxSecuritySettings>;
 	mailboxId: string;
 	stub: FakeMailboxStub;
+	/** Mailbox-tier `intel` block, e.g. `{ feeds: [{ id, kind, url: "" }] }`. */
+	intel?: unknown;
+	/** Extra R2 objects by key (e.g. `domains/<domain>.json` for the catch-all path). */
+	objects?: Record<string, unknown>;
+	/** Intel-feed KV; see `createFakeFeedKv`. */
+	bloomKv?: KVNamespace;
 }
 
 /**
- * Build a fake R2 bucket that serves the mailbox settings JSON. Only `.get()`
- * is implemented — the security pipeline doesn't call `.put()` or `.list()`.
+ * Build a fake R2 bucket that serves the mailbox settings JSON plus any extra
+ * objects. Only `.get()` is implemented — the security pipeline doesn't call
+ * `.put()` or `.list()`.
  */
 function createFakeBucket(
 	mailboxId: string,
 	settings: Partial<MailboxSecuritySettings>,
+	intel?: unknown,
+	objects: Record<string, unknown> = {},
 ): R2Bucket {
-	const key = `mailboxes/${mailboxId}.json`;
-	const payload = JSON.stringify({ security: settings });
+	const payloads = new Map<string, string>();
+	payloads.set(
+		`mailboxes/${mailboxId}.json`,
+		JSON.stringify(intel === undefined ? { security: settings } : { security: settings, intel }),
+	);
+	for (const [key, value] of Object.entries(objects)) payloads.set(key, JSON.stringify(value));
 	return {
 		async get(requested: string) {
-			if (requested !== key) return null;
+			const payload = payloads.get(requested);
+			if (payload === undefined) return null;
 			return {
 				async json() {
 					return JSON.parse(payload);
@@ -178,6 +194,49 @@ function createFakeBucket(
 			};
 		},
 	} as unknown as R2Bucket;
+}
+
+export interface FakeFeedSeed {
+	id: string;
+	kind: "domain" | "url";
+	/** Feed body lines, stored through the real `parseFeedBody` ingest path. */
+	lines?: string[];
+	/** Values stored verbatim, skipping ingest (blobs written by an older build). */
+	rawValues?: string[];
+	/** Values added to the bloom but not the exact blob (bloom-only hits). */
+	bloomOnly?: string[];
+}
+
+/**
+ * In-memory `BLOOM_KV` holding `intel:<id>:bloom` (serialized bloom) and
+ * `intel:<id>:exact-blob` (JSON array) per feed, built the same way
+ * `refreshFeed` builds them. Blooms are sized for 5000 entries: a bloom sized
+ * for 2 entries gives false positives on unrelated probe strings.
+ */
+export function createFakeFeedKv(feeds: FakeFeedSeed[]): KVNamespace {
+	const store = new Map<string, ArrayBuffer | string>();
+	for (const feed of feeds) {
+		const values = [
+			...parseFeedBody((feed.lines ?? []).join("\n"), feed.kind),
+			...(feed.rawValues ?? []),
+		];
+		const bloom = createBloom(5000);
+		for (const v of [...values, ...(feed.bloomOnly ?? [])]) addToBloom(bloom, v);
+		const bytes = serializeBloom(bloom);
+		store.set(
+			`intel:${feed.id}:bloom`,
+			bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+		);
+		store.set(`intel:${feed.id}:exact-blob`, JSON.stringify([...new Set(values)]));
+	}
+	return {
+		async get(key: string, type?: "text" | "arrayBuffer") {
+			const value = store.get(key);
+			if (value === undefined) return null;
+			if (type === "arrayBuffer") return value instanceof ArrayBuffer ? value : null;
+			return typeof value === "string" ? value : null;
+		},
+	} as unknown as KVNamespace;
 }
 
 /**
@@ -206,9 +265,15 @@ export function makeFakeEnv(parts: FakeEnvParts): Env {
 
 	return {
 		AI: ai,
-		BUCKET: createFakeBucket(parts.mailboxId, parts.settings ?? { enabled: true }),
+		BUCKET: createFakeBucket(
+			parts.mailboxId,
+			parts.settings ?? { enabled: true },
+			parts.intel,
+			parts.objects,
+		),
 		MAILBOX: mailboxNs,
-		// BLOOM_KV intentionally undefined — pipeline skips feed checks.
+		// BLOOM_KV undefined unless a suite seeds feeds — pipeline skips feed checks.
+		...(parts.bloomKv ? { BLOOM_KV: parts.bloomKv } : {}),
 		POLICY_AUD: "",
 		TEAM_DOMAIN: "",
 	} as unknown as Env;

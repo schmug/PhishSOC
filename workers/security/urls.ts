@@ -11,6 +11,8 @@
  * `workers/intel/feeds.ts` at the pipeline integration point.
  */
 
+import { normalizeHost } from "../lib/url-canonical";
+
 /** Domains whose typos are extremely high-value for phishers. */
 const HIGH_VALUE_DOMAINS = [
 	"google.com", "gmail.com", "googledrive.com", "googleusercontent.com",
@@ -52,10 +54,10 @@ function stripTags(html: string): string {
 	return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/** Canonical host of a link (see `normalizeHost`), or null when it has none. */
 function safeHostname(url: string): string | null {
 	try {
-		const u = new URL(url);
-		return u.hostname.toLowerCase();
+		return normalizeHost(new URL(url).hostname);
 	} catch {
 		return null;
 	}
@@ -113,7 +115,8 @@ export function registrableDomain(hostname: string): string {
  * high-value domains are flagged as homographs. Legitimate mail practically
  * never uses IDN hostnames; attackers use Cyrillic/Greek lookalikes.
  */
-export function isHomographic(hostname: string): boolean {
+export function isHomographic(host: string): boolean {
+	const hostname = normalizeHost(host) ?? host;
 	for (let i = 0; i < hostname.length; i++) {
 		if (hostname.charCodeAt(i) > 127) return true;
 	}

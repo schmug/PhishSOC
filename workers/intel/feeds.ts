@@ -17,8 +17,11 @@
  *
  * Lookup flow:
  *   - `checkUrlAgainstFeeds(env, mailboxId, url)` — called by the security
- *     pipeline. Returns `{ matched: true, feed: string }` on confirmed hit,
- *     `null` otherwise.
+ *     pipeline. Returns a `FeedMatch` (exact, derived or bloom-only tier; see
+ *     `matchUrlAgainstFeeds`), `null` otherwise.
+ *
+ * Ingest and lookup compare canonical forms from `../lib/url-canonical`:
+ * `normalizeHost` for domain-kind feeds, `canonicalFeedUrl` for url-kind.
  */
 
 import type { Env } from "../types";
@@ -35,6 +38,7 @@ import { getMailboxStub, listMailboxes } from "../lib/email-helpers";
 import { hostAllowed } from "../lib/host-allowlist";
 import { resolveMailboxSettings } from "../lib/mailbox-settings";
 import { getDomainSettings } from "../lib/domain-settings";
+import { canonicalFeedUrl, normalizeHost } from "../lib/url-canonical";
 
 const EXACT_KEY_CAP = 2000; // per-feed cap — exact blob stores at most this many entries
 
@@ -184,14 +188,18 @@ export function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
 		const line = raw.trim();
 		if (!line || line.startsWith("#")) continue;
 		if (kind === "domain") {
-			out.push(normalizeDomain(line));
+			const host = normalizeDomain(line);
+			if (host) out.push(host);
 		} else {
 			// `url` feeds (URLhaus, OpenPhish) list specific malicious URLs.
 			// Do NOT also derive the bare host: that would collapse e.g.
 			// `https://github.com/evil/x` to `github.com` and later flag every
 			// legitimate github.com link as a confirmed hit → hard_block. Match
 			// the full URL only; host-level blocking is the job of `domain` feeds.
-			out.push(line);
+			// Stored in lossless canonical form; lookup canonicalizes the link
+			// the same way. Non-http(s) and unparseable lines are skipped.
+			const url = canonicalFeedUrl(line);
+			if (url) out.push(url);
 		}
 	}
 	return out;
@@ -236,16 +244,20 @@ export function parseCidrFeedBody(body: string, feedId: string): Ipv4Cidr[] {
 	return out;
 }
 
-function normalizeDomain(s: string): string {
-	return s
-		.toLowerCase()
-		.replace(/^https?:\/\//, "")
-		.split(/[/?#]/)[0];
+/** Host of a domain-feed line (bare host, or a URL whose host is taken). */
+function normalizeDomain(s: string): string | null {
+	return normalizeHost(
+		s
+			.toLowerCase()
+			.replace(/^https?:\/\//, "")
+			.split(/[/?#]/)[0],
+	);
 }
 
+/** Canonical host of a URL (see `normalizeHost`), or null when it has none. */
 function safeHostname(url: string): string | null {
 	try {
-		return new URL(url).hostname.toLowerCase();
+		return normalizeHost(new URL(url).hostname);
 	} catch {
 		return null;
 	}
@@ -424,14 +436,34 @@ async function refreshFeed(
 export interface FeedMatch {
 	matched: true;
 	feedId: string;
+	/** The feed entry that matched (the raw link for a bloom-only hit). */
 	value: string;
+	/** Exact tier: the exact blob holds the canonical (or raw) link. Drives hard_block. */
 	confirmed: boolean;
+	/**
+	 * Derived tier: the link equals `value` only after one lossy step
+	 * (`derivation`). Always `confirmed: false`, so triage never
+	 * short-circuits on it; confirmed against the exact blob, never bloom-only.
+	 */
+	derived?: true;
+	derivation?: Derivation;
+	/** On a derived result: every distinct feed with a derived hit for this link. */
+	derivedFeedIds?: string[];
 }
 
 /**
- * Check a URL against all configured feeds: the bare hostname for `domain`
- * feeds, the full URL for `url` feeds. Returns the first confirmed match, or
- * the first bloom-only hit if no exact confirmations are available.
+ * Lossy steps that turn a link into a derived-tier candidate:
+ *   - `fragment`: the link's non-empty fragment is removed.
+ *   - `query-superset`: the entry's query params are a sub-multiset of the
+ *     link's (an entry with no query matches any link query); the link's
+ *     fragment may also be removed.
+ */
+export type Derivation = "fragment" | "query-superset";
+
+/**
+ * Check a URL against all configured feeds: the canonical host for `domain`
+ * feeds, the canonical full URL for `url` feeds. Returns the best match by
+ * tier (exact > derived > bloom-only); see `matchUrlAgainstFeeds`.
  *
  * `url` feeds are matched on the full URL only — never on the apex host — so a
  * URLhaus/OpenPhish entry hosted on a shared host (github.com, drive.google.com,
@@ -490,10 +522,107 @@ export async function checkUrlAgainstFeedsForDomain(
 }
 
 /**
- * Shared bloom-then-confirm matching loop for `url`/`domain` feeds. Returns
- * the first confirmed (exact-blob) match, or the first bloom-only hit if no
- * exact confirmation is available. CIDR feeds are skipped — they are matched
- * by `checkIpAgainstFeeds`. Assumes `env.BLOOM_KV` is present (callers guard).
+ * Link query tokens above which the derived-tier bloom probes are skipped and
+ * the exact blob is scanned directly. Bounds per-link hashing; padding a link
+ * with extra params cannot push a listed param past the probes.
+ */
+const DERIVED_PROBE_TOKEN_CAP = 32;
+
+/** A canonical link split for derived-tier matching. */
+interface LinkParts {
+	/** Origin + path (`https://host/path`). */
+	base: string;
+	/** Query without the `?`; "" when none. */
+	query: string;
+	/** `query` split on `&`, empty tokens dropped. */
+	tokens: string[];
+	/** Fragment with the `#`; "" when none. */
+	hash: string;
+}
+
+function linkParts(canonical: string): LinkParts {
+	const u = new URL(canonical);
+	const query = u.search.slice(1);
+	return {
+		base: `${u.origin}${u.pathname}`,
+		query,
+		tokens: query.split("&").filter(Boolean),
+		hash: u.hash,
+	};
+}
+
+/**
+ * Bloom prefilter strings for the derived tier: the link without its
+ * fragment, and the link (with and without its fragment) carrying no query
+ * or a single one of its query params. A bloom hit only triggers the
+ * exact-blob scan in `findDerived`; it never counts as a match on its own.
+ * Entries with 2+ params are found only when some probe loads the blob.
+ */
+function derivedProbes(p: LinkParts): string[] {
+	const out = new Set<string>();
+	for (const hash of p.hash ? [p.hash, ""] : [""]) {
+		if (hash !== p.hash) out.add(`${p.base}${p.query ? `?${p.query}` : ""}${hash}`);
+		if (p.tokens.length === 0) continue;
+		out.add(`${p.base}${hash}`);
+		for (const token of p.tokens) out.add(`${p.base}?${token}${hash}`);
+	}
+	return [...out];
+}
+
+/**
+ * Scan an exact blob for an entry the link equals after one lossy step.
+ * Entries are canonical (`canonicalFeedUrl`), so entry and link share `base`
+ * byte for byte. An entry's fragment must equal the link's: removing a
+ * fragment from the ENTRY would widen it to every fragment of that page.
+ */
+function findDerived(
+	exactSet: Set<string>,
+	p: LinkParts,
+): { entry: string; derivation: Derivation } | null {
+	const linkCounts = new Map<string, number>();
+	for (const t of p.tokens) linkCounts.set(t, (linkCounts.get(t) ?? 0) + 1);
+	for (const entry of exactSet) {
+		if (!entry.startsWith(p.base)) continue;
+		const rest = entry.slice(p.base.length);
+		if (rest !== "" && rest[0] !== "?" && rest[0] !== "#") continue;
+		const hashAt = rest.indexOf("#");
+		const entryHash = hashAt === -1 ? "" : rest.slice(hashAt);
+		if (entryHash !== "" && entryHash !== p.hash) continue;
+		const entryQuery = (hashAt === -1 ? rest : rest.slice(0, hashAt)).replace(/^\?/, "");
+		if (entryQuery === p.query) {
+			// Same query and same fragment is the exact tier, not derived.
+			if (entryHash === p.hash) continue;
+			return { entry, derivation: "fragment" };
+		}
+		const entryCounts = new Map<string, number>();
+		for (const t of entryQuery.split("&").filter(Boolean)) {
+			entryCounts.set(t, (entryCounts.get(t) ?? 0) + 1);
+		}
+		let subset = true;
+		for (const [t, n] of entryCounts) {
+			if ((linkCounts.get(t) ?? 0) < n) {
+				subset = false;
+				break;
+			}
+		}
+		if (subset) return { entry, derivation: "query-superset" };
+	}
+	return null;
+}
+
+/**
+ * Shared matching loop for `url`/`domain` feeds. Scans every feed and returns
+ * the best tier, independent of feed order:
+ *   1. Exact (`confirmed: true`): the exact blob holds the candidate. Domain
+ *      feeds: the canonical host. Url feeds: the lossless canonical link, then
+ *      the raw link, so blobs written before canonical ingest (TTL
+ *      `max(4 × refreshHours, 24h)`) keep confirming. Returned immediately.
+ *   2. Derived (`derived: true`, url feeds only): see `findDerived`. One per
+ *      feed; `derivedFeedIds` lists every feed with one.
+ *   3. Bloom-only (`confirmed: false`): an exact candidate the bloom holds
+ *      but the exact blob does not (false positive or past `EXACT_KEY_CAP`).
+ * CIDR feeds are skipped — they are matched by `checkIpAgainstFeeds`.
+ * Assumes `env.BLOOM_KV` is present (callers guard).
  */
 async function matchUrlAgainstFeeds(
 	env: Env,
@@ -501,7 +630,13 @@ async function matchUrlAgainstFeeds(
 	fullUrl: string,
 	host: string,
 ): Promise<FeedMatch | null> {
+	const canonical = canonicalFeedUrl(fullUrl);
+	const urlCandidates = [...new Set([canonical ?? fullUrl, fullUrl])];
+	const parts = canonical ? linkParts(canonical) : null;
+	const probes = parts && parts.tokens.length <= DERIVED_PROBE_TOKEN_CAP ? derivedProbes(parts) : null;
 	let bloomOnly: FeedMatch | null = null;
+	let derived: FeedMatch | null = null;
+	const derivedFeedIds = new Set<string>();
 
 	for (const feed of feeds) {
 		// URL/domain-feed lookup only — CIDR feeds use `checkIpAgainstFeeds`.
@@ -512,11 +647,12 @@ async function matchUrlAgainstFeeds(
 		if (!serialized) continue;
 		const filter = deserializeBloom(serialized);
 		if (!filter) continue;
-		// `domain` feeds match the bare host; `url` feeds match the full URL
-		// only. parseFeedBody no longer stores apex hosts for url feeds, so
-		// matching `host` here would never confirm and would only risk a
-		// shared-host false positive (e.g. github.com).
-		const candidates = feed.kind === "domain" ? [host] : [fullUrl];
+		// `domain` feeds match the exact canonical host (never a parent
+		// domain); `url` feeds match the full URL only. parseFeedBody no
+		// longer stores apex hosts for url feeds, so matching `host` here
+		// would never confirm and would only risk a shared-host false
+		// positive (e.g. github.com).
+		const candidates = feed.kind === "domain" ? [host] : urlCandidates;
 		// The exact blob is ~200 KB and this runs per URL on the security
 		// pipeline's hot path — fetch it lazily on the first bloom hit, at
 		// most once per feed.
@@ -536,7 +672,33 @@ async function matchUrlAgainstFeeds(
 					confirmed: false,
 				};
 		}
+
+		// Derived tier. Only the exact blob can confirm it: a probe's bloom
+		// hit merely decides whether the blob is worth loading.
+		if (feed.kind !== "url" || !parts || derivedFeedIds.has(feed.id)) continue;
+		if (exactSet === undefined) {
+			if (probes && !probes.some((p) => checkBloom(filter, p))) continue;
+			exactSet = await loadExactSet(env, feed.id);
+		}
+		if (!exactSet) continue;
+		const hit = findDerived(exactSet, parts);
+		if (!hit) continue;
+		// Shadow measurement of the derived tier's volume and false-positive
+		// rate in Workers logs. The link itself is not logged.
+		console.info(
+			`intel derived match: feedId=${feed.id} entry=${hit.entry} derivation=${hit.derivation}`,
+		);
+		derivedFeedIds.add(feed.id);
+		derived ??= {
+			matched: true,
+			feedId: feed.id,
+			value: hit.entry,
+			confirmed: false,
+			derived: true,
+			derivation: hit.derivation,
+		};
 	}
+	if (derived) return { ...derived, derivedFeedIds: [...derivedFeedIds] };
 	return bloomOnly;
 }
 

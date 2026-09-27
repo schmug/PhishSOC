@@ -97,6 +97,22 @@ describe("reportHoneypotInbound", () => {
 		expect(body.Event.Tag.map((t) => t.name)).toContain("honeypot");
 	});
 
+	it("publishes link hosts in canonical form", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse({ Event: { uuid: "posted-uuid" } }));
+
+		await reportHoneypotInbound({
+			hubConfig: hub,
+			apiKey: "live-key",
+			mailboxId: "hp-abc@acme.example",
+			parsedEmail: makeEmail({ text: "Click http://Phish.Example./login now" }),
+		});
+
+		const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		const body = JSON.parse(init.body as string) as { Event: { Attribute: { type: string; value: string }[] } };
+		const domains = body.Event.Attribute.filter((a) => a.type === "domain").map((a) => a.value);
+		expect(domains).toEqual(["phish.example"]);
+	});
+
 	it("does not post when auto_report is off", async () => {
 		const result = await reportHoneypotInbound({
 			hubConfig: { ...hub, auto_report: false },
