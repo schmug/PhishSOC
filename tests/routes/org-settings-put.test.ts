@@ -89,3 +89,50 @@ describe("PUT /api/v1/org/settings — preserve server-managed keys", () => {
 		expect(stored.intel?.feeds).toEqual(feeds);
 	});
 });
+
+describe("PUT /api/v1/org/settings — classifierModel allowlist (#745)", () => {
+	async function putClassifier(classifierModel: string) {
+		const bucket = makeR2();
+		const res = await app.request(
+			"/api/v1/org/settings",
+			{
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ settings: { classifierModel } }),
+			},
+			{ BUCKET: bucket, DOMAINS: "seed.example" },
+		);
+		return { res, bucket };
+	}
+
+	it("rejects an unknown model with 400", async () => {
+		const { res, bucket } = await putClassifier("not-a-model");
+		expect(res.status).toBe(400);
+		expect(bucket.read("org/settings.json")).toBeUndefined();
+	});
+
+	it("accepts typesafe/jev", async () => {
+		const { res, bucket } = await putClassifier("typesafe/jev");
+		expect(res.status).toBe(200);
+		expect(JSON.parse(bucket.read("org/settings.json")!).classifierModel).toBe("typesafe/jev");
+	});
+
+	it("accepts the non-default SECURITY_MODELS entry", async () => {
+		const { res, bucket } = await putClassifier("@cf/meta/llama-4-scout-17b-16e-instruct");
+		expect(res.status).toBe(200);
+		expect(JSON.parse(bucket.read("org/settings.json")!).classifierModel).toBe(
+			"@cf/meta/llama-4-scout-17b-16e-instruct",
+		);
+	});
+
+	it("accepts the default SECURITY_MODELS entry", async () => {
+		const { res } = await putClassifier("@cf/meta/llama-3.1-8b-instruct-fast");
+		expect(res.status).toBe(200);
+	});
+
+	it("treats empty string as unset", async () => {
+		const { res, bucket } = await putClassifier("");
+		expect(res.status).toBe(200);
+		expect(JSON.parse(bucket.read("org/settings.json")!).classifierModel).toBeUndefined();
+	});
+});

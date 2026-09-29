@@ -17,6 +17,7 @@ import {
 import Shell from "~/components/phishsoc/Shell";
 import type { HubConfigSettings, SecuritySettings } from "~/types";
 import {
+	CLASSIFIER_MODELS,
 	DEFAULT_CLASSIFIER_MODEL,
 	DEFAULT_DRAFT_VERIFIER_MODEL,
 	DEFAULT_INJECTION_SCANNER_MODEL,
@@ -125,7 +126,6 @@ export default function OrgSettingsRoute() {
 		const advancedModelInputs: Array<{ label: string; value: string }> = [
 			{ label: "Injection scanner", value: injectionScannerModel.trim() },
 			{ label: "Draft verifier", value: draftVerifierModel.trim() },
-			{ label: "Classifier", value: classifierModel.trim() },
 		];
 		for (const m of advancedModelInputs) {
 			if (m.value && !m.value.startsWith("@cf/")) {
@@ -359,14 +359,20 @@ export default function OrgSettingsRoute() {
 							<label htmlFor="org-classifier-model" className="block text-xs text-ink mb-1">
 								LLM classifier
 							</label>
-							<input
+							<select
 								id="org-classifier-model"
-								type="text"
-								placeholder={DEFAULT_CLASSIFIER_MODEL}
 								value={classifierModel}
 								onChange={(e) => setClassifierModel(e.target.value)}
-								className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
-							/>
+								className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+							>
+								<option value="">Default ({DEFAULT_CLASSIFIER_MODEL})</option>
+								{CLASSIFIER_MODELS.map((m) => (
+									<option key={m} value={m}>{m}</option>
+								))}
+								{classifierModel && !(CLASSIFIER_MODELS as readonly string[]).includes(classifierModel) && (
+									<option value={classifierModel}>{classifierModel} (unsupported)</option>
+								)}
+							</select>
 						</div>
 					</div>
 				</div>
