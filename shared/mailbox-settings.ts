@@ -474,3 +474,11 @@ export const SECURITY_MODELS = [
   "@cf/meta/llama-3.1-8b-instruct-fast",
   "@cf/meta/llama-4-scout-17b-16e-instruct",
 ] as const;
+
+/**
+ * Values accepted for the org-tier `classifierModel`: the vetted
+ * `SECURITY_MODELS` plus the opt-in TypeSafe Jev backend (see
+ * `workers/security/classification.ts`). Single source for the org PUT
+ * schema and the org settings dropdown.
+ */
+export const CLASSIFIER_MODELS = [...SECURITY_MODELS, "typesafe/jev"] as const;
