@@ -108,6 +108,23 @@ describe("runSecurityPipeline — fixture verdicts", () => {
 		expect(result.verdict?.signals.join(" ")).toMatch(/link shortener \(bit\.ly\)/);
 	});
 
+	it("shortener: insertUrls rows carry hostname equal to ExtractedUrl.hostname (#740)", async () => {
+		__setClassifier(async () => stub({ label: "safe", confidence: 0.9 }));
+		const { stub: mailbox, urls } = createFakeMailboxStub();
+		const env = makeFakeEnv({ mailboxId: MAILBOX, stub: mailbox, settings: settings() });
+		const parsed = await loadFixture("shortener.eml");
+		await runSecurityPipeline({
+			env, mailboxId: MAILBOX, messageId: "m-shortener-hostname", targetFolder: "inbox", parsedEmail: parsed,
+		});
+		const rows = urls.get("m-shortener-hostname") ?? [];
+		expect(rows.length).toBeGreaterThan(0);
+		for (const row of rows) {
+			expect(typeof row.hostname).toBe("string");
+			expect(row.hostname).not.toBe("");
+		}
+		expect(rows.some((r) => r.hostname === "bit.ly")).toBe(true);
+	});
+
 	it("first-time-sender: 'first-time sender' signal recorded", async () => {
 		// Current scoring only adds +5 for first-time senders, which sits below
 		// the default tag threshold (30). We assert on the signal rather than

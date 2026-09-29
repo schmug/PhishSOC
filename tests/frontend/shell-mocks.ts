@@ -69,18 +69,21 @@ export function shellMailboxesMock(
 
 export interface ShellDashboardMockOverrides {
 	useDashboardSummary?: () => QueryStub<unknown>;
+	useLinkDomains?: () => QueryStub<unknown>;
 	[key: string]: unknown;
 }
 
 /**
  * Factory for `~/queries/dashboard`. Defaults: undefined summary so the
- * pipeline pill renders the "No data" muted state.
+ * pipeline pill renders the "No data" muted state; undefined link-domains
+ * data so the "Link domains" card (#740) renders its empty state.
  */
 export function shellDashboardMock(
 	overrides: ShellDashboardMockOverrides = {},
 ): Record<string, unknown> {
 	return {
 		useDashboardSummary: () => ({ data: undefined }),
+		useLinkDomains: () => ({ data: undefined }),
 		...overrides,
 	};
 }
