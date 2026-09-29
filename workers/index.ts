@@ -18,7 +18,7 @@ import {
 	preserveOwnedMailboxFields,
 } from "./lib/mailbox-settings";
 import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, mergeOrgSettingsPut } from "./lib/org-settings";
-import { OrgSettings, OrgSettingsWrite } from "../shared/org-settings";
+import { OrgSettingsWrite } from "../shared/org-settings";
 import { getDomainSettings, putDomainSettings, domainFromMailboxId } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings, NewEmailWebhookSettings, SidecarSettings } from "../shared/mailbox-settings";
