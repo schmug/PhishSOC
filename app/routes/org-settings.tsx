@@ -102,7 +102,13 @@ export default function OrgSettingsRoute() {
 
 		setInjectionScannerModel(s.injectionScannerModel ?? "");
 		setDraftVerifierModel(s.draftVerifierModel ?? "");
-		setClassifierModel(s.classifierModel ?? "");
+		// An unsupported stored value is already resolved as the default; show
+		// "Default" so saving doesn't resubmit it and get rejected by the PUT.
+		setClassifierModel(
+			(CLASSIFIER_MODELS as readonly string[]).includes(s.classifierModel ?? "")
+				? (s.classifierModel as string)
+				: "",
+		);
 		setArcSealerDomain(s.gateway?.arcSealerDomain ?? "");
 		setArcSelector(s.gateway?.arcSelector ?? "");
 		// Absent key is the meaningful "inherit" state — load it through as-is.
@@ -369,9 +375,6 @@ export default function OrgSettingsRoute() {
 								{CLASSIFIER_MODELS.map((m) => (
 									<option key={m} value={m}>{m}</option>
 								))}
-								{classifierModel && !(CLASSIFIER_MODELS as readonly string[]).includes(classifierModel) && (
-									<option value={classifierModel}>{classifierModel} (unsupported)</option>
-								)}
 							</select>
 						</div>
 					</div>
