@@ -400,7 +400,7 @@ export async function toolMoveEmail(
 	if (success) {
 		return { status: "moved", emailId, folder: folderId };
 	}
-	return { error: "Failed to move email" };
+	return { error: "Email or folder not found" };
 }
 
 // ── discard_draft ──────────────────────────────────────────────────

@@ -670,13 +670,14 @@ export class MailboxDO extends DurableObject<Env> {
 
 		if (!folder) return false;
 
-		this.db
+		const moved = this.db
 			.update(schema.emails)
 			.set({ folder_id: folderId })
 			.where(eq(schema.emails.id, id))
-			.run();
+			.returning({ id: schema.emails.id })
+			.all();
 
-		return true;
+		return moved.length > 0;
 	}
 
 	// ── Sender blocklist (spec 2026-09-27-sender-blocklist) ─────────────
