@@ -670,13 +670,14 @@ export class MailboxDO extends DurableObject<Env> {
 
 		if (!folder) return false;
 
-		this.db
+		const moved = this.db
 			.update(schema.emails)
 			.set({ folder_id: folderId })
 			.where(eq(schema.emails.id, id))
-			.run();
+			.returning({ id: schema.emails.id })
+			.all();
 
-		return true;
+		return moved.length > 0;
 	}
 
 	// ── Sender blocklist (spec 2026-09-27-sender-blocklist) ─────────────
@@ -894,6 +895,9 @@ export class MailboxDO extends DurableObject<Env> {
 
 		if (!normalized) return null;
 
+		// `date` is stored as ISO-8601, so compare against an ISO cutoff —
+		// SQLite's datetime() format would match the whole boundary day.
+		const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 		const result = this.ctx.storage.sql.exec(
 			`SELECT thread_id, subject,
 			        GROUP_CONCAT(DISTINCT LOWER(sender)) as senders,
@@ -901,10 +905,11 @@ export class MailboxDO extends DurableObject<Env> {
 			 FROM emails
 			 WHERE thread_id IS NOT NULL
 			   AND thread_id != id
-			   AND date >= datetime('now', '-7 days')
+			   AND date >= ?
 			 GROUP BY thread_id
 			 ORDER BY MAX(date) DESC
 			 LIMIT 50`,
+			cutoff,
 		);
 
 		const normalizedSender = senderAddress?.toLowerCase().trim();
