@@ -29,6 +29,7 @@ import {
 import { verifyDraft } from "./ai";
 import { resolveMailboxSettings } from "./mailbox-settings";
 import { sendEmail } from "../email-sender";
+import { storeAttachments } from "./attachments";
 import { enforceSendRiskConfirmation, sendRiskRecord } from "./send-risk-gate";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
@@ -643,16 +644,13 @@ export async function toolSendEmail(
 		return { error: `Failed to send email: ${(e as Error).message}` };
 	}
 
-	const sentAttachments = (params.attachments ?? []).map((att) => ({
-		id: crypto.randomUUID(),
-		email_id: messageId,
-		filename: att.filename,
-		mimetype: att.type,
-		// `content` is base64; decoded byte size = ceil(len * 3/4) − padding.
-		// Good-enough estimate without materialising the buffer.
-		size: Math.max(0, Math.floor(att.content.length * 3 / 4) - (att.content.match(/=+$/)?.[0].length ?? 0)),
-		disposition: att.disposition ?? "attachment",
-	}));
+	// Persist blobs to R2 alongside the rows so the Sent copy's attachments
+	// are downloadable — same path as the /send-email route.
+	const sentAttachments = await storeAttachments(
+		env.BUCKET,
+		messageId,
+		params.attachments?.map((att) => ({ ...att, disposition: att.disposition ?? "attachment" })),
+	);
 
 	const toStrSend = Array.isArray(params.to) ? params.to.join(", ") : params.to;
 	await stub.createEmail(
