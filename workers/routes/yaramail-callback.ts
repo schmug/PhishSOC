@@ -62,9 +62,13 @@ yaramailCallbackRoute.post("/", async (c) => {
 		return c.json({ error: "invalid signature" }, 401);
 	}
 
-	const parseResult = YaramailCallbackBody.safeParse(
-		JSON.parse(rawBody === "" ? "{}" : rawBody),
-	);
+	let json: unknown;
+	try {
+		json = JSON.parse(rawBody === "" ? "{}" : rawBody);
+	} catch {
+		return c.json({ error: "invalid request body" }, 400);
+	}
+	const parseResult = YaramailCallbackBody.safeParse(json);
 	if (!parseResult.success) {
 		return c.json({ error: "invalid request body" }, 400);
 	}
