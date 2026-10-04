@@ -38,8 +38,9 @@ From the repo root.
    CF_ACCOUNT_ID=... CF_API_TOKEN=$(npx wrangler auth token | tail -1) \
      node scripts/classifier-eval/data/harness.mjs llama8b jev
    ```
-   Variants are `llama8b`, `llama8b-v2`, `llama8b-v3`, `scout`, `scout-v3`, `gptoss20b` and `jev`; they are defined in `harness.ts`. Existing results are skipped unless `FORCE=1`. Set `CASES=...` to run a subset, for example `cases_synthetic.jsonl`.
+   Variants are `llama8b`, `llama8b-v2`, `llama8b-v3`, `scout`, `scout-v3`, `gptoss20b`, `jev`, `clef` and `clef-flash`; they are defined in `harness.ts`. Existing results are skipped unless `FORCE=1`. Set `CASES=...` to run a subset, for example `cases_synthetic.jsonl`.
    - `jev` (`typesafe/jev`) is a third-party model: email content goes to TypeSafe. It needs AI Gateway Unified Billing credits and returns 402 without them, in which case the production fallback to llama answers.
+   - `clef` / `clef-flash` (`@cf/cloudflare/clef*`) are first-party Workers AI decision models on the same System One API as Jev, asked the same Jev question. No gateway or credits needed.
 5. **Summarize.**
    ```bash
    python3 scripts/classifier-eval/analyze.py
@@ -61,3 +62,4 @@ From the repo root.
   | llama8b-v3 | 9 | 16/16 | 4/5 | 0.073 |
   | scout-v3 | 4 | 16/16 | 5/5 | 0.386 |
   | jev | 0 | 16/16 | 5/5 | 0.060 |
+- **Synthetic set, 2026-10-04** (16 attacks + 5 controls, same Jev question for all three; labels identical across two runs): jev 16/16, 5/5, $0.028/1k; clef 16/16, 4/5 (`ctl-list-dmarc-fail` → suspicious), $0.108/1k; clef-flash 16/16, 5/5, $0.041/1k. Clef tokenizes the same input to about 450 tokens vs Jev's 665. Real-mail rows for Clef are not yet run.
