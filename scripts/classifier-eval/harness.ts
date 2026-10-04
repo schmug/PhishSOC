@@ -32,6 +32,9 @@ const PRICES: Record<string, [number, number]> = {
 	"@cf/meta/llama-4-scout-17b-16e-instruct": [0.27, 0.85],
 	"@cf/openai/gpt-oss-20b": [0.2, 0.3],
 	"typesafe/jev": [0.042, 0],
+	// Input-only pricing. Workers AI pricing page, 2026-10-04.
+	"@cf/cloudflare/clef": [0.24, 0],
+	"@cf/cloudflare/clef-flash": [0.09, 0],
 };
 
 const prompt = (f: string) => readFileSync(join(ROOT, "prompts", f), "utf8");
@@ -44,6 +47,8 @@ const VARIANTS: Record<string, { model: string; systemPrompt?: () => string }> =
 	"scout-v3": { model: "@cf/meta/llama-4-scout-17b-16e-instruct", systemPrompt: () => prompt("llama-v3-strict.txt") },
 	gptoss20b: { model: "@cf/openai/gpt-oss-20b" },
 	jev: { model: "typesafe/jev" },
+	clef: { model: "@cf/cloudflare/clef" },
+	"clef-flash": { model: "@cf/cloudflare/clef-flash" },
 };
 
 type Case = {

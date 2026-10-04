@@ -71,6 +71,6 @@ for v in variants:
         "usd_per_1k": f"{1000 * st.mean(usd):.3f}" if usd else "-",
         "p50_ms": lat[len(lat) // 2] if lat else "-",
         "p95_ms": lat[int(len(lat) * 0.95)] if lat else "-",
-        "fallbacks": sum(bool(r.get("fallback")) or r.get("reasoning", "").startswith("jev fallback") for r in R.values()),
+        "fallbacks": sum(bool(r.get("fallback")) or r.get("reasoning", "").startswith(("jev fallback", "clef fallback")) for r in R.values()),
     }
     print("| " + " | ".join(str(row[k]) for k in cols) + " |")
