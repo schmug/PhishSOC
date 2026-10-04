@@ -8,7 +8,7 @@
 //     --format=esm --outfile=scripts/classifier-eval/data/harness.mjs
 //   CF_ACCOUNT_ID=... CF_API_TOKEN=$(npx wrangler auth token | tail -1) \
 //     node scripts/classifier-eval/data/harness.mjs llama8b jev
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyEmail, scoreClassification } from "../../workers/security/classification";
@@ -139,11 +139,20 @@ mkdirSync(OUT, { recursive: true });
 for (const name of names) {
 	const { model, systemPrompt } = VARIANTS[name];
 	const out = join(OUT, `${name}.jsonl`);
-	if (existsSync(out) && !process.env.FORCE) {
+	// Claim the output file up front with an exclusive create, so the
+	// skip-if-exists check and the final write cannot race.
+	let fd: number;
+	try {
+		fd = openSync(out, process.env.FORCE ? "w" : "wx");
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
 		console.log(`skip ${name}: ${out} exists (FORCE=1 to overwrite)`);
 		continue;
 	}
 	const lines: string[] = [];
+	// An aborted run (budget, API error) must not leave an empty file that later runs would skip.
+	let done = false;
+	process.once("exit", () => done || rmSync(out, { force: true }));
 	await pool(cases, CONCURRENCY, async (c) => {
 		const rec: Rec = { models: [] };
 		const r = await classifyEmail(makeAi(rec, systemPrompt?.()), c, { model, skipOnTimeout: true });
@@ -154,7 +163,9 @@ for (const name of names) {
 			fallback: rec.models.length > 1, ...rec,
 		}));
 	});
-	writeFileSync(out, lines.join("\n") + "\n");
+	writeFileSync(fd, lines.join("\n") + "\n");
+	closeSync(fd);
+	done = true;
 	console.log(`${name}: ${lines.length} cases → ${out} (running spend $${spent.toFixed(4)})`);
 }
 console.log(`total spend $${spent.toFixed(4)}`);
