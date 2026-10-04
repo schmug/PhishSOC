@@ -8,7 +8,7 @@
 //     --format=esm --outfile=scripts/classifier-eval/data/harness.mjs
 //   CF_ACCOUNT_ID=... CF_API_TOKEN=$(npx wrangler auth token | tail -1) \
 //     node scripts/classifier-eval/data/harness.mjs llama8b jev
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyEmail, scoreClassification } from "../../workers/security/classification";
@@ -139,33 +139,41 @@ mkdirSync(OUT, { recursive: true });
 for (const name of names) {
 	const { model, systemPrompt } = VARIANTS[name];
 	const out = join(OUT, `${name}.jsonl`);
-	// Claim the output file up front with an exclusive create, so the
-	// skip-if-exists check and the final write cannot race.
-	let fd: number;
-	try {
-		fd = openSync(out, process.env.FORCE ? "w" : "wx");
-	} catch (e) {
-		if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-		console.log(`skip ${name}: ${out} exists (FORCE=1 to overwrite)`);
-		continue;
+	// Without FORCE, claim the output with an exclusive create before any
+	// spend: an existing file skips the variant, with no check-then-write
+	// race. FORCE writes once at the end, so a failed rerun keeps old results.
+	let fd: number | null = null;
+	if (!process.env.FORCE) {
+		try {
+			fd = openSync(out, "wx");
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+			console.log(`skip ${name}: ${out} exists (FORCE=1 to overwrite)`);
+			continue;
+		}
 	}
 	const lines: string[] = [];
-	// An aborted run (budget, API error) must not leave an empty file that later runs would skip.
-	let done = false;
-	process.once("exit", () => done || rmSync(out, { force: true }));
-	await pool(cases, CONCURRENCY, async (c) => {
-		const rec: Rec = { models: [] };
-		const r = await classifyEmail(makeAi(rec, systemPrompt?.()), c, { model, skipOnTimeout: true });
-		if (spent > BUDGET_USD) throw new Error(`BUDGET_USD exceeded: $${spent.toFixed(3)} > $${BUDGET_USD}`);
-		lines.push(JSON.stringify({
-			id: c.id, set: c.set, truth: c.truth, label: r.label, conf: r.confidence,
-			contrib: scoreClassification(r).score, reasoning: r.reasoning.slice(0, 160),
-			fallback: rec.models.length > 1, ...rec,
-		}));
-	});
-	writeFileSync(fd, lines.join("\n") + "\n");
-	closeSync(fd);
-	done = true;
+	let written = false;
+	try {
+		await pool(cases, CONCURRENCY, async (c) => {
+			const rec: Rec = { models: [] };
+			const r = await classifyEmail(makeAi(rec, systemPrompt?.()), c, { model, skipOnTimeout: true });
+			if (spent > BUDGET_USD) throw new Error(`BUDGET_USD exceeded: $${spent.toFixed(3)} > $${BUDGET_USD}`);
+			lines.push(JSON.stringify({
+				id: c.id, set: c.set, truth: c.truth, label: r.label, conf: r.confidence,
+				contrib: scoreClassification(r).score, reasoning: r.reasoning.slice(0, 160),
+				fallback: rec.models.length > 1, ...rec,
+			}));
+		});
+		writeFileSync(fd ?? out, lines.join("\n") + "\n");
+		written = true;
+	} finally {
+		if (fd !== null) {
+			closeSync(fd);
+			// An empty claimed file would make the next run skip this variant.
+			if (!written) unlinkSync(out);
+		}
+	}
 	console.log(`${name}: ${lines.length} cases → ${out} (running spend $${spent.toFixed(4)})`);
 }
 console.log(`total spend $${spent.toFixed(4)}`);
