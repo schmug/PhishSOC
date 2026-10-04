@@ -308,3 +308,15 @@ export const dmarcRufRecords = sqliteTable("dmarc_ruf_records", {
 	auth_results: text("auth_results"),
 	original_headers: text("original_headers"),
 });
+
+// User feedback label per email (issue #751). Stored and exported only —
+// never read by the scoring pipeline.
+export const emailFeedback = sqliteTable("email_feedback", {
+	email_id: text("email_id")
+		.primaryKey()
+		.references(() => emails.id, { onDelete: "cascade" }),
+	label: text("label").notNull(),
+	created_at: text("created_at").notNull(),
+	verdict_action: text("verdict_action"),
+	verdict_score: integer("verdict_score"),
+});

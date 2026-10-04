@@ -36,6 +36,7 @@ import {
 	type SidecarStateRow,
 	type SidecarEventRow,
 } from "./sidecar-state";
+import { _getEmailFeedbackImpl, _markNotPhishImpl } from "./email-feedback";
 import { _appendBlockedLogImpl, _listBlockedLogImpl, _moveEmailsFromSenderImpl, type BlockedLogInput } from "./blocked-log";
 import {
 	_getSendContextImpl,
@@ -479,7 +480,13 @@ export class MailboxDO extends DurableObject<Env> {
 			read: !!email.read,
 			starred: !!email.starred,
 			attachments: emailAttachments,
+			feedback: _getEmailFeedbackImpl(this.ctx.storage.sql as SqlLike, id),
 		};
+	}
+
+	/** Record a user "not phish" label for an email (issue #751). Idempotent. */
+	async markNotPhish(id: string) {
+		return _markNotPhishImpl(this.ctx.storage.sql as SqlLike, id, new Date().toISOString());
 	}
 
 	/**
