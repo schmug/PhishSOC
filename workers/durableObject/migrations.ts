@@ -751,6 +751,23 @@ export const mailboxMigrations: Migration[] = [
 		name: "35_emails_blocked_by_rule",
 		sql: `ALTER TABLE emails ADD COLUMN blocked_by_rule TEXT;`,
 	},
+	{
+		// Per-email user feedback label (issue #751). One row per email
+		// (PK = email_id) so a repeat click is a no-op. verdict_action /
+		// verdict_score snapshot the stored verdict at click time so the
+		// label is ground truth for the verdict the user actually saw.
+		// ON DELETE CASCADE drops the label with the email.
+		name: "36_email_feedback",
+		sql: `
+            CREATE TABLE IF NOT EXISTS email_feedback (
+                email_id       TEXT PRIMARY KEY REFERENCES emails(id) ON DELETE CASCADE,
+                label          TEXT NOT NULL,
+                created_at     TEXT NOT NULL,
+                verdict_action TEXT,
+                verdict_score  INTEGER
+            );
+        `,
+	},
 ];
 
 /**
