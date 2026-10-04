@@ -207,23 +207,26 @@ export async function fetchMtaStsPosture(
 	const fetchImpl = options.fetchImpl ?? (globalThis.fetch as MtaStsFetch);
 	const kv = options.kv ?? null;
 
+	// Negative results (no TXT record) are cached under a distinct key so we
+	// don't re-resolve on every dashboard hit. Consult it before DoH so a
+	// hit actually saves the lookup. Short TTL — when the operator publishes
+	// for the first time, surface it within minutes.
+	const negKey = `${KV_PREFIX}${domain}:none`;
+	if (kv) {
+		try {
+			const cached = await kv.get(negKey, "json");
+			if (cached && typeof cached === "object") {
+				return coerceMtaStsPosture(cached);
+			}
+		} catch {
+			// KV read failure is non-fatal — fall through to a fresh lookup.
+		}
+	}
+
 	const txtId = await resolveMtaStsTxtId(domain, fetchImpl);
 
 	if (!txtId) {
-		// Cache the negative under a distinct key so we don't re-resolve on
-		// every dashboard hit. Short TTL — when the operator publishes for
-		// the first time, surface it within minutes.
-		const negKey = `${KV_PREFIX}${domain}:none`;
 		if (kv) {
-			try {
-				const cached = await kv.get(negKey, "json");
-				if (cached && typeof cached === "object") {
-					return coerceMtaStsPosture(cached);
-				}
-			} catch {
-				// KV read failure is non-fatal — fall through to the empty
-				// sentinel below.
-			}
 			void kv
 				.put(negKey, JSON.stringify(emptyMtaStsPosture()), {
 					expirationTtl: KV_TTL_NEGATIVE_S,
@@ -254,10 +257,12 @@ export async function fetchMtaStsPosture(
 	if (kv) {
 		// Write the resolved posture under the id-keyed cache. Long TTL is
 		// safe because publishing a new policy bumps the id and lands on a
-		// different cache key.
+		// different cache key. A failed or unparseable policy fetch (timeout,
+		// non-200, malformed) is a negative result and only cached briefly so
+		// a transient outage doesn't pin "unavailable" for a day.
 		void kv
 			.put(cacheKey, JSON.stringify(posture), {
-				expirationTtl: KV_TTL_POSITIVE_S,
+				expirationTtl: policy ? KV_TTL_POSITIVE_S : KV_TTL_NEGATIVE_S,
 			})
 			.catch(() => {});
 	}

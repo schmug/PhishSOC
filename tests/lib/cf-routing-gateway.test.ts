@@ -56,6 +56,20 @@ describe("normalizeInbound gateway routing", () => {
 		}
 	});
 
+	it("raw bytes are exactly what the stream delivered when it ends before rawSize", async () => {
+		const env = fakeEnv({
+			relay: { enabled: true, target: { host: "smtp-relay.gmail.com" } },
+		});
+		const ev = event("ghost@example.com");
+		const actual = ev.rawSize;
+		const normalized = await normalizeInbound({ ...ev, rawSize: actual + 10 }, env);
+		expect(normalized?.kind).toBe("gateway");
+		if (normalized?.kind === "gateway") {
+			expect(normalized.rawEmail.byteLength).toBe(actual);
+			expect(new TextDecoder().decode(normalized.rawEmail)).toBe(MSG);
+		}
+	});
+
 	it("relay disabled → falls through to catch-all/drop as before", async () => {
 		const env = fakeEnv({ relay: { enabled: false, target: { host: "h" } } });
 		const normalized = await normalizeInbound(event("ghost@example.com"), env);

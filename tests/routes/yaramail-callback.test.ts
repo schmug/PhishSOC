@@ -276,6 +276,28 @@ describe("POST /yaramail-callback — HMAC authentication", () => {
 		);
 		expect(res.status).toBe(200);
 	});
+
+	it("returns 400 for a correctly signed body that is not valid JSON", async () => {
+		const ns = makeMailboxNamespace(50);
+		const app = makeApp({ MAILBOX: ns, YARAMAIL_CALLBACK_SECRET: CALLBACK_SECRET });
+
+		const body = "{not json";
+		const sig = await signBody(body);
+
+		const res = await app.request(
+			"/api/v1/mailboxes/user@example.com/yaramail-callback",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-yaramail-signature": sig,
+				},
+				body,
+			},
+		);
+		expect(res.status).toBe(400);
+		expect(ns._calls.insertYaraScanResult).toHaveLength(0);
+	});
 });
 
 // ── 3. Callback route applies score delta capped at 100 ───────────────────────

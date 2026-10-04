@@ -108,7 +108,9 @@ const DMARC_SEGMENT_RE = /\bdmarc\s*=/i;
 const HEADER_FROM_RE = /header\.from\s*=\s*(?:"([^"]*)"|([^\s;]+))/i;
 
 function extractAuthservId(raw: string): string | undefined {
-	const firstToken = raw.split(";")[0]?.trim();
+	// RFC 8601 §2.2: `authserv-id [ CFWS authres-version ]` — the id is the
+	// first whitespace-delimited token before the first `;`.
+	const firstToken = raw.split(";")[0]?.trim().split(/\s+/)[0];
 	if (!firstToken || firstToken.includes("=")) return undefined;
 	return firstToken.toLowerCase();
 }
