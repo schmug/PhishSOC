@@ -62,4 +62,12 @@ From the repo root.
   | llama8b-v3 | 9 | 16/16 | 4/5 | 0.073 |
   | scout-v3 | 4 | 16/16 | 5/5 | 0.386 |
   | jev | 0 | 16/16 | 5/5 | 0.060 |
-- **Synthetic set, 2026-10-04** (16 attacks + 5 controls, same Jev question for all three; labels identical across two runs): jev 16/16, 5/5, $0.028/1k; clef 16/16, 4/5 (`ctl-list-dmarc-fail` → suspicious), $0.108/1k; clef-flash 16/16, 5/5, $0.041/1k. Clef tokenizes the same input to about 450 tokens vs Jev's 665. Real-mail rows for Clef are not yet run.
+- **Results on 2026-10-04** (same 2026-09-26 case set; Jev re-run the same day; all three ask the identical Jev question):
+
+  | Variant | Legit flagged by classifier | Real phish flagged | Attacks caught | Controls safe | $ / 1k |
+  |---|---|---|---|---|---|
+  | jev | 0 | 7/9 | 16/16 | 5/5 | 0.048 |
+  | clef-flash | 7 | 8/9 | 16/16 | 5/5 | 0.090 |
+  | clef | 10 | 8/9 | 16/16 | 4/5 | 0.241 |
+
+  Clef-flash's legit phishing/bec labels all had confidence <= 0.62. Most of its true hits were >= 0.67, but three were 0.33-0.48. Any confidence gate needs a held-out set; it was not tuned here.
