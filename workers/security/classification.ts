@@ -78,9 +78,10 @@ No prose, no code fences, no preamble — just the JSON object.`;
  * are billed from prepaid AI Gateway credits (HTTP 402 when the balance is 0).
  *
  * Criteria text is the version evaluated on 2026-09-26 (135 legit + 9 phish
- * real emails, 160 public, 18 synthetic attacks + 5 controls): 0 legit emails
- * flagged by the classifier vs 10 for the llama prompt above, 18/18 attacks
- * caught. Change it only with a re-run of that evaluation.
+ * real emails, 160 public, 16 synthetic attacks + 5 controls): 0 legit emails
+ * flagged by the classifier vs 10 for the llama prompt above, 16/16 attacks
+ * caught. Change it only after re-running that evaluation with
+ * scripts/classifier-eval/ (see its README).
  */
 const JEV_MODEL_PREFIX = "typesafe/";
 const JEV_INSTRUCTIONS =
