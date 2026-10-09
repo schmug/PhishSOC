@@ -4,6 +4,7 @@ import { Blocklist } from "./blocklist";
 import { z } from "zod";
 import {
   AutoDraftSettings,
+  CLASSIFIER_MODELS,
   IntelSettings,
   NewEmailWebhookSettings,
   SecuritySettings,
@@ -74,6 +75,21 @@ export const OrgSettings = z
   .passthrough();
 
 export type OrgSettings = z.infer<typeof OrgSettings>;
+
+/**
+ * Write-path schema for `PUT /api/v1/org/settings`: `OrgSettings` with
+ * `classifierModel` restricted to `CLASSIFIER_MODELS`. Reads keep using the
+ * lenient `OrgSettings` so an unknown stored value cannot break settings
+ * resolution for the whole org. An empty string means "use the default".
+ */
+export const OrgSettingsWrite = OrgSettings.extend({
+  classifierModel: z
+    .union([
+      z.enum(CLASSIFIER_MODELS),
+      z.literal("").transform(() => undefined),
+    ])
+    .optional(),
+});
 
 /**
  * Parse a raw value as `OrgSettings`. Returns the parsed value on success,

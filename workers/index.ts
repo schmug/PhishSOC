@@ -18,7 +18,7 @@ import {
 	preserveOwnedMailboxFields,
 } from "./lib/mailbox-settings";
 import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, mergeOrgSettingsPut } from "./lib/org-settings";
-import { OrgSettings } from "../shared/org-settings";
+import { OrgSettingsWrite } from "../shared/org-settings";
 import { getDomainSettings, putDomainSettings, domainFromMailboxId } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings, NewEmailWebhookSettings, SidecarSettings } from "../shared/mailbox-settings";
@@ -839,7 +839,7 @@ app.get("/api/v1/org/settings", async (c) => {
 
 app.put("/api/v1/org/settings", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as { settings?: unknown };
-	const parsed = OrgSettings.safeParse(body?.settings ?? {});
+	const parsed = OrgSettingsWrite.safeParse(body?.settings ?? {});
 	if (!parsed.success) {
 		return c.json({ error: "Invalid org settings", issues: parsed.error.issues }, 400);
 	}
