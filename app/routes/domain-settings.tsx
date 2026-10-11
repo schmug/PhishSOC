@@ -13,6 +13,7 @@ import {
 import { useOrgSettings } from "~/queries/org-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
+import { BlockedSendersPanel } from "~/components/BlockedSendersPanel";
 import {
 	HubSettingsPanel,
 	normalizeHubConfig,
@@ -229,6 +230,7 @@ export default function DomainSettingsRoute() {
 			nextIntel = Object.keys(rest).length > 0 ? rest : undefined;
 		}
 
+		const parsedRelayPort = Number.parseInt(relayPort, 10);
 		const settings: DomainSettingsShape = {
 			...existing,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
@@ -248,7 +250,9 @@ export default function DomainSettingsRoute() {
 						enabled: true,
 						target: {
 							host: relayHost.trim(),
-							port: Number.parseInt(relayPort, 10) || 587,
+							// Only an unparseable port falls back; a typed "0" reaches
+							// the server's min(1) check instead of silently becoming 587.
+							port: Number.isNaN(parsedRelayPort) ? 587 : parsedRelayPort,
 							implicitTls: relayImplicitTls,
 						},
 						...(relayCredentialsSecret.trim()
@@ -446,6 +450,11 @@ export default function DomainSettingsRoute() {
 								setSecurityOverride(true);
 							}}
 						/>
+					</div>
+
+					{/* Sender blocklist — owned by /api/v1/domains/:domain/blocklist, not this form. */}
+					<div className="pp-card p-5">
+						<BlockedSendersPanel tier="domain" domain={domain} />
 					</div>
 
 					{/* Threat-intel hub */}

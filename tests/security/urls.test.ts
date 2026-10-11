@@ -54,6 +54,20 @@ describe("extractUrls", () => {
 		const urls = extractUrls('<a href="https://example.com"><b>Click <i>here</i></b></a>');
 		expect(urls[0].display_text).toBe("Click here");
 	});
+
+	it("canonicalizes the hostname (case, one trailing dot) and keeps the raw url", () => {
+		const urls = extractUrls('<a href="https://Evil.Example./login">x</a>');
+		expect(urls[0]).toMatchObject({ url: "https://Evil.Example./login", hostname: "evil.example" });
+	});
+
+	it("flags a lookalike host written with a trailing dot", () => {
+		const urls = extractUrls("https://paypa1.com./login");
+		expect(urls[0]).toMatchObject({ hostname: "paypa1.com", is_homograph: true });
+	});
+
+	it("drops a link whose host has an empty label", () => {
+		expect(extractUrls("https://evil.example../login")).toEqual([]);
+	});
 });
 
 describe("isHomographic", () => {
@@ -76,6 +90,12 @@ describe("isHomographic", () => {
 		expect(isHomographic("paypa1.com")).toBe(true);
 		expect(isHomographic("g00gle.com")).toBe(true);
 		expect(isHomographic("anazon.com")).toBe(true);
+	});
+
+	it("gives a host with one trailing dot the same result as without it", () => {
+		expect(isHomographic("paypa1.com.")).toBe(true);
+		expect(isHomographic("micros0ft.com.")).toBe(true);
+		expect(isHomographic("paypal.com.")).toBe(false);
 	});
 
 	it("does not flag unrelated third-party domains", () => {

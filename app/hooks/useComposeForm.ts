@@ -19,6 +19,7 @@ import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
 import api from "~/services/api";
 import { requestStepUpConfirmation, StepUpNoPasskeyError } from "~/lib/step-up-confirm";
+import { requiredRiskMessage, serverRequiredRisk } from "~/lib/send-risk-preview";
 
 function appendUniqueAddress(
 	addresses: string[],
@@ -187,8 +188,13 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const [isPreflighting, setIsPreflighting] = useState(false);
 	const [confirmPhrase, setConfirmPhrase] = useState("");
 	const lastInitializedOptionsRef = useRef<typeof composeOptions | null>(null);
+	// Signature and body as last initialized, so a later signature change can
+	// be applied without clobbering what the user typed.
+	const lastInitRef = useRef<{ sig: string; body: string } | null>(null);
 	const latestSubjectRef = useRef(subject);
 	const latestBodyRef = useRef(body);
+	const lastPreflightRecipientsRef = useRef("");
+	const preflightSeqRef = useRef(0);
 	const isDraftEdit = !!composeOptions.draftEmail;
 
 	const formTitle = useMemo(() => {
@@ -214,9 +220,29 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		setShowCcBcc(initialFields.showCcBcc);
 		setSubject(initialFields.subject);
 		setBody(initialFields.body);
+		lastInitRef.current = { sig: sigBlock, body: initialFields.body };
 		setPreflight(null);
 		setConfirmPhrase("");
 	}, [composeOptions, currentMailbox?.email, sigBlock]);
+
+	// The sending mailbox can change after init (the /inbox From picker, or the
+	// mailbox query resolving late). Swap in its signature without touching
+	// to/cc/bcc/subject: rebuild an untouched body, or replace the old block
+	// when it is still verbatim. Once the editor has rewritten the markup the
+	// old block can't be found, and the body is left as the user sees it.
+	useEffect(() => {
+		const init = lastInitRef.current;
+		if (!init || init.sig === sigBlock || composeOptions.draftEmail) return;
+		const current = latestBodyRef.current;
+		let next = current;
+		if (current === init.body) {
+			next = buildInitialComposeFields(composeOptions, currentMailbox?.email, sigBlock).body;
+		} else if (init.sig && current.includes(init.sig)) {
+			next = current.replace(init.sig, sigBlock);
+		}
+		lastInitRef.current = { sig: sigBlock, body: current === init.body ? next : init.body };
+		if (next !== current) setBody(next);
+	}, [sigBlock, composeOptions, currentMailbox?.email]);
 
 	useEffect(() => { latestSubjectRef.current = subject; }, [subject]);
 	useEffect(() => { latestBodyRef.current = body; }, [body]);
@@ -226,32 +252,52 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			setPreflight(null);
 			return;
 		}
+		// The message a reply/forward will be sent against — the same id
+		// handleSend routes to /reply or /forward — so the preview sees the
+		// flagged-thread rule the send gate applies.
+		const mode = composeOptions.mode;
+		const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
+		const inReplyTo = (mode === "reply" || mode === "reply-all" || mode === "forward") && originalId
+			? originalId
+			: undefined;
+		// Recipient changes preview quickly. Body and subject edits wait for a
+		// pause in typing: they re-run the server's AI check of the text, whose
+		// cached verdict the send gate reuses instead of waiting on the model.
+		const recipientsKey = [mailboxId, to, cc, bcc].join("\n");
+		const delay = recipientsKey === lastPreflightRecipientsRef.current ? 1500 : 600;
+		lastPreflightRecipientsRef.current = recipientsKey;
 		const timer = setTimeout(async () => {
+			// A slow earlier preview must not overwrite a newer one.
+			const seq = ++preflightSeqRef.current;
 			setIsPreflighting(true);
 			try {
 				// Normalise the same way the send path does so the live risk
 				// preview validates the exact payload the send will use — a
 				// multi-address Cc/Bcc must be sent as an array, not a raw
 				// comma-joined string (which fails per-address email validation).
+				// `html` is what the gate classifies (links included); `text`
+				// keeps the request valid for an empty editor.
 				const result = await api.preflightEmail(mailboxId, {
 					to: toEmailListValue(splitEmailList(to)),
 					cc: toEmailListValue(splitEmailList(cc)),
 					bcc: toEmailListValue(splitEmailList(bcc)),
 					from: mailboxId,
 					subject: latestSubjectRef.current || ".",
+					html: latestBodyRef.current || undefined,
 					text: htmlToPlainText(latestBodyRef.current) || " ",
 					draft_id: composeOptions.draftEmail?.id,
+					in_reply_to: inReplyTo,
 				});
-				setPreflight(result);
+				if (seq === preflightSeqRef.current) setPreflight(result);
 			} catch {
 				console.warn("[preflight] network error, defaulting to Tier 0");
-				setPreflight(null);
+				if (seq === preflightSeqRef.current) setPreflight(null);
 			} finally {
-				setIsPreflighting(false);
+				if (seq === preflightSeqRef.current) setIsPreflighting(false);
 			}
-		}, 600);
+		}, delay);
 		return () => clearTimeout(timer);
-	}, [to, cc, bcc, mailboxId]);
+	}, [to, cc, bcc, mailboxId, subject, body]);
 
 	const handleSaveDraft = async () => {
 		if (!mailboxId || isSending) return; setIsSavingDraft(true); setError(null);
@@ -334,6 +380,15 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			feedback.success("Email sent!");
 			onClose();
 		} catch (err: unknown) {
+			// The gate wanted a higher tier than this send stepped up for:
+			// adopt its verdict so the next attempt asks for the right one.
+			const required = serverRequiredRisk(err);
+			if (required) {
+				setPreflight(required);
+				const message = requiredRiskMessage(required);
+				setError(message); feedback.error(message);
+				return;
+			}
 			const message = err instanceof StepUpNoPasskeyError
 				? "No passkey enrolled. Add one in Settings → Passkeys, then send again."
 				: (err instanceof Error ? err.message : null) || "Failed to send email.";

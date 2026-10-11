@@ -269,6 +269,14 @@ function mergeSecurityWithDefault(value: unknown): MailboxSecuritySettings {
 				...DEFAULT_DETECTOR_SETTINGS.sender_graph,
 				...(partial.detectors?.sender_graph ?? {}),
 			},
+			own_domain_lookalike: {
+				...DEFAULT_DETECTOR_SETTINGS.own_domain_lookalike,
+				...(partial.detectors?.own_domain_lookalike ?? {}),
+			},
+		},
+		send_risk: {
+			...DEFAULT_SECURITY_SETTINGS.send_risk,
+			...(partial.send_risk ?? {}),
 		},
 	};
 }
@@ -436,6 +444,19 @@ function normalizeSecurity(s: MailboxSecuritySettings): MailboxSecuritySettings 
  * same inheritable keys via passthrough, and the strip rule per key is
  * keyed on the key name, not the schema type.
  */
+/**
+ * Fields the general mailbox PUT must never write: `honeypot` (operator
+ * provisioning, #24) and `blocklist` (owned by the /blocklist endpoints).
+ * Persisted values win; incoming values are discarded.
+ */
+export function preserveOwnedMailboxFields(existing: MailboxSettings, incoming: MailboxSettings): MailboxSettings {
+	const out: MailboxSettings = { ...incoming };
+	delete out.blocklist;
+	if (existing.honeypot) out.honeypot = existing.honeypot;
+	if (existing.blocklist?.length) out.blocklist = existing.blocklist;
+	return out;
+}
+
 export function stripDefaultEqual<T extends Record<string, unknown>>(
 	settings: T,
 ): T {
@@ -467,6 +488,10 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 		case "intel":
 			// No default for intel — only strip when the override is an empty object.
 			return deepEqual(value, {});
+		case "blocklist":
+			// Empty blocklist is the default (no rules); strip it so a last-rule
+			// DELETE leaves no `"blocklist": []` behind.
+			return Array.isArray(value) && value.length === 0;
 		case "domains":
 			// Empty domains array is the default; strip it so absent-key semantics
 			// are preserved and the blob doesn't accumulate `"domains": []` on every write.
@@ -502,6 +527,9 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 		case "gateway":
 			// Org-tier ARC sealer identity — strip only the empty object.
 			return deepEqual(value, {});
+		case "hideFromAllInboxes":
+			// Shown by default — strip `false` so absent-key semantics hold.
+			return value === false;
 		default:
 			return false;
 	}

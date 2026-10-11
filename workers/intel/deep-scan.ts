@@ -41,7 +41,8 @@ import {
 	finalExtension,
 	scoreAttachment,
 } from "./attachment-checks";
-import { isHomographic } from "../security/urls";
+import { isHomographic, registrableDomain } from "../security/urls";
+import { normalizeHost } from "../lib/url-canonical";
 import { DEFAULT_THRESHOLDS } from "../security/verdict";
 
 export interface DeepScanInput {
@@ -76,12 +77,23 @@ export async function runDeepScan(input: DeepScanInput): Promise<DeepScanResult>
 	// a score increment onto a missing base verdict.
 	const baseVerdict = parseVerdict(stored?.verdict);
 
+	// Sender's own registrable domain (issue #716): a redirect that lands
+	// back on it (e.g. an ESP click-tracker bouncing back to the sender's
+	// own site) is not a phishing tell. Only trust this when the sync
+	// pipeline's DMARC check actually passed — otherwise a spoofed sender
+	// could unlock the exemption for a redirect to an unrelated domain.
+	const senderHost = (stored?.sender?.split("@")[1] ?? "").toLowerCase();
+	const senderInfo = {
+		registrableDomain: senderHost ? registrableDomain(senderHost) : "",
+		dmarcPass: baseVerdict?.auth?.dmarc === "pass",
+	};
+
 	const reasons: string[] = [];
 	let added = 0;
 
 	let resolvedHosts: string[] = [];
 	try {
-		const urlDelta = await scanUrls(env, mailboxId, emailId);
+		const urlDelta = await scanUrls(env, mailboxId, emailId, senderInfo);
 		added += urlDelta.score;
 		reasons.push(...urlDelta.reasons);
 		resolvedHosts = urlDelta.resolvedHosts;
@@ -176,6 +188,7 @@ async function scanUrls(
 	env: Env,
 	mailboxId: string,
 	emailId: string,
+	sender: { registrableDomain: string; dmarcPass: boolean },
 ): Promise<{ score: number; reasons: string[]; resolvedHosts: string[] }> {
 	const stub = getMailboxStub(env, mailboxId);
 	const urls = await stub.getUrlsForEmail(emailId);
@@ -190,18 +203,24 @@ async function scanUrls(
 		const urlRow = row as unknown as { id: string; url: string };
 		const resolved = await resolveUrl(urlRow.url).catch(() => null);
 		const finalUrl = resolved?.resolved ?? urlRow.url;
+		const host = safeHost(finalUrl);
 		const urlVerdict: string[] = [];
 
 		if (resolved?.host_changed) {
-			urlVerdict.push("redirect_host_change");
-			score += 10;
+			const landsOnSenderDomain = sender.dmarcPass &&
+				!!sender.registrableDomain &&
+				!!host &&
+				registrableDomain(host) === sender.registrableDomain;
+			if (!landsOnSenderDomain) {
+				urlVerdict.push("redirect_host_change");
+				score += 10;
+			}
 		}
 		if (resolved?.truncated) {
 			urlVerdict.push("redirect_chain_too_long");
 			score += 5;
 		}
 
-		const host = safeHost(finalUrl);
 		if (host && !seenHosts.has(host)) {
 			seenHosts.add(host);
 			if (isHomographic(host)) {
@@ -216,6 +235,9 @@ async function scanUrls(
 			const feedMatch = await checkUrlAgainstFeeds(env, mailboxId, finalUrl).catch(() => null);
 			if (feedMatch?.confirmed) {
 				urlVerdict.push(`intel_match:${feedMatch.feedId}`);
+				score += 20;
+			} else if (feedMatch?.derived) {
+				urlVerdict.push(`intel_match_derived:${feedMatch.feedId}`);
 				score += 20;
 			}
 		}
@@ -584,8 +606,9 @@ function tierIndex(action: FinalVerdict["action"]): number {
 	}
 }
 
+/** Canonical host of a URL (see `normalizeHost`), or null when it has none. */
 function safeHost(url: string): string | null {
-	try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+	try { return normalizeHost(new URL(url).hostname); } catch { return null; }
 }
 
 function dedupe(items: string[]): string[] {

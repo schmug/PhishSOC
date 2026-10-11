@@ -12,6 +12,7 @@ import { useOrgSettings } from "~/queries/org-settings";
 import { useDomainSettings } from "~/queries/domain-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
+import { BlockedSendersPanel } from "~/components/BlockedSendersPanel";
 import { AclMembersPanel } from "~/components/AclMembersPanel";
 import { PasskeyPanel } from "~/components/PasskeyPanel";
 import {
@@ -121,6 +122,7 @@ export default function SettingsRoute() {
 	};
 
 	const [displayName, setDisplayName] = useState("");
+	const [hideFromAllInboxes, setHideFromAllInboxes] = useState(false);
 
 	// Per-field override flags + values. `override` is true when the
 	// mailbox tier supplies its own value (and the save will write it);
@@ -197,6 +199,7 @@ export default function SettingsRoute() {
 			| undefined;
 
 		setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
+		setHideFromAllInboxes(mailbox.settings?.hideFromAllInboxes === true);
 
 		// Inheritance fallback for the "no override" case: domain wins over
 		// org, matching the resolver's mailbox > domain > org > default chain.
@@ -405,6 +408,8 @@ export default function SettingsRoute() {
 		const settings = {
 			...mailbox.settings,
 			fromName: displayName,
+			// Explicit undefined overrides a stale `true` carried by the spread above.
+			hideFromAllInboxes: hideFromAllInboxes || undefined,
 			agentSystemPrompt: promptOverride ? agentPrompt.trim() || undefined : undefined,
 			autoDraft: autoDraftOverride ? { enabled: autoDraftEnabled } : undefined,
 			agentModel: modelOverride ? resolvedModel || undefined : undefined,
@@ -537,6 +542,16 @@ export default function SettingsRoute() {
 							onChange={(e) => setDisplayName(e.target.value)}
 						/>
 						<Input label="Email" type="email" value={mailbox.email} disabled />
+						<Switch
+							label="Hide from All inboxes"
+							checked={hideFromAllInboxes}
+							onCheckedChange={setHideFromAllInboxes}
+							data-testid="hide-from-all-inboxes-toggle"
+						/>
+						<p className="text-xs text-ink-3">
+							Leave this mailbox out of the merged All inboxes view. You can still
+							open it here and send from it.
+						</p>
 					</div>
 				</div>
 
@@ -826,6 +841,11 @@ export default function SettingsRoute() {
 							setSecurityOverride(true);
 						}}
 					/>
+				</div>
+
+				{/* Sender blocklist — owned by /blocklist endpoints, not this form. */}
+				<div className="pp-card p-5">
+					<BlockedSendersPanel tier="mailbox" mailboxId={mailboxId!} />
 				</div>
 
 				{/* Threat-intel hub (#97) — block-level inheritance. */}

@@ -3,6 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { routeAgentRequest } from "agents";
+import { applyBlockedOutcome } from "./security/blocklist";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import { SECURITY_HEADER_OPTIONS } from "./lib/security-headers";
@@ -174,7 +175,16 @@ export default {
 		// `from` is the envelope MAIL FROM — the runtime `ForwardableEmailMessage`
 		// carries it even though the previous signature omitted it; the gateway
 		// relay path (issue #32) needs it to preserve the original sender.
-		event: { raw: ReadableStream; rawSize: number; to?: string; from?: string },
+		// `setReject` is the runtime ForwardableEmailMessage method: a permanent
+		// SMTP reject during the session (no backscatter). Used by sender
+		// blocklist `reject` rules.
+		event: {
+			raw: ReadableStream;
+			rawSize: number;
+			to?: string;
+			from?: string;
+			setReject?: (reason: string) => void;
+		},
 		env: Env,
 		ctx: ExecutionContext,
 	) {
@@ -186,7 +196,7 @@ export default {
 			} else if (normalized.kind === "gateway") {
 				await receiveGatewayPassthrough(normalized, env, ctx);
 			} else {
-				await receiveEmail(normalized, env, ctx);
+				applyBlockedOutcome(event, await receiveEmail(normalized, env, ctx));
 			}
 		} catch (e) {
 			console.error(

@@ -15,6 +15,7 @@ import { useState } from "react";
 import EmailAttachmentList from "~/components/EmailAttachmentList";
 import EmailIframe from "~/components/EmailIframe";
 import SafeLinkInspector from "~/components/email-panel/SafeLinkInspector";
+import SecurityVerdictPanel from "~/components/email-panel/SecurityVerdictPanel";
 import {
 	formatDetailDate,
 	formatShortDate,
@@ -179,6 +180,7 @@ export default function ThreadMessage({
 				</div>
 
 				<div id={contentId} className="md:ml-[42px]">
+					<SecurityVerdictPanel email={email} inset={false} />
 					{inspectedUrl && mailboxId && (
 						<div className="mb-3">
 							<SafeLinkInspector

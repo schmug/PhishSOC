@@ -15,6 +15,7 @@ import { requireMailbox, type MailboxContext } from "./lib/mailbox";
 import {
 	resolveMailboxSettings,
 	stripDefaultEqual,
+	preserveOwnedMailboxFields,
 } from "./lib/mailbox-settings";
 import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey, mergeOrgSettingsPut } from "./lib/org-settings";
 import { OrgSettings } from "../shared/org-settings";
@@ -32,13 +33,19 @@ import {
 } from "./lib/new-email-notify";
 import { resolveNewEmailWebhook } from "./lib/new-email-webhook-policy";
 import { parseAuthResults } from "./security/auth";
+import { authenticatedSender } from "./security/sender-identity";
 import { runDeepScan } from "./intel/deep-scan";
 import { isDmarcReport, ingestDmarcReport, isDmarcRuf, ingestDmarcRuf } from "./dmarc/ingest";
 import { dmarcRoutes } from "./routes/dmarc";
 import { isTlsRptReport, ingestTlsRptReport } from "./tlsrpt/ingest";
 import { tlsrptRoutes } from "./routes/tlsrpt";
 import { caseRoutes } from "./routes/cases";
+import { emailFeedbackRoutes } from "./routes/email-feedback";
+import { mailboxBlocklistRoutes, orgBlocklistRoutes, domainBlocklistRoutes } from "./routes/blocklist";
+import { safeMatchBlocklist, type ReceiveBlocked } from "./security/blocklist";
+import { sanitizeRejectReason } from "../shared/blocklist";
 import { sendEmailRoutes } from "./routes/send-email";
+import { unifiedInboxRoutes } from "./routes/unified-inbox";
 import { hubUiRoutes } from "./routes/hub-ui";
 import { sidecarRoutes } from "./routes/sidecar";
 import { sidecarConfigOf, sidecarHealthOf } from "./lib/sidecar-config";
@@ -168,9 +175,17 @@ app.route("/api/v1/mailboxes/:mailboxId/acl", aclMemberRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/dmarc", dmarcRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/tlsrpt", tlsrptRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
+app.route("/api/v1/mailboxes/:mailboxId/emails", emailFeedbackRoutes);
+app.route("/api/v1/mailboxes/:mailboxId", mailboxBlocklistRoutes);
+app.route("/api/v1/org/blocklist", orgBlocklistRoutes);
+app.route("/api/v1/domains/:domain/blocklist", domainBlocklistRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/hub", hubUiRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/sidecar", sidecarRoutes);
 app.route("/api/v1/mailboxes/:mailboxId", sendEmailRoutes);
+
+// Unified All inboxes (spec 2026-09-26). Not under /mailboxes/:mailboxId, so
+// requireMailbox does not run — the route ACL-filters every mailbox itself.
+app.route("/api/v1/inbox", unifiedInboxRoutes);
 
 // Rejects strings that aren't registrable domains (no protocol, path, @, single label).
 function isValidRegistrableDomain(d: string): boolean {
@@ -875,6 +890,10 @@ app.put("/api/v1/domains/:domain/settings", async (c) => {
 	// defaults doesn't silently shadow the org tier for every mailbox
 	// under this domain. Caught by advisor before #142 merge.
 	const stripped = stripDefaultEqual(parsed.data);
+	// blocklist is owned by /api/v1/domains/:domain/blocklist — never written here.
+	const currentDomain = await getDomainSettings(c.env, domain);
+	delete stripped.blocklist;
+	if (currentDomain.blocklist?.length) stripped.blocklist = currentDomain.blocklist;
 	const written = await putDomainSettings(c.env, domain, stripped);
 	return c.json({ domain, settings: written });
 });
@@ -1058,6 +1077,8 @@ app.post("/api/v1/mailboxes", async (c) => {
 	// the strip so fromName/signature/forwarding/autoReply still get
 	// materialised — those are strictly per-mailbox (audit Q8).
 	const cleanedSettings = stripDefaultEqual((settings ?? {}) as MailboxSettings);
+	// blocklist is owned by /blocklist; a create never seeds it.
+	delete cleanedSettings.blocklist;
 	const finalSettings = { ...defaultSettings, ...cleanedSettings };
 	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
 
@@ -1252,13 +1273,12 @@ app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const existingObj = await c.env.BUCKET.get(key);
 	if (!existingObj) return c.json({ error: "Not found" }, 404);
 	const existing = (await existingObj.json().catch(() => ({}))) as MailboxSettings;
-	// Preserve operator-managed honeypot state — this endpoint must never clear
-	// or rewrite it when a client saves unrelated mailbox settings.
-	if (existing.honeypot) {
-		settings.honeypot = existing.honeypot;
-	}
-	await c.env.BUCKET.put(key, JSON.stringify(settings));
-	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings });
+	// Preserve operator-managed honeypot state and the endpoint-owned
+	// blocklist — this endpoint must never clear or rewrite either when a
+	// client saves unrelated mailbox settings.
+	const toWrite = preserveOwnedMailboxFields(existing, settings);
+	await c.env.BUCKET.put(key, JSON.stringify(toWrite));
+	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings: toWrite });
 });
 
 // Resolved view of a mailbox's effective settings — runs the full
@@ -1390,6 +1410,7 @@ async function handleHoneypotInbound(
 	honeypot: HoneypotConfig,
 	parsedEmail: import("postal-mime").Email,
 	stub: { countEmails(): Promise<number> },
+	trustedAuthservIds: readonly string[],
 ): Promise<void> {
 	// Already auto-disabled → stop publishing (storage still bounded by TTL reap).
 	if (honeypot.disabled) return;
@@ -1406,10 +1427,17 @@ async function handleHoneypotInbound(
 	}
 
 	// Never publish a sender on an owned domain — a misdirected internal message
-	// is not threat intel. (A fuller cross-mailbox allowlist-overlap check is a
-	// follow-up; this is the cheap, high-value guard.)
-	const senderDomain = (parsedEmail.from?.address?.split("@")[1] ?? "").toLowerCase();
-	if (senderDomain && (await getOwnedDomains(env)).includes(senderDomain)) return;
+	// is not threat intel. Only the DMARC-evaluated From identity counts as the
+	// sender's domain (see authenticatedSender). (A fuller cross-mailbox
+	// allowlist-overlap check is a follow-up; this is the cheap, high-value guard.)
+	// Only a header.from from a trusted authserv-id may narrow the sender
+	// identity; an untrusted (possibly forged) header.from is discarded so it
+	// can't flip a genuine owned-domain sender from suppressed to published.
+	// Absent a trusted header.from we fall back to the shape-checked sender —
+	// the spoof `"x@owned"@attacker` still fails the shape check and publishes.
+	const auth = parseAuthResults(parsedEmail.headers, { trustedAuthservIds });
+	const identity = authenticatedSender(parsedEmail.from?.address ?? "", auth.trusted ? auth : {});
+	if (identity && (await getOwnedDomains(env)).includes(identity.domain)) return;
 
 	const creds = await loadHubCredentials(
 		env as unknown as Record<string, unknown> & { BUCKET: R2Bucket },
@@ -1638,6 +1666,8 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
 export interface ReceiveEmailResult {
 	messageId: string;
 	verdict: FinalVerdict | null;
+	/** Set when a sender-blocklist drop/reject rule stopped the message before storage. */
+	blocked?: ReceiveBlocked;
 }
 
 /**
@@ -1664,7 +1694,41 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	const messageId = crypto.randomUUID();
 	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return null; }
 
+	// Sender blocklist (spec 2026-09-27-sender-blocklist). Runs before any
+	// storage. Fail-open: a settings read or evaluation error delivers normally.
+	const blockSettings = await resolveMailboxSettings(env, mailboxId).catch((e) => {
+		console.error("blocklist settings resolve failed (fail-open):", (e as Error).message);
+		return null;
+	});
+	// Provisioned honeypots are IOC sensors: never block (a drop hides the
+	// sender's IOCs from harvesting, a reject reveals the mailbox filters).
+	const blockHit =
+		blockSettings && !isProvisionedHoneypot(blockSettings.raw?.honeypot)
+			? safeMatchBlocklist(blockSettings, parsedEmail.from?.address)
+			: null;
+
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+
+	if (blockHit && blockHit.rule.action !== "spam") {
+		// No SMTP session to reject on for API-polled (sidecar) mailboxes.
+		const action = blockHit.rule.action === "reject" && !normalized.providerMessageId ? "reject" : "drop";
+		await (stub as any)
+			.appendBlockedLog({
+				ts: new Date().toISOString(),
+				rule_id: blockHit.rule.id,
+				tier: blockHit.tier,
+				action,
+				sender: (parsedEmail.from?.address || "").toLowerCase(),
+				subject: parsedEmail.subject || "",
+				message_id: parsedEmail.messageId ? parsedEmail.messageId.trim().replace(/^<|>$/g, "") : null,
+			})
+			.catch((e: Error) => console.error("appendBlockedLog failed:", e.message));
+		const blocked: ReceiveBlocked = { action, ruleId: blockHit.rule.id, tier: blockHit.tier };
+		if (action === "reject") blocked.reason = sanitizeRejectReason(blockHit.rule.reason);
+		return { messageId, verdict: null, blocked };
+	}
+	const spamRule = blockHit?.rule.action === "spam" ? blockHit : null;
+	const inboundFolder = spamRule ? Folders.SPAM : Folders.INBOX;
 
 	const allAttachments = parsedEmail.attachments ?? [];
 	const attachmentsToStore = allAttachments.slice(0, MAX_ATTACHMENTS_PER_EMAIL);
@@ -1698,7 +1762,9 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	let threadId = emailReferences[0] || inReplyTo || messageId;
 	let subjectMatchedThread = false;
 
-	if (!inReplyTo && emailReferences.length === 0) {
+	// Blocklist `spam` mail never subject-merges into an existing (Inbox)
+	// thread — the blocked sender must not reappear inside a conversation.
+	if (!inReplyTo && emailReferences.length === 0 && !spamRule) {
 		// GHSA-m9f6-j7mm-wc4m: subject-merge requires From:-aligned,
 		// trustworthy authentication. SPF authenticates the envelope
 		// MAIL-FROM and DKIM the signing d= domain — neither is aligned to
@@ -1727,7 +1793,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 
 	const originalMessageId = parsedEmail.messageId ? extractMsgId(parsedEmail.messageId) : null;
 
-	await stub.createEmail(Folders.INBOX, {
+	await stub.createEmail(inboundFolder, {
 		id: messageId, subject: parsedEmail.subject || "",
 		sender: (parsedEmail.from?.address || "").toLowerCase(), recipient: allRecipients.join(", "),
 		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,
@@ -1738,6 +1804,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 		// Provider-native id (issue #593): dedupe fallback key for sidecar
 		// messages with no RFC Message-ID header; null for CF Email Routing.
 		provider_message_id: normalized.providerMessageId ?? null,
+		blocked_by_rule: spamRule ? JSON.stringify({ id: spamRule.rule.id, match: spamRule.rule.match, tier: spamRule.tier }) : null,
 	}, attachmentData);
 
 	// Honeypot mailboxes (#24) are IOC sensors, not real inboxes. The message is
@@ -1745,10 +1812,18 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	// to the hub with elevated trust, and we STOP here: no security pipeline, no
 	// deep-scan, no UI notification, and — critically — no agent/auto-draft, so a
 	// honeypot can never auto-reply and reveal itself.
-	const honeypotCfg = (await resolveMailboxSettings(env, mailboxId).catch(() => null))?.raw?.honeypot;
+	const honeypotSettings = await resolveMailboxSettings(env, mailboxId).catch(() => null);
+	const honeypotCfg = honeypotSettings?.raw?.honeypot;
 	if (isProvisionedHoneypot(honeypotCfg)) {
 		ctx.waitUntil(
-			handleHoneypotInbound(env, mailboxId, honeypotCfg, parsedEmail, stub as unknown as { countEmails(): Promise<number> }).catch(
+			handleHoneypotInbound(
+				env,
+				mailboxId,
+				honeypotCfg,
+				parsedEmail,
+				stub as unknown as { countEmails(): Promise<number> },
+				honeypotSettings?.security.trusted_authserv_ids ?? [],
+			).catch(
 				(e) => console.error(`honeypot inbound handling failed for ${mailboxId}:`, (e as Error).message),
 			),
 		);
@@ -1836,11 +1911,10 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 			env,
 			mailboxId,
 			messageId,
-			// `receiveEmail` always lands inbound mail in INBOX today. If a
-			// future filter-rule engine routes mail into other folders on
-			// receive, this destination folder must be passed through so the
-			// folder-bypass triage tier can honour per-folder policy.
-			targetFolder: Folders.INBOX,
+			// Inbound mail lands in INBOX, or SPAM when a sender-blocklist
+			// `spam` rule matched. The destination is passed through so the
+			// folder-bypass triage tier honours that folder's policy.
+			targetFolder: inboundFolder,
 			parsedEmail: {
 				subject: parsedEmail.subject,
 				from: parsedEmail.from,
@@ -1919,11 +1993,10 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 			envelopeFrom: normalized.envelopeFrom ?? "",
 			rcptTo: mailboxId,
 		});
-		const status =
-			outcome === "relayed" ? "relayed" : outcome === "failed_permanent" ? "failed" : outcome === "held" ? "held" : null;
-		if (status) {
-			await stub.setRelayStatus(messageId, status).catch((e) => console.error("setRelayStatus failed:", (e as Error).message));
-		}
+		// Every outcome is recorded, `dropped` included: NULL is reserved for
+		// "domain has no relay policy" (#581).
+		const status = outcome === "failed_permanent" ? "failed" : outcome;
+		await stub.setRelayStatus(messageId, status).catch((e) => console.error("setRelayStatus failed:", (e as Error).message));
 	}
 
 	// Foreground notification fanout. Pass the *final* folder so connected
@@ -1935,7 +2008,7 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	const finalFolder =
 		securityVerdict?.action === "quarantine" || securityVerdict?.action === "block"
 			? Folders.QUARANTINE
-			: Folders.INBOX;
+			: inboundFolder;
 	try {
 		await stub.notifyNewEmail(messageId, finalFolder);
 	} catch (e) {
@@ -2036,8 +2109,9 @@ async function receiveEmail(normalized: MailboxInbound, env: Env, ctx: Execution
 	// org > default). The security pipeline above always runs; only the
 	// agent's onNewEmail fetch is skipped when the operator has disabled
 	// auto-draft for this mailbox (or for the org as a whole).
+	// Never auto-draft replies to mail the user blocked to Spam.
 	const mailboxSettings = await resolveMailboxSettings(env, mailboxId);
-	if (mailboxSettings.raw?.sidecar || !mailboxSettings.autoDraft.enabled) {
+	if (spamRule || mailboxSettings.raw?.sidecar || !mailboxSettings.autoDraft.enabled) {
 		return result;
 	}
 

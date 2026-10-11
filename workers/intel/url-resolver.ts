@@ -16,6 +16,7 @@
  */
 
 import { isPrivateOrLoopbackIp } from "../security/auth";
+import { registrableDomain } from "../security/urls";
 
 export const MAX_REDIRECT_HOPS = 5;
 export const RESOLVE_TIMEOUT_MS = 8000;
@@ -31,7 +32,12 @@ export interface ResolvedUrl {
 	hops: number;
 	/** Trimmed `<title>` from the final GET, if any. Capped at 200 chars. */
 	title: string | null;
-	/** Set when the chain exits the starting hostname — a strong anti-phishing tell. */
+	/**
+	 * Set when the chain exits the starting *registrable domain* (eTLD+1) —
+	 * a strong anti-phishing tell. Apex↔www hops and other same-registrable-
+	 * domain subdomain changes (`ietf.org` → `www.ietf.org`) do not count;
+	 * only a landing on an unrelated registrable domain does.
+	 */
 	host_changed: boolean;
 	/** HTTP status of the final response; 0 when the fetch failed. */
 	final_status: number;
@@ -238,7 +244,8 @@ export async function resolveUrl(
 	}
 
 	const endHost = safeHost(result.resolved);
-	result.host_changed = !!endHost && endHost !== startHost;
+	result.host_changed = !!endHost &&
+		registrableDomain(endHost) !== registrableDomain(startHost);
 	return result;
 }
 

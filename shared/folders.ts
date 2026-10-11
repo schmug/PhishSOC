@@ -23,14 +23,15 @@ export const Folders = {
 export type FolderId = (typeof Folders)[keyof typeof Folders];
 
 /**
- * System folder IDs that appear in the sidebar (excludes spam).
- * Order here matches the sidebar display order.
+ * System folder IDs, in sidebar display order. Spam is included since the
+ * sender blocklist (spec 2026-09-27-sender-blocklist) files mail into it.
  */
 export const SYSTEM_FOLDER_IDS: readonly FolderId[] = [
 	Folders.INBOX,
 	Folders.SENT,
 	Folders.DRAFT,
 	Folders.ARCHIVE,
+	Folders.SPAM,
 	Folders.QUARANTINE,
 	Folders.TRASH,
 ];

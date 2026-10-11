@@ -444,6 +444,7 @@ function NavContents({
 					icon={<BuildingsIcon size={16} />}
 					label="Org overview"
 				/>
+				<NavItem to="/inbox" icon={<TrayIcon size={16} />} label="All inboxes" />
 				<NavItem
 					to="/mailboxes"
 					icon={<EnvelopeIcon size={16} />}

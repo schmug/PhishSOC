@@ -46,6 +46,12 @@ export interface AuthVerdict {
 	 */
 	trusted?: boolean;
 	/**
+	 * Lowercased `header.from` property of the `dmarc=` result that set
+	 * `dmarc` — the RFC 5322 From domain the authserv evaluated DMARC on.
+	 * Same authserv-id gate as `dmarc`. Unset when the authserv omits it.
+	 */
+	headerFrom?: string;
+	/**
 	 * `(domain, selector)` pairs observed on `dkim=pass` / `dkim=fail` results
 	 * with both `header.d=` and `header.s=` properties present. Subject to the
 	 * same trusted-authserv-id gate as the rest of the verdict — observations
@@ -97,6 +103,9 @@ const HEADER_PROP_RE = /header\.([ds])\s*=\s*(?:"([^"]*)"|([^\s;]+))/gi;
 /** Match `dkim=pass` or `dkim=fail` with a word boundary so `dkim=none`,
  * `dkim=temperror`, etc. are excluded from selector observation. */
 const DKIM_PASS_OR_FAIL_RE = /\bdkim\s*=\s*(pass|fail)\b/i;
+/** First `dmarc=` method segment and its `header.from=` property. */
+const DMARC_SEGMENT_RE = /\bdmarc\s*=/i;
+const HEADER_FROM_RE = /header\.from\s*=\s*(?:"([^"]*)"|([^\s;]+))/i;
 
 function extractAuthservId(raw: string): string | undefined {
 	const firstToken = raw.split(";")[0]?.trim();
@@ -160,6 +169,7 @@ export function parseAuthResults(rawHeaders: unknown, options: ParseAuthOptions 
 		// deployment cannot satisfy the hard-allow short-circuit downstream.
 		if (gating && !verdict.trusted) verdict.trusted = true;
 
+		const dmarcSetBefore = set.dmarc;
 		for (const match of raw.matchAll(RESULT_RE)) {
 			const method = match[1].toLowerCase() as "spf" | "dkim" | "dmarc";
 			const result = match[2].toLowerCase() as AuthResult;
@@ -167,6 +177,14 @@ export function parseAuthResults(rawHeaders: unknown, options: ParseAuthOptions 
 				verdict[method] = result;
 				set[method] = true;
 			}
+		}
+		// Bind header.from to the header that supplied the dmarc result, so it
+		// can never come from a different (e.g. untrusted) header.
+		if (!dmarcSetBefore && set.dmarc) {
+			const segment = raw.split(";").find((s) => DMARC_SEGMENT_RE.test(s));
+			const m = segment?.match(HEADER_FROM_RE);
+			const headerFrom = (m?.[1] ?? m?.[2] ?? "").toLowerCase();
+			if (headerFrom) verdict.headerFrom = headerFrom;
 		}
 
 		// DKIM selector observations. Each `;`-separated method segment with a
