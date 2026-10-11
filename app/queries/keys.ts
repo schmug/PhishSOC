@@ -19,6 +19,10 @@ export const queryKeys = {
 		urls: (mailboxId: string, emailId: string) =>
 			["emails", mailboxId, emailId, "urls"] as const,
 	},
+	unifiedInbox: {
+		all: ["unified-inbox"] as const,
+		page: (before: string | null) => ["unified-inbox", before ?? "head"] as const,
+	},
 	folders: {
 		list: (mailboxId: string) => ["folders", mailboxId] as const,
 	},

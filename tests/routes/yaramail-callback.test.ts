@@ -18,10 +18,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import {
-	yaramailCallbackRoute,
-	hmacSha256Hex,
-} from "../../workers/routes/yaramail-callback";
+import { yaramailCallbackRoute } from "../../workers/routes/yaramail-callback";
+import { hmacSha256Hex } from "../../workers/lib/hmac";
 import {
 	fireYaraScan,
 } from "../../workers/security/yaramail-signal";

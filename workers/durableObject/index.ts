@@ -36,18 +36,23 @@ import {
 	type SidecarStateRow,
 	type SidecarEventRow,
 } from "./sidecar-state";
-
-/**
- * SQL expression to normalize email subjects by stripping common
- * reply/forward prefixes (Re:, Fwd:, FW:, AW:, WG:, Réf:, SV:).
- * Used for conversation grouping. Hardcoded to the `subject` column.
- */
-const NORMALIZED_SUBJECT_SQL = `LOWER(TRIM(
-	REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-		LOWER(subject),
-		'aw: ', ''), 'wg: ', ''), 'réf: ', ''), 'sv: ', ''),
-		're: ', ''), 'fwd: ', ''), 'fw: ', '')
-))`;
+import { _getEmailFeedbackImpl, _markNotPhishImpl } from "./email-feedback";
+import { _appendBlockedLogImpl, _listBlockedLogImpl, _moveEmailsFromSenderImpl, type BlockedLogInput } from "./blocked-log";
+import {
+	_getSendContextImpl,
+	_recordSentRecipientsImpl,
+	parseRecipientList,
+} from "./recipient-graph";
+import {
+	_getSendRiskLlmCacheImpl,
+	_putSendRiskLlmCacheImpl,
+	type CachedOutboundVerdict,
+} from "./send-risk-llm-cache";
+import {
+	_getThreadedEmailsImpl,
+	NORMALIZED_SUBJECT_SQL,
+	type ThreadedCursor,
+} from "./threaded-emails";
 
 const ALLOWED_SORT_COLUMNS = [
 	"id",
@@ -98,6 +103,8 @@ interface GetEmailsOptions {
 	limit?: number;
 	sortColumn?: SortColumn;
 	sortDirection?: "ASC" | "DESC";
+	/** Unified-inbox keyset cursor; honoured by getThreadedEmails for non-draft folders only. */
+	before?: ThreadedCursor;
 }
 
 interface EmailData {
@@ -123,6 +130,8 @@ interface EmailData {
 	 */
 	provider_message_id?: string | null;
 	raw_headers?: string | null;
+	/** Sender-blocklist rule that filed this message into Spam (JSON {id, match, tier}). */
+	blocked_by_rule?: string | null;
 	/**
 	 * Provenance of the row (issue #266): "agent" when the draft was
 	 * authored by the agent's draft_reply / draft_email tools, "user"
@@ -130,6 +139,11 @@ interface EmailData {
 	 * Omit to inherit the column default ("user") at the SQL layer.
 	 */
 	created_by?: "agent" | "user";
+	/**
+	 * JSON `SendRiskRecord` for rows written to SENT (migration 32): the
+	 * send-risk gate decision that let this message out. Omit for inbound.
+	 */
+	send_risk?: string | null;
 }
 
 interface AttachmentData {
@@ -310,7 +324,7 @@ export class MailboxDO extends DurableObject<Env> {
 	// ── Threaded queries (raw SQL — too complex for Drizzle's builder) ──
 
 	async getThreadedEmails(options: GetEmailsOptions = {}) {
-		const { folder, page = 1, limit: rawLimit = 25 } = options;
+		const { folder, page = 1, limit: rawLimit = 25, before } = options;
 		const limit = Math.min(Math.max(rawLimit, 1), 100);
 
 		if (!folder) {
@@ -385,103 +399,14 @@ export class MailboxDO extends DurableObject<Env> {
 			}));
 		}
 
-		// Non-draft folders: full threading logic
-		const result = this.ctx.storage.sql.exec(
-			`WITH
-			folder_emails AS (
-				SELECT *,
-					COALESCE(thread_id, id) as raw_thread_id,
-					${NORMALIZED_SUBJECT_SQL} as normalized_subject
-				FROM emails
-				WHERE folder_id = (SELECT id FROM folders WHERE name = ?1 OR id = ?1 LIMIT 1)
-			),
-			thread_to_conversation AS (
-				SELECT
-					raw_thread_id,
-					normalized_subject,
-					CASE
-						WHEN thread_id IS NOT NULL THEN raw_thread_id
-						ELSE MIN(raw_thread_id) OVER (PARTITION BY normalized_subject)
-					END as conversation_id
-				FROM folder_emails
-				GROUP BY raw_thread_id, normalized_subject, thread_id
-			),
-			all_emails_with_conversation AS (
-				SELECT
-					e.*,
-					COALESCE(tc.conversation_id, COALESCE(e.thread_id, e.id)) as conversation_id
-				FROM emails e
-				LEFT JOIN thread_to_conversation tc
-					ON COALESCE(e.thread_id, e.id) = tc.raw_thread_id
-			),
-			conversation_stats AS (
-				SELECT
-					conversation_id,
-					COUNT(*) as thread_count,
-					SUM(CASE WHEN read = 0 THEN 1 ELSE 0 END) as thread_unread_count,
-					SUM(CASE WHEN read = 1 THEN 1 ELSE 0 END) as thread_read_count,
-					GROUP_CONCAT(DISTINCT sender) as participants,
-					SUM(CASE WHEN folder_id = (SELECT id FROM folders WHERE name = 'draft' LIMIT 1) THEN 1 ELSE 0 END) as has_draft
-				FROM all_emails_with_conversation
-				WHERE conversation_id IN (
-					SELECT DISTINCT conversation_id FROM all_emails_with_conversation
-					WHERE folder_id = (SELECT id FROM folders WHERE name = ?1 OR id = ?1 LIMIT 1)
-				)
-				GROUP BY conversation_id
-			),
-			latest_message_per_conversation AS (
-				SELECT
-					conversation_id,
-					folder_id,
-					ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY date DESC) as rn
-				FROM all_emails_with_conversation
-			),
-			latest_in_folder AS (
-				SELECT
-					fe.*,
-					COALESCE(tc.conversation_id, fe.raw_thread_id) as conversation_id,
-					ROW_NUMBER() OVER (
-						PARTITION BY COALESCE(tc.conversation_id, fe.raw_thread_id)
-						ORDER BY fe.date DESC
-					) as rn
-				FROM folder_emails fe
-				LEFT JOIN thread_to_conversation tc
-					ON fe.raw_thread_id = tc.raw_thread_id
-			)
-			SELECT
-				lif.id, lif.subject, lif.sender, lif.recipient, lif.date,
-				lif.read, lif.starred, lif.thread_id, lif.folder_id,
-				lif.in_reply_to, lif.email_references,
-				SUBSTR(lif.body, 1, 300) as snippet,
-				cs.thread_count, cs.thread_unread_count, cs.participants,
-				CASE WHEN lmc.folder_id != (SELECT id FROM folders WHERE name = 'sent' LIMIT 1)
-					AND lmc.folder_id != (SELECT id FROM folders WHERE name = 'draft' LIMIT 1)
-					AND cs.thread_read_count > 0
-					THEN 1 ELSE 0 END as needs_reply,
-				CASE WHEN cs.has_draft > 0 THEN 1 ELSE 0 END as has_draft
-			FROM latest_in_folder lif
-			JOIN conversation_stats cs ON lif.conversation_id = cs.conversation_id
-			LEFT JOIN latest_message_per_conversation lmc
-				ON lmc.conversation_id = lif.conversation_id AND lmc.rn = 1
-			WHERE lif.rn = 1
-			ORDER BY lif.date DESC
-			LIMIT ?2 OFFSET ?3`,
+		// Non-draft folders: full threading logic. Lives in ./threaded-emails
+		// so node:sqlite tests can drive it (test/durableObject/threaded-emails.test.ts).
+		return _getThreadedEmailsImpl(this.ctx.storage.sql as SqlLike, {
 			folder,
 			limit,
 			offset,
-		);
-
-		const rows = [...result];
-		return rows.map((row: any) => ({
-			...row,
-			read: !!row.read,
-			starred: !!row.starred,
-			thread_count: row.thread_count || 1,
-			thread_unread_count: row.thread_unread_count || 0,
-			participants: row.participants || row.sender,
-			needs_reply: !!row.needs_reply,
-			has_draft: !!row.has_draft,
-		}));
+			before,
+		});
 	}
 
 	/**
@@ -555,7 +480,13 @@ export class MailboxDO extends DurableObject<Env> {
 			read: !!email.read,
 			starred: !!email.starred,
 			attachments: emailAttachments,
+			feedback: _getEmailFeedbackImpl(this.ctx.storage.sql as SqlLike, id),
 		};
+	}
+
+	/** Record a user "not phish" label for an email (issue #751). Idempotent. */
+	async markNotPhish(id: string) {
+		return _markNotPhishImpl(this.ctx.storage.sql as SqlLike, id, new Date().toISOString());
 	}
 
 	/**
@@ -753,6 +684,20 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 
 		return true;
+	}
+
+	// ── Sender blocklist (spec 2026-09-27-sender-blocklist) ─────────────
+	async appendBlockedLog(row: BlockedLogInput) {
+		_appendBlockedLogImpl(this.ctx.storage.sql as SqlLike, row);
+	}
+
+	async listBlockedLog(limit = 50) {
+		return _listBlockedLogImpl(this.ctx.storage.sql as SqlLike, limit);
+	}
+
+	/** Retroactive block: file existing Inbox/Archive mail from `match` into `toFolder`. */
+	async moveEmailsFromSender(match: string, toFolder: string) {
+		return _moveEmailsFromSenderImpl(this.ctx.storage.sql as SqlLike, match, [Folders.INBOX, Folders.ARCHIVE], toFolder);
 	}
 
 	// ── API-sidecar mode (issue #31) ────────────────────────────────────
@@ -1079,13 +1024,48 @@ export class MailboxDO extends DurableObject<Env> {
 				message_id: email.message_id ?? null,
 				provider_message_id: email.provider_message_id ?? null,
 				raw_headers: email.raw_headers ?? null,
+				blocked_by_rule: email.blocked_by_rule ?? null,
 				created_by: email.created_by ?? "user",
+				send_risk: email.send_risk ?? null,
 			})
 			.run();
 
 		if (attachments.length > 0) {
 			this.db.insert(schema.attachments).values(attachments).run();
 		}
+
+		// Outbound recipient history (migration 32). Best-effort: the SENT
+		// row is already written and delivery may be under way, so a
+		// history-write failure must never fail the send.
+		if (isSent) {
+			try {
+				_recordSentRecipientsImpl(
+					this.ctx.storage.sql as SqlLike,
+					parseRecipientList(email.recipient, email.cc, email.bcc),
+					new Date().toISOString(),
+				);
+			} catch (e) {
+				console.error("createEmail: recipient_graph update failed:", (e as Error).message);
+			}
+		}
+	}
+
+	/**
+	 * Mailbox state the outbound send-risk classifier needs, in one RPC:
+	 * recipient history, per-domain send counts, lookalike anchor domains,
+	 * and the verdict of the message being replied to or forwarded.
+	 */
+	async getSendContext(args: { addresses: string[]; originalRef?: string | null }) {
+		return _getSendContextImpl(this.ctx.storage.sql as SqlLike, args);
+	}
+
+	/** Outbound LLM send-risk verdict cache (migration 33): preflight writes, the send gate reads. */
+	async getSendRiskLlmCache(key: string) {
+		return _getSendRiskLlmCacheImpl(this.ctx.storage.sql as SqlLike, key, Date.now());
+	}
+
+	async putSendRiskLlmCache(key: string, verdict: CachedOutboundVerdict) {
+		_putSendRiskLlmCacheImpl(this.ctx.storage.sql as SqlLike, key, verdict, Date.now());
 	}
 
 	// ── Security pipeline persistence ──────────────────────────────
@@ -1166,6 +1146,30 @@ export class MailboxDO extends DurableObject<Env> {
 		this.db
 			.update(schema.urls)
 			.set(data)
+			.where(eq(schema.urls.id, urlId))
+			.run();
+	}
+
+	/** Store a URL Scanner result (#754). Separate from `updateUrlScan` (deep-scan). */
+	async updateUrlScannerResult(
+		urlId: string,
+		data: {
+			scan_uuid: string;
+			scan_status: "pending" | "done";
+			scan_malicious?: boolean | null;
+			scan_categories?: string[];
+			scan_final_url?: string | null;
+		},
+	) {
+		this.db
+			.update(schema.urls)
+			.set({
+				scan_uuid: data.scan_uuid,
+				scan_status: data.scan_status,
+				scan_malicious: data.scan_malicious == null ? null : data.scan_malicious ? 1 : 0,
+				scan_categories: data.scan_categories ? JSON.stringify(data.scan_categories) : null,
+				scan_final_url: data.scan_final_url ?? null,
+			})
 			.where(eq(schema.urls.id, urlId))
 			.run();
 	}
@@ -1288,9 +1292,10 @@ export class MailboxDO extends DurableObject<Env> {
 	/**
 	 * Record the inline-gateway relay outcome for an email (issue #32).
 	 * Called from `receiveEmail` after `relayAfterVerdict` resolves; NULL
-	 * (column default) means the domain has no relay policy.
+	 * (column default) means the domain has no relay policy, so a policy
+	 * drop is written as `dropped`, never left NULL (#581).
 	 */
-	async setRelayStatus(emailId: string, status: "relayed" | "held" | "failed"): Promise<void> {
+	async setRelayStatus(emailId: string, status: "relayed" | "held" | "failed" | "dropped"): Promise<void> {
 		this.db
 			.update(schema.emails)
 			.set({ relay_status: status })
@@ -1304,6 +1309,7 @@ export class MailboxDO extends DurableObject<Env> {
 				verdict: schema.emails.security_verdict,
 				score: schema.emails.security_score,
 				explanation: schema.emails.security_explanation,
+				sender: schema.emails.sender,
 			})
 			.from(schema.emails)
 			.where(eq(schema.emails.id, emailId))

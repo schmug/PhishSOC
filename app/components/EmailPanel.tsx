@@ -14,6 +14,8 @@ import ThreadMessage from "~/components/email-panel/ThreadMessage";
 import { useFeedback } from "~/lib/feedback";
 import { requestStepUpConfirmation, StepUpNoPasskeyError } from "~/lib/step-up-confirm";
 import { combinedSendBodyForRisk } from "shared/send-risk-body";
+import { requiredRiskMessage, serverRequiredRisk } from "~/lib/send-risk-preview";
+import SendRiskReasons from "~/components/SendRiskReasons";
 import { htmlToPlainText, splitEmailList, toEmailListValue } from "~/lib/utils";
 import api from "~/services/api";
 import {
@@ -51,11 +53,19 @@ function EmailPanelSkeleton() {
 	);
 }
 
-export default function EmailPanel({ emailId }: { emailId: string }) {
-	const { mailboxId, folder } = useParams<{
-		mailboxId: string;
-		folder: string;
-	}>();
+export default function EmailPanel({
+	emailId,
+	mailboxId: mailboxIdProp,
+	folder: folderProp,
+}: {
+	emailId: string;
+	/** Overrides :mailboxId — set by /inbox, which has no route param. */
+	mailboxId?: string;
+	folder?: string;
+}) {
+	const params = useParams<{ mailboxId: string; folder: string }>();
+	const mailboxId = mailboxIdProp ?? params.mailboxId;
+	const folder = folderProp ?? params.folder;
 	const { data: email } = useEmail(mailboxId, emailId) as { data?: Email };
 	const { data: threadRepliesRaw } = useThreadReplies(
 		mailboxId,
@@ -157,8 +167,10 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 					to: email.recipient!,
 					from: mailboxId,
 					subject: email.subject || ".",
+					html: email.body || undefined,
 					text: htmlToPlainText(email.body || "") || " ",
 					draft_id: email.id,
+					in_reply_to: email.in_reply_to || undefined,
 				});
 				setDraftPreflight(result);
 			} catch {
@@ -285,10 +297,15 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 					bcc: emailData.bcc,
 					from: mailboxId,
 					subject: emailData.subject,
+					html: emailData.html || undefined,
 					text: htmlToPlainText(emailData.html) || " ",
 					draft_id: target.id,
+					// Same original the /reply route below classifies against.
+					in_reply_to: originalEmail?.id,
 				});
 				sendTier = preflight.tier;
+				// Keep the confirm-phrase input in step with the tier enforced.
+				if (isDraftFolder) setDraftPreflight(preflight);
 			} catch {
 				// Network error — fall through as Tier 0, matching composer policy.
 			}
@@ -332,8 +349,11 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 			feedback.success("Email sent!");
 			if (isDraftFolder) closePanel();
 		} catch (err) {
-			const message =
-				err instanceof StepUpNoPasskeyError
+			const required = serverRequiredRisk(err);
+			if (required && isDraftFolder) setDraftPreflight(required);
+			const message = required
+				? requiredRiskMessage(required)
+				: err instanceof StepUpNoPasskeyError
 					? "No passkey enrolled. Add one in Settings → Passkeys, then send again."
 					: (err instanceof Error ? err.message : null) || "Failed to send email.";
 			feedback.error(message);
@@ -356,6 +376,7 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 						onChange={(e) => setConfirmPhrase(e.target.value)}
 						data-testid="draft-confirm-phrase-input"
 					/>
+					<SendRiskReasons reasons={draftPreflight?.reasons} />
 				</div>
 			) : null}
 			<EmailPanelToolbar
@@ -363,6 +384,7 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 				mailboxId={mailboxId}
 				isDraftFolder={isDraftFolder}
 				isSending={isSending}
+				isSidecar={Boolean(currentMailbox?.sidecar || currentMailbox?.settings?.sidecar)}
 				moveToFolders={moveToFolders}
 				onBack={closePanel}
 				onSendDraft={() => handleSendDraft()}

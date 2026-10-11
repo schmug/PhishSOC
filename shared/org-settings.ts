@@ -1,9 +1,11 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
+import { Blocklist } from "./blocklist";
 import { z } from "zod";
 import {
   AutoDraftSettings,
   IntelSettings,
+  NewEmailWebhookSettings,
   SecuritySettings,
 } from "./mailbox-settings";
 
@@ -65,6 +67,9 @@ export const OrgSettings = z
       })
       .passthrough()
       .optional(),
+    newEmailWebhook: NewEmailWebhookSettings.optional(),
+    /** Sender block rules (spec 2026-09-27-sender-blocklist). Written ONLY by the /blocklist endpoints; general PUTs preserve it. */
+    blocklist: Blocklist.optional(),
   })
   .passthrough();
 

@@ -5,16 +5,12 @@
 import { Button, Pagination, Tooltip } from "@cloudflare/kumo";
 import {
 	ArchiveIcon,
-	ArrowBendUpLeftIcon,
 	ArrowsClockwiseIcon,
-	EnvelopeOpenIcon,
 	EnvelopeSimpleIcon,
 	FileIcon,
 	PaperPlaneTiltIcon,
 	PencilSimpleIcon,
-	ShieldIcon,
 	ShieldWarningIcon,
-	StarIcon,
 	TrashIcon,
 	TrayIcon,
 } from "@phosphor-icons/react";
@@ -22,32 +18,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { Folders } from "shared/folders";
-import { formatListDate } from "shared/dates";
+import EmailListRow, { hasUnread } from "~/components/EmailListRow";
 import MailboxSplitView from "~/components/MailboxSplitView";
-import VerdictPill from "~/components/phishsoc/VerdictPill";
-import { verdictActionToPill } from "~/components/phishsoc/verdict";
-import { parseVerdict, type Email as EmailType } from "~/types";
-
-function EmailVerdictPill({
-	email,
-}: { email: Pick<EmailType, "security_verdict"> }) {
-	const verdict = parseVerdict(email.security_verdict);
-	const pill = verdictActionToPill(verdict?.action);
-	if (!pill || !verdict) return null;
-	const icon =
-		pill.tone === "danger" ? (
-			<ShieldWarningIcon size={12} weight="fill" />
-		) : (
-			<ShieldIcon size={12} weight="bold" />
-		);
-	return (
-		<VerdictPill tone={pill.tone} icon={icon} title={verdict.explanation}>
-			{pill.label}
-		</VerdictPill>
-	);
-}
 import { useFeedback } from "~/lib/feedback";
-import { getSnippetText, formatParticipants } from "~/lib/utils";
 import {
 	useDeleteEmail,
 	useEmails,
@@ -253,23 +226,23 @@ export default function EmailListRoute() {
 		);
 	}, [searchParams, selectEmail, setSearchParams]);
 
-	const toggleStar = (e: React.MouseEvent, email: Email) => {
-		e.preventDefault();
-		e.stopPropagation();
+	const toggleStar = (email: Email) => {
 		if (mailboxId)
 			updateEmail.mutate(
-				{
-					mailboxId,
-					id: email.id,
-					data: { starred: !email.starred },
-				},
+				{ mailboxId, id: email.id, data: { starred: !email.starred } },
 				{ onError: () => feedback.error("Couldn't update email.") },
 			);
 	};
 
-	const handleDelete = (e: React.MouseEvent, emailId: string) => {
-		e.preventDefault();
-		e.stopPropagation();
+	const toggleRead = (email: Email) => {
+		if (mailboxId)
+			updateEmail.mutate(
+				{ mailboxId, id: email.id, data: { read: !email.read } },
+				{ onError: () => feedback.error("Couldn't update email.") },
+			);
+	};
+
+	const handleDelete = (emailId: string) => {
 		if (mailboxId) {
 			const confirmed = window.confirm("Are you sure you want to delete this email?");
 			if (!confirmed) return;
@@ -288,14 +261,6 @@ export default function EmailListRoute() {
 				queryKey: queryKeys.folders.list(mailboxId),
 			});
 		}
-	};
-
-	// Thread-aware helpers
-	const hasUnread = (email: Email): boolean => {
-		if (email.thread_unread_count !== undefined) {
-			return email.thread_unread_count > 0;
-		}
-		return !email.read;
 	};
 
 	const handleRowClick = (email: Email) => {
@@ -379,134 +344,18 @@ export default function EmailListRoute() {
 					<EmailListSkeleton />
 				) : emails.length > 0 ? (
 						<div>
-							{emails.map((email) => {
-								const isSelected = selectedEmailId === email.id;
-								const snippet = getSnippetText(email.snippet);
-								return (
-									<div
-										key={email.id}
-										role="button"
-										tabIndex={0}
-										onClick={() => handleRowClick(email)}
-										onKeyDown={(e) => {
-											if (e.key === "Enter" || e.key === " ") {
-												e.preventDefault();
-												handleRowClick(email);
-											}
-										}}
-										className={`group flex items-center gap-3 w-full text-left cursor-pointer transition-colors border-b border-line px-4 py-2.5 md:px-6 md:py-3 ${
-											isPanelOpen ? "md:px-4 md:py-2.5" : ""
-										} ${isSelected ? "bg-paper-3" : "hover:bg-paper-2"}`}
-									>
-										{/* Unread dot */}
-										<div className="w-2.5 shrink-0 flex justify-center">
-											{hasUnread(email) && (
-												<div className="h-2 w-2 rounded-full bg-accent" />
-											)}
-										</div>
-
-										{/* Star */}
-										<button
-											type="button"
-											className="shrink-0 p-0.5 bg-transparent border-0 cursor-pointer"
-											aria-label={email.starred ? "Unstar message" : "Star message"}
-											onClick={(e) => {
-												e.stopPropagation();
-												toggleStar(e, email);
-											}}
-										>
-											<StarIcon
-												size={16}
-												weight={email.starred ? "fill" : "regular"}
-												className={
-													email.starred
-														? "text-suspect"
-														: "text-ink-3 hover:text-suspect"
-												}
-											/>
-										</button>
-
-										{/* Content */}
-										<div className="min-w-0 flex-1">
-											<div className="flex items-center gap-2">
-												<span
-													className={`truncate text-sm ${hasUnread(email) ? "font-semibold text-ink" : "text-ink"}`}
-												>
-													{formatParticipants(email)}
-												</span>
-												{(email.thread_count ?? 1) > 1 && (
-													<span className="shrink-0 text-xs text-ink-3 bg-paper-3 rounded-full px-1.5 py-0.5 font-medium">
-														{email.thread_count}
-													</span>
-												)}
-												{email.has_draft && (
-													<span className="shrink-0 text-xs text-danger font-medium">
-														Draft
-													</span>
-												)}
-												{email.needs_reply && !email.has_draft && (
-													<Tooltip content="Needs reply" asChild>
-														<span className="shrink-0 text-suspect">
-															<ArrowBendUpLeftIcon size={14} weight="bold" />
-														</span>
-													</Tooltip>
-												)}
-												<EmailVerdictPill email={email} />
-												<span className="text-sm text-ink-3 shrink-0 ml-auto">
-													{formatListDate(email.date)}
-												</span>
-											</div>
-											<div className="truncate text-sm mt-0.5">
-												<span
-													className={hasUnread(email) ? "font-medium text-ink" : "text-ink-3"}
-												>
-													{email.subject}
-												</span>
-											{snippet && (
-												<span className="text-ink-3 font-normal">
-													{" "}&mdash; {snippet}
-												</span>
-											)}
-										</div>
-									</div>
-
-										{/* Hover actions */}
-										<div className="hidden group-hover:flex items-center shrink-0">
-											<Tooltip content={email.read ? "Mark unread" : "Mark read"} asChild>
-												<Button
-													variant="ghost"
-													shape="square"
-													size="sm"
-													icon={email.read ? <EnvelopeSimpleIcon size={14} /> : <EnvelopeOpenIcon size={14} />}
-													onClick={(e) => {
-														e.stopPropagation();
-														if (mailboxId)
-															updateEmail.mutate(
-																{
-																	mailboxId,
-																	id: email.id,
-																	data: { read: !email.read },
-																},
-																{ onError: () => feedback.error("Couldn't update email.") },
-															);
-													}}
-													aria-label={email.read ? "Mark unread" : "Mark read"}
-												/>
-											</Tooltip>
-											<Tooltip content="Delete" asChild>
-												<Button
-													variant="ghost"
-													shape="square"
-													size="sm"
-													icon={<TrashIcon size={14} />}
-													onClick={(e) => handleDelete(e, email.id)}
-													aria-label="Delete"
-												/>
-											</Tooltip>
-										</div>
-									</div>
-								);
-							})}
+							{emails.map((email) => (
+								<EmailListRow
+									key={email.id}
+									email={email}
+									isSelected={selectedEmailId === email.id}
+									compact={isPanelOpen}
+									onOpen={() => handleRowClick(email)}
+									onToggleStar={() => toggleStar(email)}
+									onToggleRead={() => toggleRead(email)}
+									onDelete={() => handleDelete(email.id)}
+								/>
+							))}
 						</div>
 					) : (
 						<FolderEmptyState

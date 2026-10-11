@@ -54,8 +54,15 @@ const originalEmail: EmailFull = {
 	raw_headers: null,
 };
 
+const sendContextCalls: Array<{ addresses: string[]; originalRef?: string | null }> = [];
+let originalVerdict: string | null = null;
+
 function makeStub() {
 	return {
+		async getSendContext(args: { addresses: string[]; originalRef?: string | null }) {
+			sendContextCalls.push(args);
+			return { recipients: [], domainSendCounts: {}, knownDomains: [], originalVerdict };
+		},
 		async checkSendRateLimit() {
 			return null;
 		},
@@ -75,6 +82,8 @@ let currentStub = makeStub();
 
 beforeEach(() => {
 	currentStub = makeStub();
+	sendContextCalls.length = 0;
+	originalVerdict = null;
 	vi.clearAllMocks();
 });
 
@@ -164,6 +173,49 @@ describe("POST /emails/:id/forward — send-risk gate", () => {
 		expect(res.status).toBe(401);
 		const json = (await res.json()) as { error: string; risk: { tier: number } };
 		expect(json.error).toBe("confirmation_required");
+		expect(json.risk.tier).toBe(1);
+	});
+});
+
+describe("reply/forward — the replied-to message's verdict feeds the gate", () => {
+	it("looks up the original by route id and raises a reply to a quarantined message to tier 2", async () => {
+		originalVerdict = JSON.stringify({ action: "quarantine", classification: { label: "bec" } });
+		const { fetch } = makeApp(handleReplyEmail);
+		const res = await fetch(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails/${ORIGINAL_ID}/reply`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody({ to: "asker@external.com" })),
+			},
+		);
+		expect(res.status).toBe(401);
+		const json = (await res.json()) as { risk: { tier: number; reasons: string[] } };
+		expect(json.risk.tier).toBe(2);
+		expect(json.risk.reasons).toContain("Reply or forward of a message flagged as bec");
+		expect(sendContextCalls[0]).toEqual({ addresses: ["asker@external.com"], originalRef: ORIGINAL_ID });
+	});
+
+	it("forwarding a quarantined message internally needs step-up but no typed confirmation", async () => {
+		originalVerdict = JSON.stringify({ action: "quarantine" });
+		const app = new Hono<MailboxContext>();
+		app.use("*", async (c, next) => {
+			c.set("mailboxStub", currentStub as unknown as Parameters<typeof c.set>[1]);
+			await next();
+		});
+		app.post("/api/v1/mailboxes/:mailboxId/emails/:id/forward", handleForwardEmail);
+		const res = await app.request(
+			`/api/v1/mailboxes/${encodeURIComponent(MAILBOX_ID)}/emails/${ORIGINAL_ID}/forward`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(sendBody({ to: "soc@internal.example" })),
+			},
+			{} as never,
+			fakeCtx,
+		);
+		expect(res.status).toBe(401);
+		const json = (await res.json()) as { risk: { tier: number } };
 		expect(json.risk.tier).toBe(1);
 	});
 });

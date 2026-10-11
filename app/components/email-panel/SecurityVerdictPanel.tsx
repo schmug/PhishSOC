@@ -5,31 +5,74 @@
 import {
 	CaretDownIcon,
 	CaretUpIcon,
+	FingerprintIcon,
+	PaperPlaneTiltIcon,
+	PauseCircleIcon,
+	ProhibitIcon,
 	ShieldCheckIcon,
 	ShieldIcon,
 	ShieldWarningIcon,
+	WarningCircleIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
-import { type Email, parseVerdict } from "~/types";
+import { type ReactNode, useState } from "react";
+import { parseStageTrace, STAGE_LABELS, type StageRecord } from "~/lib/stage-trace";
+import { type Email, parseSendRisk, parseVerdict, type RelayStatus } from "~/types";
 
 /**
  * Renders the security pipeline's verdict for an email: action, score, auth
- * chips (SPF/DKIM/DMARC), classifier label, and a collapsible signals list.
+ * chips (SPF/DKIM/DMARC), classifier label, and a collapsible signals list
+ * plus provenance (per-stage score contributions from `stage_trace`, auth
+ * results source). The card renders for every verdict, allow included; only
+ * mail the pipeline never scored (sent mail, drafts) shows no card. The
+ * inline-gateway relay badge renders independently of the verdict card (#581).
  */
-export default function SecurityVerdictPanel({ email }: { email: Email }) {
+export default function SecurityVerdictPanel({
+	email,
+	inset = true,
+}: {
+	email: Email;
+	/** Pad to the panel edge (SingleMessageView). ThreadMessage passes false
+	 * because its message body is already padded. */
+	inset?: boolean;
+}) {
+	const pad = inset ? "px-4 md:px-6 pt-3" : "pb-3";
+	return (
+		<>
+			<VerdictCard email={email} pad={pad} />
+			<BlockedByRuleBadge raw={email.blocked_by_rule} pad={pad} />
+			<RelayStatusBadge status={email.relay_status} pad={pad} />
+			<SendRiskBadge raw={email.send_risk} pad={pad} />
+		</>
+	);
+}
+
+/** Sender-blocklist `spam` rule that filed this message (spec
+ *  2026-09-27-sender-blocklist). Rendered outside the verdict card so it is
+ *  visible without expanding the card. */
+function BlockedByRuleBadge({ raw, pad }: { raw: string | null | undefined; pad: string }) {
+	if (!raw) return null;
+	let rule: { match?: unknown; tier?: unknown };
+	try {
+		rule = JSON.parse(raw) as { match?: unknown; tier?: unknown };
+	} catch {
+		return null;
+	}
+	if (typeof rule.match !== "string" || typeof rule.tier !== "string") return null;
+	return (
+		<div className={pad}>
+			<div className="rounded-lg border border-line bg-paper-2 px-3 py-2 text-xs text-ink-2">
+				{`Blocked by rule: ${rule.match} (${rule.tier})`}
+			</div>
+		</div>
+	);
+}
+
+function VerdictCard({ email, pad }: { email: Email; pad: string }) {
 	const verdict = parseVerdict(email.security_verdict);
 	const [expanded, setExpanded] = useState(false);
 
 	if (!verdict) return null;
-	// Quiet path for the normal allow case, but surface hard-block /
-	// attachment-block explicitly even when the user is reading the
-	// quarantined message.
-	if (
-		verdict.action === "allow" &&
-		verdict.triage !== "hard_block" &&
-		verdict.triage !== "attachment_block"
-	)
-		return null;
+	const trace = parseStageTrace(email.stage_trace);
 
 	const { borderClass, bgClass, iconColorClass, icon, headline } = ui(
 		verdict.action,
@@ -46,7 +89,7 @@ export default function SecurityVerdictPanel({ email }: { email: Email }) {
 	const contentId = `security-verdict-content-${email.id}`;
 
 	return (
-		<div className={`px-4 md:px-6 pt-3`}>
+		<div className={pad}>
 			<div className={`rounded-lg border ${borderClass} ${bgClass} text-sm`}>
 				<button
 					type="button"
@@ -90,6 +133,17 @@ export default function SecurityVerdictPanel({ email }: { email: Email }) {
 							</div>
 						)}
 
+						{verdict.auth.authservId && (
+							<div className="text-xs text-ink-3">
+								Auth results from {verdict.auth.authservId}
+								{verdict.auth.trusted === true
+									? " (trusted)"
+									: verdict.auth.trusted === false
+										? " (untrusted)"
+										: ""}
+							</div>
+						)}
+
 						{verdict.signals.length > 0 && (
 							<div>
 								<div className="text-xs font-medium text-ink-3 mb-1">
@@ -102,9 +156,51 @@ export default function SecurityVerdictPanel({ email }: { email: Email }) {
 								</ul>
 							</div>
 						)}
+
+						{trace && <ProvenanceList trace={trace} />}
 					</div>
 				)}
 			</div>
+		</div>
+	);
+}
+
+/** Per-stage score contributions — where the verdict's score came from. */
+function ProvenanceList({ trace }: { trace: StageRecord[] }) {
+	return (
+		<div>
+			<div className="text-xs font-medium text-ink-3 mb-1">Provenance</div>
+			<ul className="text-xs space-y-0.5" data-testid="verdict-provenance">
+				{trace.map((s) => (
+					<li
+						key={s.stage}
+						className="flex items-baseline gap-2"
+						data-stage={s.stage}
+						data-testid={`provenance-${s.stage}`}
+					>
+						<span className="text-ink w-32 shrink-0">
+							{STAGE_LABELS[s.stage] ?? s.stage}
+						</span>
+						<span className="pp-mono text-ink-3 w-16 shrink-0">
+							{s.stage === "verdict"
+								? `score ${s.score_contrib}`
+								: s.score_contrib > 0
+									? `+${s.score_contrib}`
+									: s.score_contrib < 0
+										? `−${-s.score_contrib}`
+										: "0"}
+						</span>
+						{s.status !== "ok" && (
+							<span className="text-suspect shrink-0">{s.status.replace("_", " ")}</span>
+						)}
+						{s.reason && (
+							<span className="text-ink-3 truncate" title={s.reason}>
+								{s.reason}
+							</span>
+						)}
+					</li>
+				))}
+			</ul>
 		</div>
 	);
 }
@@ -131,6 +227,14 @@ function ui(action: string) {
 				icon: <ShieldIcon size={16} weight="bold" />,
 				headline: "Flagged as suspicious",
 			};
+		case "allow":
+			return {
+				borderClass: "border-line",
+				bgClass: "bg-paper-3",
+				iconColorClass: "text-safe",
+				icon: <ShieldCheckIcon size={16} />,
+				headline: "Allowed by security pipeline",
+			};
 		default:
 			return {
 				borderClass: "border-line",
@@ -140,6 +244,83 @@ function ui(action: string) {
 				headline: "Security verdict",
 			};
 	}
+}
+
+const RELAY_UI: Record<RelayStatus, { colorClass: string; icon: ReactNode; title: string }> = {
+	relayed: {
+		colorClass: "text-safe",
+		icon: <PaperPlaneTiltIcon size={14} />,
+		title: "Relayed to the backend mail server",
+	},
+	held: {
+		colorClass: "text-suspect",
+		icon: <PauseCircleIcon size={14} />,
+		title: "Held in PhishSOC; not relayed to the backend",
+	},
+	dropped: {
+		colorClass: "text-danger",
+		icon: <ProhibitIcon size={14} />,
+		title: "Dropped by the domain relay policy; not relayed to the backend",
+	},
+	failed: {
+		colorClass: "text-danger",
+		icon: <WarningCircleIcon size={14} />,
+		title: "Relay to the backend failed permanently; the copy here was kept",
+	},
+};
+
+/** Inline-gateway relay outcome (#581). Renders nothing for NULL or an
+ * unrecognised value: NULL means the domain has no relay policy. */
+function RelayStatusBadge({ status, pad }: { status?: RelayStatus | null; pad: string }) {
+	const cfg = status ? RELAY_UI[status] : undefined;
+	if (!status || !cfg) return null;
+	return (
+		<div className={pad}>
+			<span
+				className="inline-flex items-center gap-1 text-xs rounded border border-line px-1.5 py-0.5 bg-paper-3"
+				title={cfg.title}
+				data-testid="relay-status-badge"
+			>
+				<span className={cfg.colorClass}>{cfg.icon}</span>
+				<span className="text-ink-3">gateway relay</span>
+				<span className={`font-medium ${cfg.colorClass}`}>{status}</span>
+			</span>
+		</div>
+	);
+}
+
+const SEND_TIER_UI = {
+	0: { colorClass: "text-ink-3", label: "no step-up needed" },
+	1: { colorClass: "text-suspect", label: "tier 1" },
+	2: { colorClass: "text-danger", label: "tier 2" },
+} as const;
+
+/** Outbound send-risk gate decision recorded on sent mail. Renders nothing
+ * for inbound mail or sends that predate the send_risk column. */
+function SendRiskBadge({ raw, pad }: { raw?: string | null; pad: string }) {
+	const record = parseSendRisk(raw);
+	if (!record) return null;
+	const cfg = SEND_TIER_UI[record.tier] ?? SEND_TIER_UI[0];
+	return (
+		<div className={pad} data-testid="send-risk-badge">
+			<span className="inline-flex items-center gap-1 text-xs rounded border border-line px-1.5 py-0.5 bg-paper-3">
+				<span className="text-ink-3">send risk</span>
+				<span className={`font-medium ${cfg.colorClass}`}>{cfg.label}</span>
+				{record.confirmed && (
+					<span className="inline-flex items-center gap-0.5 text-safe" title="Step-up confirmation was verified for this send">
+						<FingerprintIcon size={12} /> verified
+					</span>
+				)}
+			</span>
+			{record.reasons.length > 0 && (
+				<ul className="mt-1 text-xs text-ink-3 list-disc ml-4 space-y-0.5">
+					{record.reasons.map((r, i) => (
+						<li key={i}>{r}</li>
+					))}
+				</ul>
+			)}
+		</div>
+	);
 }
 
 function AuthChip({ label, value }: { label: string; value: string }) {

@@ -656,6 +656,129 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_sidecar_audit_gmail_message_id ON sidecar_audit(gmail_message_id);
         `,
 	},
+	{
+		// Outbound send-risk history (follow-up to #15). `emails.send_risk`
+		// holds the JSON send-risk record (tier, reasons, whether a step-up
+		// token was verified) for rows written to SENT, so every outbound
+		// message carries the gate decision that let it through. NULL for
+		// inbound mail and pre-migration sends.
+		//
+		// `recipient_graph` is the outbound mirror of `sender_reputation`:
+		// one row per address this mailbox has sent to, upserted by
+		// `createEmail` whenever a SENT row is written (see
+		// workers/durableObject/recipient-graph.ts). It powers the stateful
+		// send-risk signals — first-time recipient, lookalike recipient
+		// domain, and the opt-in established-correspondent trust.
+		//
+		// The trailing INSERT backfills the graph from existing SENT rows so
+		// long-standing correspondents are not reported as first-time on the
+		// first send after deploy. Recipient columns are the lowercased,
+		// ", "-joined validated addresses every send path writes; the
+		// recursive CTE splits them on commas. Entries that do not look like
+		// a bare address are skipped.
+		name: "32_send_risk_recipient_graph",
+		sql: `
+            ALTER TABLE emails ADD COLUMN send_risk TEXT;
+            CREATE TABLE IF NOT EXISTS recipient_graph (
+                address TEXT PRIMARY KEY,
+                domain TEXT NOT NULL,
+                send_count INTEGER NOT NULL DEFAULT 1,
+                first_sent TEXT NOT NULL,
+                last_sent TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recipient_graph_domain ON recipient_graph(domain);
+            WITH RECURSIVE split(sent_at, rest, addr) AS (
+                SELECT date,
+                       lower(coalesce(recipient, '') || ',' || coalesce(cc, '') || ',' || coalesce(bcc, '')) || ',',
+                       ''
+                FROM emails
+                WHERE folder_id = 'sent' AND date IS NOT NULL
+                UNION ALL
+                SELECT sent_at,
+                       substr(rest, instr(rest, ',') + 1),
+                       trim(substr(rest, 1, instr(rest, ',') - 1))
+                FROM split
+                WHERE rest <> ''
+            )
+            INSERT INTO recipient_graph (address, domain, send_count, first_sent, last_sent)
+            SELECT addr, substr(addr, instr(addr, '@') + 1), COUNT(*), MIN(sent_at), MAX(sent_at)
+            FROM split
+            WHERE addr LIKE '_%@_%' AND instr(addr, ' ') = 0 AND instr(addr, '<') = 0
+            GROUP BY addr;
+        `,
+	},	{
+		// Outbound LLM send-risk verdict cache (slice 3). Preflight classifies
+		// the text the user wrote and stores the verdict here so the send gate
+		// usually reuses it instead of waiting on the model. `key` is a SHA-256
+		// of the classifier input (model + subject + new text + quoted
+		// context), not the step-up payload hash. Rows older than the TTL in
+		// `send-risk-llm-cache.ts` are ignored on read and pruned on write.
+		name: "33_send_risk_llm_cache",
+		sql: `
+            CREATE TABLE IF NOT EXISTS send_risk_llm_cache (
+                key TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_send_risk_llm_cache_created ON send_risk_llm_cache(created_at);
+        `,
+	},
+	{
+		// Sender blocklist audit log (spec 2026-09-27-sender-blocklist). One
+		// row per dropped/rejected inbound message — those are never stored,
+		// so this is the only trace. message_id UNIQUE + INSERT OR IGNORE
+		// absorbs sidecar at-least-once replays (NULLs never collide).
+		// Pruned on insert to 500 rows / 30 days (blocked-log.ts).
+		name: "34_blocked_log",
+		sql: `
+            CREATE TABLE IF NOT EXISTS blocked_log (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts         TEXT NOT NULL,
+                rule_id    TEXT NOT NULL,
+                tier       TEXT NOT NULL,
+                action     TEXT NOT NULL,
+                sender     TEXT NOT NULL,
+                subject    TEXT NOT NULL,
+                message_id TEXT UNIQUE
+            );
+            CREATE INDEX IF NOT EXISTS idx_blocked_log_ts ON blocked_log(ts DESC);
+        `,
+	},
+	{
+		// Rule that filed a message into Spam (JSON {id, match, tier}); NULL
+		// otherwise. Read by SecurityVerdictPanel. Forward-only ALTER.
+		name: "35_emails_blocked_by_rule",
+		sql: `ALTER TABLE emails ADD COLUMN blocked_by_rule TEXT;`,
+	},
+	{
+		// Per-email user feedback label (issue #751). One row per email
+		// (PK = email_id) so a repeat click is a no-op. verdict_action /
+		// verdict_score snapshot the stored verdict at click time so the
+		// label is ground truth for the verdict the user actually saw.
+		// ON DELETE CASCADE drops the label with the email.
+		name: "36_email_feedback",
+		sql: `
+            CREATE TABLE IF NOT EXISTS email_feedback (
+                email_id       TEXT PRIMARY KEY REFERENCES emails(id) ON DELETE CASCADE,
+                label          TEXT NOT NULL,
+                created_at     TEXT NOT NULL,
+                verdict_action TEXT,
+                verdict_score  INTEGER
+            );
+        `,
+	},
+	{
+		// Analyst-triggered Cloudflare URL Scanner result (#754), per URL row.
+		name: "37_url_scanner",
+		sql: `
+            ALTER TABLE urls ADD COLUMN scan_uuid TEXT;
+            ALTER TABLE urls ADD COLUMN scan_status TEXT;
+            ALTER TABLE urls ADD COLUMN scan_malicious INTEGER;
+            ALTER TABLE urls ADD COLUMN scan_categories TEXT;
+            ALTER TABLE urls ADD COLUMN scan_final_url TEXT;
+        `,
+	},
 ];
 
 /**

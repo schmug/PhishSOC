@@ -1,0 +1,40 @@
+# gitleaks configuration for PhishSOC
+#
+# Scoped allowlist for PEM *headers* that appear in key-generation helpers and
+# in the planning docs that quote them. See schmug/PhishSOC#681 for the triage.
+#
+# No private key material is committed to this repo. Every `private-key` hit is
+# the literal string `-----BEGIN PRIVATE KEY-----` sitting in code that either
+# (a) interpolates a keypair generated at runtime via crypto.subtle.generateKey,
+# or (b) uses an obvious placeholder body such as `not-a-key`.
+#
+# Design note: these match the PEM DELIMITER plus a non-base64 body, NOT the
+# file path. Allowlisting `docs/superpowers/plans/**` would be the tempting
+# shortcut and is exactly wrong — planning docs are where someone pastes a real
+# value while thinking out loud. A real key in any of these files still fires,
+# because a real key has a base64 body where these have `${...}` or a stub.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "PEM headers in runtime-keygen helpers and the plans quoting them (see #681)"
+regexTarget = "line"
+regexes = [
+  # Template interpolation of a key generated in-test:
+  #   `-----BEGIN PRIVATE KEY-----\n${pkcs8.match(...)}` / `${b64.match(...)}`
+  #   tests/lib/gateway-relay.test.ts, and the two plan docs that quote it
+  '''BEGIN PRIVATE KEY-----\\n\$\{(?:pkcs8|b64)\.match''',
+
+  # Explicit placeholder bodies, never valid key material.
+  #   tests/lib/gateway-relay.test.ts (`not-a-key`)
+  #   tests/providers/gmail-client.test.ts (single-char `x`, history only)
+  '''BEGIN PRIVATE KEY-----\\n(?:not-a-key|x)\\n-----END PRIVATE KEY-----''',
+]
+
+[[allowlists]]
+description = "Mock invite token in a frontend test fixture (see #681)"
+regexes = [
+  # tests/frontend/hub-invite-modal.test.tsx — mocked API response
+  '''^tok-abcdef-123456$''',
+]
