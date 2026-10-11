@@ -34,6 +34,8 @@ export const emails = sqliteTable("emails", {
 	// Email Routing ingest and pre-#593 rows.
 	provider_message_id: text("provider_message_id"),
 	raw_headers: text("raw_headers"),
+	// Sender-blocklist rule that routed this message to Spam (JSON {id, match, tier}).
+	blocked_by_rule: text("blocked_by_rule"),
 	security_verdict: text("security_verdict"),
 	security_score: integer("security_score"),
 	security_explanation: text("security_explanation"),
@@ -51,6 +53,10 @@ export const emails = sqliteTable("emails", {
 	// predates the gateway feature).
 	relay_status: text("relay_status"),
 	created_by: text("created_by").default("user"),
+	// Outbound send-risk record (JSON `SendRiskRecord`, see
+	// workers/security/send-risk.ts) for rows written to SENT. NULL for
+	// inbound mail and sends that predate migration 32.
+	send_risk: text("send_risk"),
 });
 
 export const attachments = sqliteTable("attachments", {
@@ -82,6 +88,11 @@ export const urls = sqliteTable("urls", {
 	page_title: text("page_title"),
 	fetch_status: text("fetch_status").default("pending"),
 	verdict: text("verdict"),
+	scan_uuid: text("scan_uuid"),
+	scan_status: text("scan_status"),
+	scan_malicious: integer("scan_malicious"),
+	scan_categories: text("scan_categories"),
+	scan_final_url: text("scan_final_url"),
 	created_at: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
 });
 
@@ -129,6 +140,18 @@ export const senderGraph = sqliteTable(
 		pk: primaryKey({ columns: [t.sender_name, t.sender_address] }),
 	}),
 );
+
+// Outbound mirror of `sender_reputation`: one row per address this mailbox
+// has sent to. Upserted whenever a SENT row is written; read by the
+// stateful send-risk signals (first-time recipient, lookalike domain,
+// established-correspondent trust). See workers/durableObject/recipient-graph.ts.
+export const recipientGraph = sqliteTable("recipient_graph", {
+	address: text("address").primaryKey(),
+	domain: text("domain").notNull(),
+	send_count: integer("send_count").notNull().default(1),
+	first_sent: text("first_sent").notNull(),
+	last_sent: text("last_sent").notNull(),
+});
 
 // ── Threat intel ─────────────────────────────────────────────────
 
@@ -289,4 +312,16 @@ export const dmarcRufRecords = sqliteTable("dmarc_ruf_records", {
 	feedback_type: text("feedback_type"),
 	auth_results: text("auth_results"),
 	original_headers: text("original_headers"),
+});
+
+// User feedback label per email (issue #751). Stored and exported only —
+// never read by the scoring pipeline.
+export const emailFeedback = sqliteTable("email_feedback", {
+	email_id: text("email_id")
+		.primaryKey()
+		.references(() => emails.id, { onDelete: "cascade" }),
+	label: text("label").notNull(),
+	created_at: text("created_at").notNull(),
+	verdict_action: text("verdict_action"),
+	verdict_score: integer("verdict_score"),
 });

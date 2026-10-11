@@ -261,6 +261,36 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 		expect(cases.get(body.caseId)?.score).toBe(78);
 	});
 
+	it("report-phish: records link hosts in canonical form", async () => {
+		const { stub, cases } = makeStub({
+			em_1: {
+				id: "em_1",
+				subject: "Account notice",
+				sender: "ceo@evil.example",
+				body: "<p>Click https://Phish.Example./login</p>",
+				date: "2026-05-01T00:00:00Z",
+				security_score: 50,
+				stage_trace: null,
+			},
+		});
+		const app = makeApp(stub);
+
+		const res = await app.request(
+			"/api/v1/mailboxes/m1/cases/report-phish",
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ emailId: "em_1" }),
+			},
+			fakeEnv,
+			fakeCtx,
+		);
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { caseId: string };
+		const domains = cases.get(body.caseId)?.observables.filter((o) => o.kind === "domain").map((o) => o.value);
+		expect(domains).toEqual(["phish.example"]);
+	});
+
 	it("report-phish: persists score=null when the originating email has no security_score", async () => {
 		const { stub, createCalls, cases } = makeStub({
 			em_unscored: {

@@ -52,4 +52,12 @@ describe("mergeOrgSettingsPut — preserve server-managed keys", () => {
 		const merged = mergeOrgSettingsPut(current, incoming);
 		expect(merged.intel?.feeds).toEqual(incoming.intel?.feeds);
 	});
+
+	it("preserves the persisted blocklist and ignores an incoming one", () => {
+		const rule = { id: "r1", match: "podview.com", action: "drop" as const, created_at: "2026-09-27T00:00:00Z" };
+		const merged = mergeOrgSettingsPut({ blocklist: [rule] }, { agentModel: "x", blocklist: [] });
+		expect(merged.blocklist).toEqual([rule]);
+		const mergedNone = mergeOrgSettingsPut({}, { blocklist: [rule] });
+		expect(mergedNone.blocklist).toBeUndefined();
+	});
 });

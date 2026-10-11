@@ -365,6 +365,29 @@ describe("DomainSettings · Inline gateway relay card (#32 task 13)", () => {
 		});
 	});
 
+	it("saves a typed port of 0 as 0 (server rejects it) — only an unparseable port falls back to 587", async () => {
+		const user = userEvent.setup();
+		domainSettingsFixture = {
+			domain: "acme.com",
+			settings: { relay: { enabled: true, target: { host: "relay.example.com" } } },
+		};
+		renderDomainSettings();
+
+		const port = await screen.findByLabelText(/^port$/i);
+		await user.clear(port);
+		await user.type(port, "0");
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+		let relay = mutateAsync.mock.calls[0][0].relay as { target: { port: number } };
+		expect(relay.target.port).toBe(0);
+
+		await user.clear(port);
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+		relay = mutateAsync.mock.calls[1][0].relay as { target: { port: number } };
+		expect(relay.target.port).toBe(587);
+	});
+
 	it("saves { enabled: false } when the toggle is left off (server strips it)", async () => {
 		const user = userEvent.setup();
 		domainSettingsFixture = { domain: "acme.com", settings: {} };

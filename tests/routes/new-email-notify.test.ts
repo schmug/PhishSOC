@@ -45,6 +45,7 @@ vi.mock("../../workers/security/yaramail-signal", () => ({
 }));
 
 import { receiveEmail } from "../../workers/index";
+import { clearDomainSettingsCache } from "../../workers/lib/domain-settings";
 import { resolveMailboxSettings } from "../../workers/lib/mailbox-settings";
 import { runSecurityPipeline } from "../../workers/security";
 import { isDmarcReport, ingestDmarcReport, isDmarcRuf, ingestDmarcRuf } from "../../workers/dmarc/ingest";
@@ -307,6 +308,58 @@ describe("receiveEmail — new-mail ops-visibility webhook (issue #563)", () => 
 
 		expect(stub.createEmail).toHaveBeenCalledOnce();
 		expect((stub as Record<string, unknown>).setRelayStatus).toBeUndefined();
+	});
+});
+
+/**
+ * Relay-status persistence (issue #581). A policy-dropped message must store
+ * a distinct `dropped` status: NULL is reserved for "domain has no relay
+ * policy", so leaving drops NULL made the two indistinguishable in the UI.
+ */
+describe("receiveEmail — inline-gateway relay_status (issue #581)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		clearDomainSettingsCache();
+		mockedResolve.mockResolvedValue(makeSettings());
+		mockedIsDmarcReport.mockReturnValue(false);
+		mockedIsDmarcRuf.mockReturnValue(false);
+		mockedIsTlsRptReport.mockReturnValue(false);
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+	});
+
+	afterEach(() => {
+		// The relay policy below is cached per domain at module scope; clear it
+		// so later suites (whose BUCKET has no `get`) don't inherit it.
+		clearDomainSettingsCache();
+		vi.restoreAllMocks();
+	});
+
+	it("records relay_status=dropped (not NULL) when the domain policy drops a block verdict", async () => {
+		mockedPipeline.mockResolvedValue({
+			verdict: { action: "block", score: 95, signals: [], explanation: "" },
+			skipped: false,
+		} as never);
+		const stub = { ...makeMailboxStub(), setRelayStatus: vi.fn().mockResolvedValue(undefined) };
+		// Default relay action map sends `block → drop`, so the real
+		// relayAfterVerdict returns "dropped" without touching SMTP.
+		const domainSettings = { relay: { enabled: true, target: { host: "smtp-relay.gmail.com" } } };
+		const env = makeEnv(stub, {
+			BUCKET: {
+				head: vi.fn().mockResolvedValue({ key: `mailboxes/${MAILBOX_ID}.json` }),
+				put: vi.fn(),
+				get: vi.fn(async (key: string) =>
+					key === "domains/example.com.json" ? { etag: "e1", json: async () => domainSettings } : null,
+				),
+			},
+		});
+		const { ctx, settle } = makeCtx();
+
+		await receiveEmail(makeNormalized(makeEmail()), env, ctx);
+		await settle();
+
+		const created = stub.createEmail.mock.calls[0][1] as { id: string };
+		expect(stub.setRelayStatus).toHaveBeenCalledOnce();
+		expect(stub.setRelayStatus).toHaveBeenCalledWith(created.id, "dropped");
 	});
 });
 

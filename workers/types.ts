@@ -25,6 +25,14 @@ export interface Env extends Cloudflare.Env {
 	 */
 	CROWDSEC_CTI_API_KEY?: string;
 	/**
+	 * Cloudflare URL Scanner (#754). Both must be set for the analyst "Scan
+	 * this URL" action; otherwise it is disabled. Token needs Account → URL
+	 * Scanner → Edit. `URLSCAN_MONTHLY_CAP` overrides the default 450.
+	 */
+	URLSCAN_API_TOKEN?: string;
+	URLSCAN_ACCOUNT_ID?: string;
+	URLSCAN_MONTHLY_CAP?: string;
+	/**
 	 * HS256 signing secret for one-shot confirmation tokens.
 	 * Set with `wrangler secret put CONFIRMATION_TOKEN_SECRET`.
 	 * When absent, the confirm endpoint returns 503.

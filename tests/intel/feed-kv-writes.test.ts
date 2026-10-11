@@ -17,7 +17,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkUrlAgainstFeeds, refreshAllFeeds } from "../../workers/intel/feeds";
+import { checkUrlAgainstFeeds, FEED_BLOB_FORMAT, feedBloomKeys, refreshAllFeeds } from "../../workers/intel/feeds";
 import { addToBloom, createBloom, serializeBloom } from "../../workers/intel/bloom";
 import { clearOrgSettingsCache } from "../../workers/lib/org-settings";
 import { clearDomainSettingsCache } from "../../workers/lib/domain-settings";
@@ -29,31 +29,38 @@ const MAILBOX_ID = "user@example.com";
 
 function makeCountingKv() {
 	const store = new Map<string, string | Uint8Array>();
+	const meta = new Map<string, unknown>();
 	const putKeys: string[] = [];
-	const putCalls: Array<{ key: string; opts?: { expirationTtl?: number } }> = [];
+	const putCalls: Array<{ key: string; opts?: { expirationTtl?: number; metadata?: unknown } }> = [];
+	async function get(key: string, type?: "text" | "arrayBuffer") {
+		const val = store.get(key);
+		if (val === undefined) return null;
+		if (type === "arrayBuffer") {
+			return val instanceof Uint8Array ? val.buffer : null;
+		}
+		if (type === "text") {
+			return typeof val === "string" ? val : null;
+		}
+		return val;
+	}
 	return {
 		store,
+		meta,
 		putKeys,
 		putCalls,
-		async get(key: string, type?: "text" | "arrayBuffer") {
-			const val = store.get(key);
-			if (val === undefined) return null;
-			if (type === "arrayBuffer") {
-				return val instanceof Uint8Array ? val.buffer : null;
-			}
-			if (type === "text") {
-				return typeof val === "string" ? val : null;
-			}
-			return val;
+		get,
+		async getWithMetadata(key: string, type?: "text" | "arrayBuffer") {
+			return { value: await get(key, type), metadata: meta.get(key) ?? null };
 		},
 		async put(
 			key: string,
 			value: string | Uint8Array | ArrayBuffer,
-			opts?: { expirationTtl?: number },
+			opts?: { expirationTtl?: number; metadata?: unknown },
 		) {
 			putKeys.push(key);
 			putCalls.push({ key, opts });
 			store.set(key, value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+			meta.set(key, opts?.metadata ?? null);
 		},
 	};
 }
@@ -455,11 +462,12 @@ describe("blob TTL renewal on 304 (#484)", () => {
 	/** Seed both required blobs for a url-kind feed, returning the seeded values. */
 	function seedUrlBlobs(kv: ReturnType<typeof makeCountingKv>) {
 		const bloom = createBloom(10);
-		addToBloom(bloom, "https://evil.example/phish");
+		for (const k of feedBloomKeys(["https://evil.example/phish"], "url")) addToBloom(bloom, k);
 		const bloomBytes = serializeBloom(bloom);
 		const exactJson = JSON.stringify(["https://evil.example/phish"]);
 		kv.store.set("intel:test-feed:bloom", bloomBytes);
 		kv.store.set("intel:test-feed:exact-blob", exactJson);
+		kv.meta.set("intel:test-feed:exact-blob", { format: FEED_BLOB_FORMAT });
 		return { bloomBytes, exactJson };
 	}
 
@@ -491,6 +499,8 @@ describe("blob TTL renewal on 304 (#484)", () => {
 		// rewrite-same-value renewal: blob contents unchanged
 		expect(kv.store.get("intel:test-feed:bloom")).toEqual(bloomBytes);
 		expect(kv.store.get("intel:test-feed:exact-blob")).toBe(exactJson);
+		// the format marker survives renewal (a put without metadata drops it)
+		expect(kv.meta.get("intel:test-feed:exact-blob")).toEqual({ format: FEED_BLOB_FORMAT });
 	});
 
 	it("304 on an ip-cidr feed re-puts the cidrs blob (write count = 1)", async () => {
@@ -607,6 +617,71 @@ describe("blob TTL renewal on 304 (#484)", () => {
 			"intel:test-feed:bloom",
 			"intel:test-feed:exact-blob",
 		]);
+	});
+
+	it("blobs without the current format marker → fetch omits If-None-Match and a 200 rebuilds all blobs", async () => {
+		const captured: Array<Record<string, string>> = [];
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			captured.push({ ...((init?.headers as Record<string, string>) ?? {}) });
+			return new Response(feedBody(5), { status: 200 });
+		});
+		const kv = makeCountingKv();
+		// Blobs from an older build: no format metadata. The bloom answers yes
+		// for the path key (as a small legacy bloom can by false positive), so
+		// only the persisted marker can tell the format.
+		const legacy = createBloom(10);
+		for (const k of feedBloomKeys(["https://evil.example/phish"], "url")) addToBloom(legacy, k);
+		kv.store.set("intel:test-feed:bloom", serializeBloom(legacy));
+		kv.store.set("intel:test-feed:exact-blob", JSON.stringify(["https://evil.example/phish"]));
+		const { env } = makeEnv({
+			mailboxSettings: urlFeedSettings(),
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 1,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		expect(captured).toHaveLength(1);
+		expect(captured[0]).not.toHaveProperty("If-None-Match");
+		expect([...kv.putKeys].sort()).toEqual([
+			"intel:test-feed:bloom",
+			"intel:test-feed:exact-blob",
+		]);
+		expect(kv.meta.get("intel:test-feed:exact-blob")).toEqual({ format: FEED_BLOB_FORMAT });
+	});
+
+	it("a forced rebuild drops configured conditional headers (any case)", async () => {
+		const captured: Array<Record<string, string>> = [];
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			captured.push({ ...((init?.headers as Record<string, string>) ?? {}) });
+			return new Response(feedBody(5), { status: 200 });
+		});
+		const kv = makeCountingKv(); // no blobs: nothing a 304 could vouch for
+		const settings = urlFeedSettings();
+		const feed = settings.intel.feeds[0] as Record<string, unknown>;
+		feed.headers = {
+			"if-none-match": '"configured"',
+			"If-Modified-Since": "Sat, 26 Sep 2026 00:00:00 GMT",
+			"X-Feed-Client": "phishsoc",
+		};
+		const { env } = makeEnv({
+			mailboxSettings: settings,
+			kv,
+			feedState: makeFeedState({
+				etag: '"abc"',
+				last_fetched_at: staleFetchedAt(8),
+				entry_count: 5,
+			}),
+		});
+
+		await refreshAllFeeds(env);
+
+		expect(captured).toHaveLength(1);
+		expect(captured[0]).toEqual({ "X-Feed-Client": "phishsoc" });
 	});
 
 	it("304 to an unconditional request (blobs missing) fails the refresh without marking it fresh", async () => {
