@@ -36,14 +36,18 @@ const MAILBOX_ID = "user@example.com";
 
 function makeKv() {
 	const store = new Map<string, string | Uint8Array>();
+	async function get(key: string, type?: "text" | "arrayBuffer") {
+		const val = store.get(key);
+		if (val === undefined) return null;
+		if (type === "arrayBuffer") return val instanceof Uint8Array ? val.buffer : null;
+		if (type === "text") return typeof val === "string" ? val : null;
+		return val;
+	}
 	return {
 		store,
-		async get(key: string, type?: "text" | "arrayBuffer") {
-			const val = store.get(key);
-			if (val === undefined) return null;
-			if (type === "arrayBuffer") return val instanceof Uint8Array ? val.buffer : null;
-			if (type === "text") return typeof val === "string" ? val : null;
-			return val;
+		get,
+		async getWithMetadata(key: string, type?: "text" | "arrayBuffer") {
+			return { value: await get(key, type), metadata: null };
 		},
 		async put(key: string, value: string | Uint8Array | ArrayBuffer) {
 			store.set(key, value instanceof ArrayBuffer ? new Uint8Array(value) : value);

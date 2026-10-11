@@ -88,6 +88,11 @@ export const urls = sqliteTable("urls", {
 	page_title: text("page_title"),
 	fetch_status: text("fetch_status").default("pending"),
 	verdict: text("verdict"),
+	scan_uuid: text("scan_uuid"),
+	scan_status: text("scan_status"),
+	scan_malicious: integer("scan_malicious"),
+	scan_categories: text("scan_categories"),
+	scan_final_url: text("scan_final_url"),
 	created_at: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
 	// `ExtractedUrl.hostname` verbatim, for the link-domains dashboard rollup
 	// (issue #740). NULL for rows stored before this column was added — the
@@ -311,4 +316,16 @@ export const dmarcRufRecords = sqliteTable("dmarc_ruf_records", {
 	feedback_type: text("feedback_type"),
 	auth_results: text("auth_results"),
 	original_headers: text("original_headers"),
+});
+
+// User feedback label per email (issue #751). Stored and exported only —
+// never read by the scoring pipeline.
+export const emailFeedback = sqliteTable("email_feedback", {
+	email_id: text("email_id")
+		.primaryKey()
+		.references(() => emails.id, { onDelete: "cascade" }),
+	label: text("label").notNull(),
+	created_at: text("created_at").notNull(),
+	verdict_action: text("verdict_action"),
+	verdict_score: integer("verdict_score"),
 });

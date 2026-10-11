@@ -88,7 +88,7 @@ export interface SecuritySettings {
 	ruf_ingestion?: RufIngestionSettings;
 	mitigations?: { dmarc_pass_compensates_method_fail?: boolean };
 	classification?: ClassificationSettings;
-	detectors?: { sender_graph?: { enabled?: boolean } };
+	detectors?: { sender_graph?: { enabled?: boolean }; own_domain_lookalike?: { enabled?: boolean } };
 	send_risk?: { trust_known_recipients?: boolean; llm_enabled?: boolean; classifier_model?: string };
 }
 
@@ -207,6 +207,13 @@ export interface Email {
 	// Per-stage pipeline trace as raw JSON (parse with ~/lib/stage-trace);
 	// present on the single-email and thread endpoints, not on list rows
 	stage_trace?: string | null;
+	/** User feedback label (#751); present on the single-email endpoint, null when unlabeled. */
+	feedback?: {
+		label: "not_phish";
+		created_at: string;
+		verdict_action: string | null;
+		verdict_score: number | null;
+	} | null;
 	// Inline-gateway relay outcome (#32/#581); null when the domain has no relay policy
 	relay_status?: RelayStatus | null;
 	// Outbound send-risk gate decision (JSON SendRiskRecord); set on sent mail only

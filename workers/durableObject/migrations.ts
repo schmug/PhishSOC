@@ -752,12 +752,40 @@ export const mailboxMigrations: Migration[] = [
 		sql: `ALTER TABLE emails ADD COLUMN blocked_by_rule TEXT;`,
 	},
 	{
+		// Per-email user feedback label (issue #751). One row per email
+		// (PK = email_id) so a repeat click is a no-op. verdict_action /
+		// verdict_score snapshot the stored verdict at click time so the
+		// label is ground truth for the verdict the user actually saw.
+		// ON DELETE CASCADE drops the label with the email.
+		name: "36_email_feedback",
+		sql: `
+            CREATE TABLE IF NOT EXISTS email_feedback (
+                email_id       TEXT PRIMARY KEY REFERENCES emails(id) ON DELETE CASCADE,
+                label          TEXT NOT NULL,
+                created_at     TEXT NOT NULL,
+                verdict_action TEXT,
+                verdict_score  INTEGER
+            );
+        `,
+	},
+	{
+		// Analyst-triggered Cloudflare URL Scanner result (#754), per URL row.
+		name: "37_url_scanner",
+		sql: `
+            ALTER TABLE urls ADD COLUMN scan_uuid TEXT;
+            ALTER TABLE urls ADD COLUMN scan_status TEXT;
+            ALTER TABLE urls ADD COLUMN scan_malicious INTEGER;
+            ALTER TABLE urls ADD COLUMN scan_categories TEXT;
+            ALTER TABLE urls ADD COLUMN scan_final_url TEXT;
+        `,
+	},
+	{
 		// Link-domains dashboard rollup (issue #740): `urls.hostname` mirrors
 		// `ExtractedUrl.hostname` for URLs stored after this migration, so the
 		// dashboard can group by host/registrable-domain without re-parsing
 		// the stored `url` column. Forward-only ALTER — pre-migration rows
 		// stay NULL and are excluded from the rollup rather than backfilled.
-		name: "36_urls_hostname",
+		name: "38_urls_hostname",
 		sql: `
             ALTER TABLE urls ADD COLUMN hostname TEXT;
             CREATE INDEX IF NOT EXISTS idx_urls_hostname ON urls(hostname);

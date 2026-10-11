@@ -22,6 +22,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Folders } from "shared/folders";
 import BlockSenderButton from "~/components/BlockSenderButton";
+import NotPhishButton from "~/components/NotPhishButton";
 import ReportPhishButton from "~/components/ReportPhishButton";
 import type { Email, Folder } from "~/types";
 
@@ -193,6 +194,8 @@ export default function EmailPanelToolbar({
 			<MoveToFolderMenu folders={moveToFolders} onMove={onMove} />
 
 			<ReportPhishButton mailboxId={mailboxId} emailId={email.id} />
+
+			<NotPhishButton mailboxId={mailboxId} emailId={email.id} />
 
 			{!isDraftFolder ? (
 				<BlockSenderButton mailboxId={mailboxId} email={email} isSidecar={isSidecar} />

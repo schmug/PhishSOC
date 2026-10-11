@@ -37,3 +37,6 @@ worker-configuration.d.ts
 /PATCHES/
 /PATCHES.json
 /PATCHES.md
+
+# Classifier eval: pulled mail, labels, results and bundles are private data.
+scripts/classifier-eval/data/

@@ -42,6 +42,7 @@ import {
 	scoreAttachment,
 } from "./attachment-checks";
 import { isHomographic, registrableDomain } from "../security/urls";
+import { normalizeHost } from "../lib/url-canonical";
 import { DEFAULT_THRESHOLDS } from "../security/verdict";
 
 export interface DeepScanInput {
@@ -234,6 +235,9 @@ async function scanUrls(
 			const feedMatch = await checkUrlAgainstFeeds(env, mailboxId, finalUrl).catch(() => null);
 			if (feedMatch?.confirmed) {
 				urlVerdict.push(`intel_match:${feedMatch.feedId}`);
+				score += 20;
+			} else if (feedMatch?.derived) {
+				urlVerdict.push(`intel_match_derived:${feedMatch.feedId}`);
 				score += 20;
 			}
 		}
@@ -602,8 +606,9 @@ function tierIndex(action: FinalVerdict["action"]): number {
 	}
 }
 
+/** Canonical host of a URL (see `normalizeHost`), or null when it has none. */
 function safeHost(url: string): string | null {
-	try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+	try { return normalizeHost(new URL(url).hostname); } catch { return null; }
 }
 
 function dedupe(items: string[]): string[] {
