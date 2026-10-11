@@ -1150,6 +1150,30 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 	}
 
+	/** Store a URL Scanner result (#754). Separate from `updateUrlScan` (deep-scan). */
+	async updateUrlScannerResult(
+		urlId: string,
+		data: {
+			scan_uuid: string;
+			scan_status: "pending" | "done";
+			scan_malicious?: boolean | null;
+			scan_categories?: string[];
+			scan_final_url?: string | null;
+		},
+	) {
+		this.db
+			.update(schema.urls)
+			.set({
+				scan_uuid: data.scan_uuid,
+				scan_status: data.scan_status,
+				scan_malicious: data.scan_malicious == null ? null : data.scan_malicious ? 1 : 0,
+				scan_categories: data.scan_categories ? JSON.stringify(data.scan_categories) : null,
+				scan_final_url: data.scan_final_url ?? null,
+			})
+			.where(eq(schema.urls.id, urlId))
+			.run();
+	}
+
 	async getAttachmentsForEmail(emailId: string) {
 		return this.db
 			.select()
