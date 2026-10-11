@@ -269,6 +269,10 @@ function mergeSecurityWithDefault(value: unknown): MailboxSecuritySettings {
 				...DEFAULT_DETECTOR_SETTINGS.sender_graph,
 				...(partial.detectors?.sender_graph ?? {}),
 			},
+			own_domain_lookalike: {
+				...DEFAULT_DETECTOR_SETTINGS.own_domain_lookalike,
+				...(partial.detectors?.own_domain_lookalike ?? {}),
+			},
 		},
 		send_risk: {
 			...DEFAULT_SECURITY_SETTINGS.send_risk,
