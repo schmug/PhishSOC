@@ -18,16 +18,41 @@
  * non-2xx response) is caught and logged here. When an execution context is
  * reachable the request is scheduled with `waitUntil`; otherwise it is still
  * issued, pre-`catch`ed so it cannot become an unhandled rejection.
+ *
+ * Request signing (issue #700): when `NEW_EMAIL_WEBHOOK_SIGNING_SECRET` is
+ * configured, every dispatch carries an `x-phishsoc-signature` header —
+ * Stripe's `t=<unix-seconds>,v1=<hex-hmac>` construction — computed with
+ * `hmacSha256Hex` (lifted from `workers/routes/yaramail-callback.ts`) over
+ * `${timestamp}.${rawBody}`, i.e. the exact serialized body about to be
+ * sent. Signing wraps whatever body is produced, so it applies identically
+ * regardless of payload shape. With no secret configured the request is
+ * byte-for-byte unchanged from before this feature existed.
  */
 
 import type { Env } from "../types";
 import type { AlertExecutionContext } from "./security-alert";
+import { hmacSha256Hex } from "./hmac";
+import {
+	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
+	type NewEmailWebhookFormat,
+	type ResolvedNewEmailWebhook,
+} from "./new-email-webhook-policy";
 
 /** Webhook request timeout — bounded so a hung endpoint can't pin a request. */
 const NEW_EMAIL_WEBHOOK_TIMEOUT_MS = 10_000;
 
-/** Cap on the subject text included in the outbound message. */
+/** Cap on the subject text included in the outbound chat message. */
 const MAX_SUBJECT_LENGTH = 120;
+
+/**
+ * Cap on the subject in a `json` payload. Far looser than the chat cap — a
+ * structured consumer wants the real subject, not a display-truncated one —
+ * but still bounded so a hostile 100KB subject can't balloon the request.
+ */
+const MAX_JSON_SUBJECT_LENGTH = 1000;
+
+/** Header carrying the outbound signature — see module doc for the format. */
+const SIGNATURE_HEADER = "x-phishsoc-signature";
 
 export interface NewEmailNotification {
 	mailboxId: string;
@@ -80,11 +105,47 @@ function buildMessageText(
 	}
 
 	let text = parts.join(" | ");
-	if (env.RP_ORIGIN) {
-		const link = `${env.RP_ORIGIN}/mailbox/${encodeURIComponent(mailboxId)}/emails/${encodeURIComponent(folder)}?email=${encodeURIComponent(messageId)}`;
-		text += ` | <${link}|open>`;
-	}
+	const link = buildDeepLink(env, notification);
+	if (link) text += ` | <${link}|open>`;
 	return text;
+}
+
+/** Deep link into the message, or undefined when RP_ORIGIN is unset. */
+function buildDeepLink(
+	env: Pick<Env, "RP_ORIGIN">,
+	{ mailboxId, messageId, folder }: NewEmailNotification,
+): string | undefined {
+	if (!env.RP_ORIGIN) return undefined;
+	return `${env.RP_ORIGIN}/mailbox/${encodeURIComponent(mailboxId)}/emails/${encodeURIComponent(folder)}?email=${encodeURIComponent(messageId)}`;
+}
+
+/**
+ * Structured payload for `format: "json"`.
+ *
+ * Deliberately does NOT run `sanitizeField`. That strip exists solely to stop
+ * attacker-controlled text forging chat `<url|text>` link syntax; `JSON.stringify`
+ * escapes safely, and stripping would corrupt legitimate subjects for a consumer
+ * that wants the real value. Rendering this into HTML is the receiver's problem,
+ * the same contract GitHub and Stripe webhooks operate under.
+ */
+function buildJsonPayload(
+	env: Pick<Env, "RP_ORIGIN">,
+	notification: NewEmailNotification,
+): Record<string, unknown> {
+	const subject = notification.subject || "";
+	return {
+		mailboxId: notification.mailboxId,
+		messageId: notification.messageId,
+		folder: notification.folder,
+		sender: notification.sender || "",
+		subject:
+			subject.length > MAX_JSON_SUBJECT_LENGTH
+				? subject.slice(0, MAX_JSON_SUBJECT_LENGTH)
+				: subject,
+		verdictAction: notification.verdictAction ?? null,
+		verdictScore: notification.verdictScore ?? null,
+		url: buildDeepLink(env, notification) ?? null,
+	};
 }
 
 /**
@@ -92,43 +153,254 @@ function buildMessageText(
  * any.
  *
  * No-ops silently when the webhook is unconfigured. Never throws and never
- * rejects into the caller. When `ctx` is supplied the request is scheduled
- * with `waitUntil`; otherwise the request is still issued fire-and-forget.
+ * rejects into the caller — `sendNotification`'s returned promise is always
+ * `.catch`ed before being handed to `waitUntil`, and calling an `async`
+ * function can itself never throw synchronously (any error, sync or async,
+ * becomes a promise rejection caught below). When `ctx` is supplied the
+ * request is scheduled with `waitUntil`; otherwise the request is still
+ * issued fire-and-forget.
  */
 export function dispatchNewEmailNotification(
-	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN">,
+	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN" | "NEW_EMAIL_WEBHOOK_SIGNING_SECRET">,
 	ctx: AlertExecutionContext | undefined,
 	notification: NewEmailNotification,
+	webhook: ResolvedNewEmailWebhook = { configured: false, secretName: null, format: "chat" },
 ): void {
-	const url = env.NEW_EMAIL_WEBHOOK_URL;
-	if (!url) return;
+	const target = resolveWebhookTarget(env, webhook);
+	if (!target) return;
 
-	try {
-		const text = buildMessageText(env, notification);
-		const request = fetch(url, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ text }),
-			signal: AbortSignal.timeout(NEW_EMAIL_WEBHOOK_TIMEOUT_MS),
+	const request = deliverNewEmailNotification(env, target, notification, webhook.format)
+		.then(({ ok, status }) => {
+			// Logged here rather than inside the delivery call: the test
+			// endpoint reports a non-2xx to the operator instead, and a
+			// swallowed log is the wrong outcome for an awaited caller.
+			if (!ok) console.error(`new-email webhook returned ${status}`);
 		})
-			.then((res) => {
-				if (!res.ok) {
-					console.error(`new-email webhook returned ${res.status}`);
-				}
-			})
-			.catch((err: unknown) => {
-				console.error(
-					"new-email webhook failed:",
-					err instanceof Error ? err.message : String(err),
-				);
-			});
-		ctx?.waitUntil(request);
-	} catch (err: unknown) {
-		// A synchronous failure (e.g. fetch/AbortSignal construction) must not
-		// propagate into email receipt.
-		console.error(
-			"new-email webhook dispatch error:",
-			err instanceof Error ? err.message : String(err),
-		);
+		.catch((err: unknown) => {
+			// Never log the signing secret or a computed signature — only the
+			// error message.
+			console.error(
+				"new-email webhook dispatch error:",
+				err instanceof Error ? err.message : String(err),
+			);
+		});
+	ctx?.waitUntil(request);
+}
+
+/**
+ * POST one notification and REPORT the outcome instead of swallowing it.
+ *
+ * Split out of `dispatchNewEmailNotification` so the settings UI's "Send
+ * test" button (`POST /api/v1/new-email-webhook/test`) drives this exact
+ * path — the same payload builders, the same signing, the same timeout — and
+ * can tell the operator what happened. A test that reimplemented delivery
+ * would verify a copy of the code rather than the code that runs on mail.
+ *
+ * Rejects on a transport failure (DNS, TLS, timeout); a non-2xx is a resolved
+ * `{ ok: false, status }`, since the request itself succeeded.
+ */
+export async function deliverNewEmailNotification(
+	env: Pick<Env, "RP_ORIGIN" | "NEW_EMAIL_WEBHOOK_SIGNING_SECRET">,
+	target: WebhookTarget,
+	notification: NewEmailNotification,
+	format: NewEmailWebhookFormat,
+): Promise<{ ok: boolean; status: number }> {
+	// Signing below covers whichever shape this produces: it operates on the
+	// serialized body, not on the payload's structure.
+	const payload =
+		format === "json"
+			? buildJsonPayload(env, notification)
+			: { text: buildMessageText(env, notification) };
+	const body = JSON.stringify(payload);
+	// Envelope headers spread over the default so an operator can set a
+	// destination-specific content-type.
+	const headers: Record<string, string> = {
+		"content-type": "application/json",
+		...target.headers,
+	};
+
+	// Signature is assigned AFTER the envelope's headers, deliberately: an
+	// envelope must not be able to override or suppress it. Silently
+	// unsigning a delivery by setting this key in a secret would defeat the
+	// feature with no error anywhere.
+	const signingSecret = env.NEW_EMAIL_WEBHOOK_SIGNING_SECRET;
+	if (signingSecret) {
+		const timestamp = Math.floor(Date.now() / 1000);
+		const signature = await hmacSha256Hex(signingSecret, `${timestamp}.${body}`);
+		headers[SIGNATURE_HEADER] = `t=${timestamp},v1=${signature}`;
 	}
+
+	const res = await fetch(target.url, {
+		method: "POST",
+		headers,
+		body,
+		signal: AbortSignal.timeout(NEW_EMAIL_WEBHOOK_TIMEOUT_MS),
+	});
+	return { ok: res.ok, status: res.status };
+}
+
+/**
+ * A synthetic notification for the "Send test" button.
+ *
+ * Deliberately routed through the real `buildMessageText` / `buildJsonPayload`
+ * so the format toggle and the HMAC signature are genuinely exercised — a
+ * bespoke test body would prove nothing about what real mail sends.
+ *
+ * The values are unmistakably synthetic on purpose: this lands in a live
+ * operator channel, and a consumer that opens a ticket per event must be able
+ * to tell this apart from mail. `scope` names the tier the operator clicked
+ * from, so a shared channel shows which config produced the message.
+ */
+export function buildTestNotification(scope: string): NewEmailNotification {
+	return {
+		mailboxId: `${scope}-settings-test`,
+		messageId: "webhook-test",
+		folder: "inbox",
+		sender: "phishsoc-webhook-test@invalid",
+		subject: "PhishSOC webhook test — no action needed",
+		verdictAction: "test",
+		verdictScore: 0,
+	};
+}
+
+/**
+ * Extra request headers, empty for the bare-URL form.
+ */
+export interface WebhookTarget {
+	url: string;
+	headers: Record<string, string>;
+}
+
+/**
+ * Why a secret did not yield a usable destination.
+ *
+ * The reason is carried rather than logged-and-dropped so the test endpoint
+ * can report which stage failed. Every `error` string here names the secret
+ * NAME only — never its value, which is a bearer credential.
+ */
+export type WebhookTargetResolution =
+	| { ok: true; target: WebhookTarget }
+	| { ok: false; error: string };
+
+/**
+ * Interpret a webhook secret's value.
+ *
+ * Two accepted forms. A bare URL string is the original shape and still the
+ * default — it suits chat incoming webhooks (Slack, Google Chat, Discord),
+ * which carry their credential in the query string. A JSON envelope
+ * `{"url": "...", "headers": {...}}` covers destinations that authenticate
+ * with a header instead; Cursor's automations endpoint requires
+ * `Authorization: Bearer`.
+ *
+ * Keeping both halves inside ONE operator-set secret is the security point.
+ * Settings name the secret and nothing else, so a settings write can never
+ * pair someone else's credential with a destination of its choosing — the
+ * confused-deputy hole that forced the `FEED_ALLOWED_HOSTS` allowlist in
+ * `workers/intel/feeds.ts` cannot open here, and no allowlist is needed.
+ *
+ * Mirrors `RELAY_CREDS_*`, which holds `{"user","pass"}` JSON parsed at use
+ * time in `workers/providers/smtp-relay.ts`.
+ *
+ * `label` is the secret NAME and is safe to log; the value never is.
+ */
+function parseWebhookSecret(value: string, label: string): WebhookTargetResolution {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		// Not JSON — the bare-URL form. A URL never parses as JSON.
+		return { ok: true, target: { url: value, headers: {} } };
+	}
+
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return {
+			ok: false,
+			error: `new-email webhook secret ${label} is neither a URL nor a {url, headers} envelope; sending nothing`,
+		};
+	}
+
+	const { url, headers } = parsed as { url?: unknown; headers?: unknown };
+	if (typeof url !== "string" || url.length === 0) {
+		// Fail closed. Falling back to the raw string would POST the literal
+		// JSON text as a URL, and there is no safe destination to guess.
+		return {
+			ok: false,
+			error: `new-email webhook secret ${label} envelope has no usable url; sending nothing`,
+		};
+	}
+
+	const out: Record<string, string> = {};
+	if (headers && typeof headers === "object" && !Array.isArray(headers)) {
+		for (const [key, headerValue] of Object.entries(headers as Record<string, unknown>)) {
+			// Drop a non-string value rather than coercing it — a malformed
+			// header is a misconfiguration, not something to guess at.
+			if (typeof headerValue === "string") out[key] = headerValue;
+		}
+	}
+	return { ok: true, target: { url, headers: out } };
+}
+
+/**
+ * Resolve ONE named secret to a destination.
+ *
+ * The prefix is re-checked here even though the Zod schema enforces it on
+ * write — a hand-edited R2 blob never passes through Zod, and without this
+ * check a settings write could name any secret in `env` (a signing key, an
+ * API token) and have its value POSTed to an operator-chosen endpoint. Same
+ * defense-in-depth as `SmtpRelayProvider` re-checking `RELAY_CREDS_`.
+ *
+ * Shared with the test endpoint deliberately: a second copy of this guard is
+ * exactly how that confused-deputy hole reopens.
+ */
+export function resolveWebhookSecretTarget(
+	env: unknown,
+	secretName: string,
+): WebhookTargetResolution {
+	if (!secretName.startsWith(NEW_EMAIL_WEBHOOK_SECRET_PREFIX)) {
+		return {
+			ok: false,
+			error: `new-email webhook secret ${secretName} must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}; sending nothing`,
+		};
+	}
+
+	const value = (env as Record<string, unknown>)[secretName];
+	if (typeof value !== "string" || value.length === 0) {
+		return {
+			ok: false,
+			error: `new-email webhook secret ${secretName} is not configured; sending nothing`,
+		};
+	}
+	return parseWebhookSecret(value, secretName);
+}
+
+/**
+ * Pick the destination for this email.
+ *
+ * No tier configured falls back to the legacy global `NEW_EMAIL_WEBHOOK_URL`,
+ * so a deployment that never touches settings keeps working unchanged.
+ *
+ * Once a tier IS configured there is deliberately NO fallback: a muted,
+ * half-written, or invalid tier sends nothing. Falling back would leak the
+ * mail to the wider channel the operator configured that tier to replace.
+ */
+function resolveWebhookTarget(
+	env: Pick<Env, "NEW_EMAIL_WEBHOOK_URL" | "RP_ORIGIN">,
+	webhook: ResolvedNewEmailWebhook,
+): WebhookTarget | undefined {
+	if (!webhook.configured) {
+		const globalUrl = env.NEW_EMAIL_WEBHOOK_URL;
+		if (!globalUrl) return undefined;
+		return unwrap(parseWebhookSecret(globalUrl, "NEW_EMAIL_WEBHOOK_URL"));
+	}
+
+	const name = webhook.secretName;
+	if (!name) return undefined;
+	return unwrap(resolveWebhookSecretTarget(env, name));
+}
+
+/** Log-and-drop, the fire-and-forget path's contract for a bad secret. */
+function unwrap(resolution: WebhookTargetResolution): WebhookTarget | undefined {
+	if (resolution.ok) return resolution.target;
+	console.error(resolution.error);
+	return undefined;
 }

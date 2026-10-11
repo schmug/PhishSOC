@@ -66,11 +66,65 @@ scoped to `/api/v1/confirm` from the Cloudflare dashboard.
 
 | Field | Value |
 | --- | --- |
-| **What it is** | Operator-configured chat webhook for ops-visibility "new mail" notifications (issue #563). When set, every inbound email that lands in a mailbox (except honeypot mail and ingested DMARC/TLS-RPT/RUF reports) POSTs a `{"text": "..."}` message here — the format Google Chat and Slack incoming webhooks both accept — with sender, subject, landing folder, verdict action, and a deep link into the message. This is a **separate, higher-volume** channel from `SECURITY_ALERT_WEBHOOK_URL` (that one is a low-volume security pager; see issue #511). |
+| **What it is** | Deployment-wide **fallback** chat webhook for ops-visibility "new mail" notifications (issue #563). Used only when no settings tier configures a webhook — see `NEW_EMAIL_WEBHOOK_*` below. When it applies, every inbound email that lands in a mailbox (except honeypot mail and ingested DMARC/TLS-RPT/RUF reports) POSTs a `{"text": "..."}` message here — the format Google Chat and Slack incoming webhooks both accept — with sender, subject, landing folder, verdict action, and a deep link into the message. This is a **separate, higher-volume** channel from `SECURITY_ALERT_WEBHOOK_URL` (that one is a low-volume security pager; see issue #511). |
 | **Where stored** | Cloudflare Workers secret — `wrangler secret put NEW_EMAIL_WEBHOOK_URL`. Kept out of `wrangler.jsonc` `vars` because the URL embeds credentials (a Google Chat incoming-webhook URL carries a `key` and `token` query string). |
 | **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role; the operator who created the Google Chat (or Slack) incoming webhook |
 | **Rotation cadence** | Whenever the destination chat space changes, or immediately if the URL is suspected leaked (it is a bearer credential — anyone with it can post to the space). Generate a new incoming webhook URL in Google Chat: space → Apps & integrations → Webhooks, then `wrangler secret put NEW_EMAIL_WEBHOOK_URL`. |
 | **If missing** | The new-mail notification dispatch silently no-ops; email receipt is unaffected. |
+
+### `NEW_EMAIL_WEBHOOK_*` — optional, per-tier
+
+| Field | Value |
+| --- | --- |
+| **What it is** | Per-mailbox / per-domain / per-org new-mail webhooks. A settings tier sets a `newEmailWebhook` block naming one of these secrets, and that tier's webhook replaces the global fallback for mail in its scope — so one mailbox can route to its own bot without clobbering the org-wide channel. |
+| **Where stored** | Cloudflare Workers secrets, one per destination — `wrangler secret put NEW_EMAIL_WEBHOOK_GROK`. The settings blob stores only the secret's **name**; the URL never lands in R2, because the settings GET endpoints return those blobs to any Access-authenticated client and a webhook URL is a bearer credential. |
+| **Secret value** | Either a bare URL (the default — right for Slack / Google Chat / Discord incoming webhooks, which carry their credential in the query string) **or** a JSON envelope for destinations that authenticate with a header: `{"url": "https://api.example.com/hook", "headers": {"Authorization": "Bearer …"}}`. Envelope headers are merged over `content-type`. A value that parses as JSON but has no usable `url` sends nothing rather than falling back. Keeping the destination and its credential in one operator-set secret is deliberate: settings name the secret and nothing more, so a settings write can never pair a credential with a destination of its choosing, and no host allowlist is required. |
+| **Naming** | The name MUST start with `NEW_EMAIL_WEBHOOK_`. Enforced by the Zod schema on write and re-checked in `dispatchNewEmailNotification` at use time, so a hand-edited R2 blob cannot point the dispatch at an unrelated secret (`CONFIRMATION_TOKEN_SECRET`, `HUB_API_KEY`) and have its value POSTed off-platform. Same contract as `RELAY_CREDS_` (#615) and `SIDECAR_SECRET_`. |
+| **Resolution** | Override semantics, most specific tier wins: `mailbox > domain > org`, then the global `NEW_EMAIL_WEBHOOK_URL`. `enabled` must be explicitly `true`. Setting `{"enabled": false}` on a tier **mutes** that scope — it does not inherit, and does not fall back to the global. |
+| **Payload format** | `format: "chat"` (the default) posts `{"text": "..."}` prose, which Slack and Google Chat incoming webhooks render. `format: "json"` posts the structured event instead — `mailboxId`, `messageId`, `folder`, `sender`, `subject`, `verdictAction`, `verdictScore`, `url` — for a bot or automation that wants fields rather than a sentence to parse. The `json` shape sends the subject verbatim (no `<>|` strip: that exists only to stop forged chat link syntax) capped at 1000 characters. Resolved from the winning tier only, never merged across tiers. |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role; the operator who created the destination webhook |
+| **Rotation cadence** | Same as the global secret — whenever the destination changes, or immediately if the URL is suspected leaked. |
+| **If missing** | A tier naming a secret that is unset (or outside the prefix) sends nothing for that scope and logs the reason. It deliberately does **not** fall back to the global URL, which would leak the mail to the channel that tier was configured to replace. |
+
+### `NEW_EMAIL_WEBHOOK_SIGNING_SECRET` — optional
+
+| Field | Value |
+| --- | --- |
+| **What it is** | HMAC-SHA256 signing secret for outbound new-email webhook requests (issue #700). Applies to every destination — the global `NEW_EMAIL_WEBHOOK_URL` fallback and every per-tier `NEW_EMAIL_WEBHOOK_*` secret alike — so it is a single deployment-wide signing identity, not a per-destination one. When set, every request carries an `x-phishsoc-signature: t=<unix-seconds>,v1=<hex-hmac>` header (Stripe's `t=,v1=` construction), letting a receiver verify both authenticity and integrity and reject stale or replayed deliveries. The signature is computed over `${timestamp}.${rawBody}` — the exact serialized request body, whatever payload format it holds. |
+| **Where stored** | Cloudflare Workers secret — `wrangler secret put NEW_EMAIL_WEBHOOK_SIGNING_SECRET`. |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role; the operator(s) who need to verify signatures on the receiving end |
+| **Rotation cadence** | Every 90 days, or immediately on suspected compromise. Coordinate with every receiver before rotating — an old signature stops verifying the moment the Worker secret changes, so update receiver-side verification secrets in the same maintenance window. Generate a new value: `openssl rand -hex 32`. |
+| **If missing** | The outbound request is sent exactly as it was before this feature existed — no signature header, same headers and body. Signing is opt-in and fully backward compatible. |
+| **Receiver-side verification** | Reject any request whose signature doesn't verify, and reject stale timestamps to bound replay. Node.js example: |
+
+```js
+const crypto = require("crypto");
+
+// rawBody must be the exact bytes received — read it before any JSON.parse.
+function verifyPhishSocSignature(rawBody, signatureHeader, secret, toleranceSeconds = 300) {
+  const match = /^t=(\d+),v1=([0-9a-f]+)$/.exec(signatureHeader || "");
+  if (!match) return false;
+
+  const timestamp = Number(match[1]);
+  const signature = match[2];
+  if (Math.abs(Date.now() / 1000 - timestamp) > toleranceSeconds) return false; // stale/replayed
+
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${timestamp}.${rawBody}`)
+    .digest("hex");
+
+  const received = Buffer.from(signature, "hex");
+  const wanted = Buffer.from(expected, "hex");
+  return received.length === wanted.length && crypto.timingSafeEqual(received, wanted);
+}
+
+// const ok = verifyPhishSocSignature(
+//   rawBody,
+//   req.header("x-phishsoc-signature"),
+//   process.env.NEW_EMAIL_WEBHOOK_SIGNING_SECRET,
+// );
+```
 
 ### `RP_ID` / `RP_ORIGIN` — WebAuthn Relying Party config (wrangler vars, not secrets)
 

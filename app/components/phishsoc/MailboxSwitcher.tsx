@@ -5,7 +5,7 @@
 import { Menu } from "@base-ui/react/menu";
 import { CaretUpDownIcon, CheckIcon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import type { Mailbox } from "~/types";
 
 // Sidebar mailbox-switcher (#188). Replaces the old "Select mailbox" card
@@ -54,6 +54,7 @@ export default function MailboxSwitcher({
 	onClose,
 }: MailboxSwitcherProps) {
 	const navigate = useNavigate();
+	const { pathname } = useLocation();
 	const orgDomain = mailbox?.email?.split("@")[1] ?? "—";
 	const orgInitial = (mailbox?.name || mailbox?.email || "?")[0]?.toUpperCase();
 	const list = mailboxes ?? [];
@@ -97,6 +98,12 @@ export default function MailboxSwitcher({
 			return name.includes(q) || email.includes(q);
 		});
 	}, [list, query]);
+
+	const handleAllInboxes = () => {
+		onClose();
+		if (pathname === "/inbox") return;
+		navigate("/inbox");
+	};
 
 	const handlePick = (id: string) => {
 		onClose();
@@ -168,6 +175,19 @@ export default function MailboxSwitcher({
 									className="w-full rounded-sm border border-line bg-paper-2 px-2 py-1 text-[12px] text-ink placeholder:text-ink-3 outline-none focus:border-line-strong"
 								/>
 							</div>
+						)}
+						{list.length > 0 && query === "" && (
+							<Menu.Item
+								onClick={handleAllInboxes}
+								className={`mx-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-[12.5px] outline-none data-[highlighted]:bg-paper-2 border-b border-line mb-1 ${
+									pathname === "/inbox" ? "text-ink" : "text-ink-2"
+								}`}
+							>
+								<span className="flex-1 min-w-0 block truncate font-medium">All inboxes</span>
+								{pathname === "/inbox" && (
+									<CheckIcon size={12} weight="bold" aria-label="Active view" className="text-accent shrink-0" />
+								)}
+							</Menu.Item>
 						)}
 						{list.length === 0 ? (
 							// Empty state. Not a `MenuItem` — that would make it

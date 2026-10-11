@@ -24,7 +24,9 @@ import type {
 	HubSharingGroupsResponse,
 	Mailbox,
 	OrgOverview,
+	UnifiedInboxResponse,
 } from "~/types";
+import type { BlockRule } from "shared/blocklist";
 
 /** The send fields a WebAuthn step-up binds its challenge to (#376). */
 export interface WebauthnStepUpRequest {
@@ -277,6 +279,10 @@ const api = {
 	searchOrgEmails: (params: Record<string, string>) =>
 		get<EmailListResponse>("/api/v1/org/search", { params }),
 
+	// Unified All inboxes (spec 2026-09-26).
+	listUnifiedInbox: ({ before }: { before: string | null }) =>
+		get<UnifiedInboxResponse>("/api/v1/inbox", { params: before ? { before } : {} }),
+
 	// Dashboard
 	getDashboardSummary: (mailboxId: string, opts?: { signal?: AbortSignal }) =>
 		get<DashboardSummary>(`/api/v1/mailboxes/${mailboxId}/dashboard`, { signal: opts?.signal }),
@@ -325,6 +331,22 @@ const api = {
 	createHubInvite: (mailboxId: string, body: HubInviteRequest) =>
 		post<HubInviteResponse>(`/api/v1/mailboxes/${mailboxId}/hub/invites`, body),
 
+	// New-mail webhook "Send test". Tier-agnostic: the DRAFT block travels in
+	// the body so a secret name can be verified before it is saved. The
+	// destination is resolved server-side from the named Worker Secret and
+	// never crosses the wire in either direction. Always resolves 200 with a
+	// staged {ok, stage, error} body — a failed test is a result, not an
+	// ApiError.
+	testNewEmailWebhook: (body: {
+		urlSecret: string;
+		format?: "chat" | "json";
+		tier: "mailbox" | "domain" | "org";
+	}) =>
+		post<{ ok: boolean; status?: number; stage?: string; error?: string }>(
+			"/api/v1/new-email-webhook/test",
+			body,
+		),
+
 	// AI — Workers AI text-generation model list (#64). Worker
 	// read-through caches against KV with a static fallback, so this
 	// endpoint always resolves to a usable list.
@@ -344,6 +366,39 @@ const api = {
 			"/api/v1/webauthn/register/verify",
 			{ attestation },
 		),
+	// Sender blocklist (spec 2026-09-27-sender-blocklist). The /blocklist
+	// endpoints are the only writers of each tier's `blocklist` field; the
+	// settings PUTs preserve it.
+	addBlockRule: (scope: BlocklistScope, body: Record<string, unknown>) =>
+		post<{ rule: BlockRule; moved?: number }>(blocklistBase(scope), body),
+	removeBlockRule: (scope: BlocklistScope, ruleId: string) =>
+		del<void>(`${blocklistBase(scope)}/${encodeURIComponent(ruleId)}`),
+	getBlockedLog: (mailboxId: string, limit = 50) =>
+		get<{ rows: BlockedLogRow[] }>(
+			`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/blocked-log?limit=${limit}`,
+		),
 };
+
+export type BlocklistScope =
+	| { tier: "mailbox"; mailboxId: string }
+	| { tier: "domain"; domain: string }
+	| { tier: "org" };
+
+export interface BlockedLogRow {
+	id: number;
+	ts: string;
+	rule_id: string;
+	tier: string;
+	action: string;
+	sender: string;
+	subject: string;
+	message_id: string | null;
+}
+
+function blocklistBase(scope: BlocklistScope): string {
+	if (scope.tier === "org") return "/api/v1/org/blocklist";
+	if (scope.tier === "domain") return `/api/v1/domains/${encodeURIComponent(scope.domain)}/blocklist`;
+	return `/api/v1/mailboxes/${encodeURIComponent(scope.mailboxId)}/blocklist`;
+}
 
 export default api;

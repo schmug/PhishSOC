@@ -5,6 +5,7 @@
 import DOMPurify from "dompurify";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUIStore } from "~/hooks/useUIStore";
+import { escapeHtml, looksLikeHtml } from "shared/html-text";
 
 interface EmailIframeProps {
 	body: string;
@@ -37,6 +38,23 @@ const EMAIL_PALETTES = {
 		preBg: "#29241e",
 	},
 } as const;
+
+/**
+ * True when the sanitized email HTML paints its own background via an
+ * inline `style` background/background-color or a `bgcolor` attribute.
+ * Runs on `cleanBody` (post-DOMPurify) so only styling that actually
+ * reaches the iframe counts — `<style>` blocks are already stripped and
+ * never considered (#711).
+ */
+function emailSetsOwnBackground(html: string): boolean {
+	if (!html) return false;
+	const doc = new DOMParser().parseFromString(html, "text/html");
+	for (const el of doc.body.querySelectorAll<HTMLElement>("[style], [bgcolor]")) {
+		if (el.hasAttribute("bgcolor")) return true;
+		if (el.style.backgroundColor) return true;
+	}
+	return false;
+}
 
 /**
  * Renders email HTML inside a sandboxed iframe.
@@ -95,7 +113,17 @@ export default function EmailIframe({ body, autoSize, onLinkClick }: EmailIframe
 		const iframe = iframeRef.current;
 		if (!iframe || !body) return;
 
-		const cleanBody = DOMPurify.sanitize(body, {
+		// No stored content-type flag (#708): a body with no HTML-tag-shaped
+		// substring is plain text. Escape it before it reaches DOMPurify (escaping
+		// after sanitize would double-escape genuine HTML) and wrap it so
+		// `white-space: pre-wrap` preserves newlines/blank lines while still
+		// soft-wrapping long lines. Bodies that look like HTML are sanitized
+		// unmodified, exactly as before.
+		const sanitizeInput = looksLikeHtml(body)
+			? body
+			: `<div style="white-space: pre-wrap;">${escapeHtml(body)}</div>`;
+
+		const cleanBody = DOMPurify.sanitize(sanitizeInput, {
 			USE_PROFILES: { html: true },
 			FORBID_TAGS: ["style"],
 			ADD_ATTR: ["target"],
@@ -138,7 +166,11 @@ export default function EmailIframe({ body, autoSize, onLinkClick }: EmailIframe
 
 		// Use srcdoc so the iframe is truly sandboxed (no same-origin access).
 		// We can't use doc.write() because that requires allow-same-origin.
-		const palette = EMAIL_PALETTES[theme === "dark" ? "dark" : "light"];
+		// An email that paints its own light background (and, per the dark
+		// palette, inherits light body text) renders unreadable in dark mode
+		// unless it's shown in the light palette it was designed for (#711).
+		const useDarkPalette = theme === "dark" && !emailSetsOwnBackground(cleanBody);
+		const palette = EMAIL_PALETTES[useDarkPalette ? "dark" : "light"];
 		iframe.srcdoc = `<!DOCTYPE html>
 <html>
 <head>
@@ -149,7 +181,7 @@ export default function EmailIframe({ body, autoSize, onLinkClick }: EmailIframe
 * { box-sizing: border-box; }
 html {
 	background: ${palette.bg};
-	color-scheme: ${theme === "dark" ? "dark" : "light"};
+	color-scheme: ${useDarkPalette ? "dark" : "light"};
 }
 body {
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;

@@ -83,8 +83,12 @@ describe("receiveGatewayPassthrough", () => {
 		expect(relayAfterVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: null }));
 	});
 
-	it("drops silently when the relay policy has vanished", async () => {
+	it("drops with a warn (not a log) when the relay policy has vanished", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		await receiveGatewayPassthrough(inbound, fakeEnv({}), ctx);
 		expect(relayAfterVerdict).not.toHaveBeenCalled();
+		// Accepted-then-dropped mail with no store/relay must be visible to on-call.
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("no relay policy"), "example.com", "- dropping");
+		warn.mockRestore();
 	});
 });

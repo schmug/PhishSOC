@@ -16,6 +16,7 @@ import {
 	type MitigationConfig,
 } from "./verdict";
 import { DEFAULT_ATTACHMENT_POLICY, type AttachmentPolicy } from "./attachments";
+import { DEFAULT_CLASSIFIER_MODEL } from "../../shared/mailbox-settings";
 
 /**
  * Business-hours definition for the off-hours scrutiny tier.
@@ -71,6 +72,11 @@ export interface DetectorSettings {
 	sender_graph?: {
 		/** When false, the BEC / display-name impersonation detector is
 		 *  disabled for this mailbox. Defaults to true. */
+		enabled?: boolean;
+	};
+	own_domain_lookalike?: {
+		/** When false, the inbound own-domain lookalike detector (issue #756)
+		 *  is disabled for this mailbox. Defaults to true. */
 		enabled?: boolean;
 	};
 }
@@ -134,6 +140,38 @@ export interface MailboxSecuritySettings {
 	ruf_ingestion: RufIngestionSettings;
 	/** Issue #26: per-mailbox detector on/off controls. */
 	detectors: DetectorSettings;
+	/** Outbound send-risk options (follow-up to #15). */
+	send_risk: SendRiskSettings;
+}
+
+/**
+ * Outbound send-risk options. The send gate runs whether or not inbound
+ * scanning (`enabled`) is on; these only tune it.
+ */
+export interface SendRiskSettings {
+	/**
+	 * When true, a send whose external recipients are all established
+	 * correspondents (sent to at least twice, first more than 7 days ago, last
+	 * within a year) does not need step-up for that reason alone. Every other
+	 * send-risk rule still applies, and agent drafts and MCP sends never get
+	 * this trust. Default false: step-up for every external send also covers a
+	 * stolen session writing to the vendors it already knows, which is the
+	 * BEC case step-up exists for.
+	 */
+	trust_known_recipients: boolean;
+	/**
+	 * Outbound LLM classifier (slice 3): classifies the text the user wrote
+	 * as safe / victim_response / malicious_outbound / data_exposure /
+	 * suspicious. Its verdict can only raise the tier. Default true: it can add
+	 * step-up but never remove it.
+	 */
+	llm_enabled: boolean;
+	/**
+	 * Workers AI chat model for the outbound classifier. Independent of the
+	 * inbound `classifierModel` and its `typesafe/jev` opt-in: outbound mail
+	 * is the organisation's own data, so `typesafe/*` models are ignored here.
+	 */
+	classifier_model: string;
 }
 
 /**
@@ -170,6 +208,13 @@ export const DEFAULT_RUF_INGESTION_SETTINGS: RufIngestionSettings = {
 
 export const DEFAULT_DETECTOR_SETTINGS: DetectorSettings = {
 	sender_graph: { enabled: true },
+	own_domain_lookalike: { enabled: true },
+};
+
+export const DEFAULT_SEND_RISK_SETTINGS: SendRiskSettings = {
+	trust_known_recipients: false,
+	llm_enabled: true,
+	classifier_model: DEFAULT_CLASSIFIER_MODEL,
 };
 
 export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
@@ -189,4 +234,5 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	mitigations: DEFAULT_MITIGATION_CONFIG,
 	ruf_ingestion: DEFAULT_RUF_INGESTION_SETTINGS,
 	detectors: DEFAULT_DETECTOR_SETTINGS,
+	send_risk: DEFAULT_SEND_RISK_SETTINGS,
 };

@@ -13,6 +13,7 @@ import {
 import { useOrgSettings } from "~/queries/org-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
+import { BlockedSendersPanel } from "~/components/BlockedSendersPanel";
 import {
 	HubSettingsPanel,
 	normalizeHubConfig,
@@ -20,7 +21,15 @@ import {
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
 import type { HubConfigSettings, SecuritySettings } from "~/types";
-import { TEXT_MODELS } from "shared/mailbox-settings";
+import {
+	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
+	TEXT_MODELS,
+} from "shared/mailbox-settings";
+import type { NewEmailWebhookSettings } from "shared/mailbox-settings";
+import {
+	NewEmailWebhookCard,
+	isNewEmailWebhookValid,
+} from "~/components/NewEmailWebhookCard";
 
 const PROMPT_PLACEHOLDER = `(Leave empty to inherit from org-wide /settings)`;
 
@@ -41,6 +50,7 @@ interface DomainSettingsShape {
 		credentialsSecret?: string;
 		actions?: { quarantine?: "relay" | "hold" | "drop" };
 	};
+	newEmailWebhook?: NewEmailWebhookSettings;
 }
 
 function InheritanceBadge({
@@ -106,6 +116,11 @@ export default function DomainSettingsRoute() {
 	const [relayActionQuarantine, setRelayActionQuarantine] = useState<
 		"relay" | "hold" | "drop"
 	>("hold");
+	// New-mail webhook (#694). undefined = inherit (key omitted on save),
+	// {enabled:false} = muted, {enabled:true, urlSecret} = configured.
+	const [newEmailWebhook, setNewEmailWebhook] = useState<
+		NewEmailWebhookSettings | undefined
+	>(undefined);
 	const [isSaving, setIsSaving] = useState(false);
 
 	// Initialise once per domain (same useRef pattern as the per-mailbox
@@ -143,6 +158,8 @@ export default function DomainSettingsRoute() {
 		setRelayImplicitTls(s.relay?.target?.implicitTls ?? false);
 		setRelayCredentialsSecret(s.relay?.credentialsSecret ?? "");
 		setRelayActionQuarantine(s.relay?.actions?.quarantine ?? "hold");
+		// Absent key is the meaningful "inherit" state — load it through as-is.
+		setNewEmailWebhook(s.newEmailWebhook);
 
 		const m = s.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
 		if (availableModels.includes(m)) {
@@ -188,6 +205,13 @@ export default function DomainSettingsRoute() {
 			}
 		}
 
+		if (!isNewEmailWebhookValid(newEmailWebhook)) {
+			feedback.error(
+				`Webhook secret name must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}`,
+			);
+			return;
+		}
+
 		const existing = (data?.settings ?? {}) as DomainSettingsShape;
 		const normalizedHub = hubOverride ? normalizeHubConfig(hub) : undefined;
 
@@ -206,6 +230,7 @@ export default function DomainSettingsRoute() {
 			nextIntel = Object.keys(rest).length > 0 ? rest : undefined;
 		}
 
+		const parsedRelayPort = Number.parseInt(relayPort, 10);
 		const settings: DomainSettingsShape = {
 			...existing,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
@@ -225,7 +250,9 @@ export default function DomainSettingsRoute() {
 						enabled: true,
 						target: {
 							host: relayHost.trim(),
-							port: Number.parseInt(relayPort, 10) || 587,
+							// Only an unparseable port falls back; a typed "0" reaches
+							// the server's min(1) check instead of silently becoming 587.
+							port: Number.isNaN(parsedRelayPort) ? 587 : parsedRelayPort,
 							implicitTls: relayImplicitTls,
 						},
 						...(relayCredentialsSecret.trim()
@@ -237,6 +264,15 @@ export default function DomainSettingsRoute() {
 					}
 				: { enabled: false },
 		};
+
+		// Inherit is expressed by omitting the key entirely; `...existing`
+		// above would otherwise carry a stale block through. A mute
+		// (`{enabled:false}`) is written, and stripDefaultEqual keeps it.
+		if (newEmailWebhook) {
+			settings.newEmailWebhook = newEmailWebhook;
+		} else {
+			delete settings.newEmailWebhook;
+		}
 
 		setIsSaving(true);
 		try {
@@ -414,6 +450,11 @@ export default function DomainSettingsRoute() {
 								setSecurityOverride(true);
 							}}
 						/>
+					</div>
+
+					{/* Sender blocklist — owned by /api/v1/domains/:domain/blocklist, not this form. */}
+					<div className="pp-card p-5">
+						<BlockedSendersPanel tier="domain" domain={domain} />
 					</div>
 
 					{/* Threat-intel hub */}
@@ -617,6 +658,13 @@ export default function DomainSettingsRoute() {
 							</div>
 						)}
 					</div>
+
+					{/* New mail webhook (#694) */}
+					<NewEmailWebhookCard
+						value={newEmailWebhook}
+						onChange={setNewEmailWebhook}
+						tier="domain"
+					/>
 
 					<div className="flex justify-end">
 						<Button variant="primary" onClick={handleSave} loading={isSaving}>

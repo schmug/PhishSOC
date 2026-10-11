@@ -95,6 +95,7 @@ export async function getOrgSettings(env: { BUCKET: R2Bucket }): Promise<OrgSett
  * are managed exclusively outside the `/settings` form:
  *   - `domains` — written via POST/DELETE `/api/v1/org/domains`
  *   - `intel.feeds` — no org UI yet; only API callers write feeds
+ *   - `blocklist` — written via POST/DELETE `/api/v1/org/blocklist`
  *
  * A stale React Query cache (or any partial PUT) can still carry an older
  * `domains` snapshot even after #570's UI spread fix — the server must not
@@ -112,6 +113,10 @@ export function mergeOrgSettingsPut(
 	} else {
 		delete merged.domains;
 	}
+
+	// blocklist is owned by /api/v1/org/blocklist — never trust a PUT payload.
+	if (current.blocklist?.length) merged.blocklist = current.blocklist;
+	else delete merged.blocklist;
 
 	// intel.feeds has no org UI — preserve from R2 when the PUT omits them.
 	const currentFeeds = current.intel?.feeds;

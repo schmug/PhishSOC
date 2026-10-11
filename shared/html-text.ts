@@ -96,6 +96,43 @@ function skipRawText(html: string, start: number, tagName: string): number {
 	return html.length;
 }
 
+/**
+ * Tag-shaped detector: matches `<tag ...>` / `</tag>` / `<tag/>` where the
+ * first character after `<` (or `</`) is a letter, optionally followed by
+ * more name characters, optional whitespace-delimited attributes, an
+ * optional self-close slash, and a closing `>`. A bare `<` or `>` in prose
+ * (e.g. "3 < 5", "<support@example.com>") does not match because nothing in
+ * the string reaches a valid tag-close boundary. This is a structural check,
+ * not a substring search (root CLAUDE.md Rule 2 / CodeQL
+ * js/incomplete-multi-character-sanitization).
+ */
+const HTML_TAG_SHAPE = /<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?\/?>/;
+
+/**
+ * True when `value` contains at least one HTML-tag-shaped substring. Used to
+ * decide whether a stored email body is HTML (render as-is) or plain text
+ * (escape + preserve whitespace) when no content-type is recorded alongside
+ * the body (issue #708).
+ */
+export function looksLikeHtml(value: string): boolean {
+	if (!value) return false;
+	return HTML_TAG_SHAPE.test(value);
+}
+
+/**
+ * Escape the five OWASP-recommended HTML special characters. Safe to inject
+ * into text content or attribute values afterward.
+ */
+export function escapeHtml(text: string): string {
+	if (!text) return "";
+	return text
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+
 export interface HtmlToTextOptions {
 	/** Convert <br> and block-level closes to newlines instead of spaces. */
 	preserveLineBreaks?: boolean;

@@ -339,6 +339,55 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 					})}
 					disabled={!s.enabled}
 				/>
+				<p className="text-xs text-ink-3 mt-4 mb-3">
+					The own-domain lookalike detector flags inbound mail whose sender or link domain
+					imitates one of your domains (<code>acme-hr.com</code>, <code>acrne.com</code>, or a
+					look-alike character for <code>acme.com</code>). It adds a bounded score boost and
+					never blocks on its own. On by default.
+				</p>
+				<Switch
+					label="Own-domain lookalike detector"
+					checked={s.detectors?.own_domain_lookalike?.enabled ?? true}
+					onCheckedChange={(v) => patch({
+						detectors: { ...s.detectors, own_domain_lookalike: { ...s.detectors?.own_domain_lookalike, enabled: v } },
+					})}
+					disabled={!s.enabled}
+				/>
+			</div>
+
+			{/* Outbound send risk */}
+			<div className="border-t border-line pt-5">
+				<div className="text-xs font-medium text-ink mb-2">Outbound send risk</div>
+				<p className="text-xs text-ink-3 mb-3">
+					Every send to an external address asks for passkey step-up. When on, a send
+					whose external recipients are all established correspondents — written to at
+					least twice, first more than 7 days ago, last within a year — skips that
+					step-up. Keywords, risky attachments, lookalike domains, and replies to
+					flagged mail still require it, and agent drafts and MCP sends never get this
+					trust. Leave off if a stolen session writing to your existing vendors is a
+					concern: that is the case step-up exists for. Applies whether or not inbound
+					scanning is enabled.
+				</p>
+				<Switch
+					label="Skip step-up for established correspondents"
+					checked={s.send_risk?.trust_known_recipients ?? false}
+					onCheckedChange={(v) => patch({
+						send_risk: { ...s.send_risk, trust_known_recipients: v },
+					})}
+				/>
+				<p className="text-xs text-ink-3 mt-4 mb-3">
+					An AI model (Workers AI) also reads the text you write, not quoted replies,
+					and asks for step-up when it looks like a response to a scam, phishing or spam
+					sent from this account, or a leaked password, key or personal data. It can only
+					add step-up, never remove it.
+				</p>
+				<Switch
+					label="AI check of outgoing text"
+					checked={s.send_risk?.llm_enabled ?? true}
+					onCheckedChange={(v) => patch({
+						send_risk: { ...s.send_risk, llm_enabled: v },
+					})}
+				/>
 			</div>
 
 			{/* Business hours */}

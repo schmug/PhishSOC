@@ -12,6 +12,7 @@ import { useOrgSettings } from "~/queries/org-settings";
 import { useDomainSettings } from "~/queries/domain-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
+import { BlockedSendersPanel } from "~/components/BlockedSendersPanel";
 import { AclMembersPanel } from "~/components/AclMembersPanel";
 import { PasskeyPanel } from "~/components/PasskeyPanel";
 import {
@@ -21,6 +22,10 @@ import {
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
 import { SidecarSettingsCard, type SidecarFormValue } from "~/components/SidecarSettingsCard";
+import {
+	NewEmailWebhookCard,
+	isNewEmailWebhookValid,
+} from "~/components/NewEmailWebhookCard";
 import type { HubConfigSettings, SecuritySettings, YaraMailScannerSettings } from "~/types";
 import {
 	TEXT_MODELS,
@@ -28,7 +33,9 @@ import {
 	DEFAULT_INJECTION_SCANNER_MODEL,
 	DEFAULT_DRAFT_VERIFIER_MODEL,
 	DEFAULT_CLASSIFIER_MODEL,
+	NEW_EMAIL_WEBHOOK_SECRET_PREFIX,
 } from "shared/mailbox-settings";
+import type { NewEmailWebhookSettings } from "shared/mailbox-settings";
 
 // Placeholder shown in the textarea when no custom prompt is set.
 // The authoritative default prompt lives in workers/agent/index.ts (DEFAULT_SYSTEM_PROMPT).
@@ -115,6 +122,7 @@ export default function SettingsRoute() {
 	};
 
 	const [displayName, setDisplayName] = useState("");
+	const [hideFromAllInboxes, setHideFromAllInboxes] = useState(false);
 
 	// Per-field override flags + values. `override` is true when the
 	// mailbox tier supplies its own value (and the save will write it);
@@ -162,6 +170,13 @@ export default function SettingsRoute() {
 	const [sidecar, setSidecar] = useState<SidecarFormValue | null>(null);
 	const [savedSidecarExists, setSavedSidecarExists] = useState(false);
 
+	// New-mail webhook (#694). Three-state, unlike every other block here:
+	// undefined = inherit (key omitted on save), {enabled:false} = muted,
+	// {enabled:true, urlSecret} = post to that Worker Secret's endpoint.
+	const [newEmailWebhook, setNewEmailWebhook] = useState<
+		NewEmailWebhookSettings | undefined
+	>(undefined);
+
 	const [isSaving, setIsSaving] = useState(false);
 
 	// Initialise form state from the resolved settings ONCE per mailbox.
@@ -184,6 +199,7 @@ export default function SettingsRoute() {
 			| undefined;
 
 		setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
+		setHideFromAllInboxes(mailbox.settings?.hideFromAllInboxes === true);
 
 		// Inheritance fallback for the "no override" case: domain wins over
 		// org, matching the resolver's mailbox > domain > org > default chain.
@@ -322,6 +338,13 @@ export default function SettingsRoute() {
 				: null,
 		);
 
+		// newEmailWebhook (#694) — an absent key is the meaningful "inherit"
+		// state, so undefined is loaded through as-is rather than defaulted.
+		setNewEmailWebhook(
+			(mailbox.settings as { newEmailWebhook?: NewEmailWebhookSettings } | undefined)
+				?.newEmailWebhook,
+		);
+
 		// availableModels intentionally omitted from deps — see commit
 		// message for the rationale (re-running this effect would clobber
 		// edits when the dynamic models list resolves).
@@ -365,6 +388,13 @@ export default function SettingsRoute() {
 			nextIntel = Object.keys(existingIntel).length > 0 ? existingIntel : undefined;
 		}
 
+		if (!isNewEmailWebhookValid(newEmailWebhook)) {
+			feedback.error(
+				`Webhook secret name must start with ${NEW_EMAIL_WEBHOOK_SECRET_PREFIX}`,
+			);
+			return;
+		}
+
 		setIsSaving(true);
 		// Build the PUT payload. Per audit Q5/Q6/Q8: undefined fields get
 		// stripped server-side via stripDefaultEqual (PR1) so the resolver
@@ -378,6 +408,8 @@ export default function SettingsRoute() {
 		const settings = {
 			...mailbox.settings,
 			fromName: displayName,
+			// Explicit undefined overrides a stale `true` carried by the spread above.
+			hideFromAllInboxes: hideFromAllInboxes || undefined,
 			agentSystemPrompt: promptOverride ? agentPrompt.trim() || undefined : undefined,
 			autoDraft: autoDraftOverride ? { enabled: autoDraftEnabled } : undefined,
 			agentModel: modelOverride ? resolvedModel || undefined : undefined,
@@ -388,8 +420,13 @@ export default function SettingsRoute() {
 			intel: nextIntel,
 			yaramail_scanner: nextYaraScanner,
 			...(sidecar ? { sidecar } : {}),
+			...(newEmailWebhook ? { newEmailWebhook } : {}),
 		};
 		if (!sidecar) delete (settings as Record<string, unknown>).sidecar;
+		// Inherit is expressed by omitting the key entirely — the spread of the
+		// persisted blob above would otherwise carry a stale block through.
+		if (!newEmailWebhook)
+			delete (settings as Record<string, unknown>).newEmailWebhook;
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
 			feedback.success("Settings saved!");
@@ -505,6 +542,16 @@ export default function SettingsRoute() {
 							onChange={(e) => setDisplayName(e.target.value)}
 						/>
 						<Input label="Email" type="email" value={mailbox.email} disabled />
+						<Switch
+							label="Hide from All inboxes"
+							checked={hideFromAllInboxes}
+							onCheckedChange={setHideFromAllInboxes}
+							data-testid="hide-from-all-inboxes-toggle"
+						/>
+						<p className="text-xs text-ink-3">
+							Leave this mailbox out of the merged All inboxes view. You can still
+							open it here and send from it.
+						</p>
 					</div>
 				</div>
 
@@ -796,6 +843,11 @@ export default function SettingsRoute() {
 					/>
 				</div>
 
+				{/* Sender blocklist — owned by /blocklist endpoints, not this form. */}
+				<div className="pp-card p-5">
+					<BlockedSendersPanel tier="mailbox" mailboxId={mailboxId!} />
+				</div>
+
 				{/* Threat-intel hub (#97) — block-level inheritance. */}
 				<div className="pp-card p-5">
 					<div className="flex items-center justify-between mb-3">
@@ -887,6 +939,13 @@ export default function SettingsRoute() {
 					health={mailbox.sidecar_health ?? null}
 					savedConfigExists={savedSidecarExists}
 					mailboxId={mailboxId!}
+				/>
+
+				{/* New mail webhook (#694) */}
+				<NewEmailWebhookCard
+					value={newEmailWebhook}
+					onChange={setNewEmailWebhook}
+					tier="mailbox"
 				/>
 
 				{/* Access / Members — per-mailbox ACL panel (#291). Not part of the
