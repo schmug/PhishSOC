@@ -14,7 +14,7 @@
 import { normalizeHost } from "../lib/url-canonical";
 
 /** Domains whose typos are extremely high-value for phishers. */
-const HIGH_VALUE_DOMAINS = [
+export const HIGH_VALUE_DOMAINS = [
 	"google.com", "gmail.com", "googledrive.com", "googleusercontent.com",
 	"microsoft.com", "outlook.com", "office.com", "live.com", "microsoftonline.com",
 	"apple.com", "icloud.com",

@@ -426,3 +426,38 @@ describe("CaseDetailRoute — confidence indicator in title bar (#220)", () => {
 		expect(indicator).toHaveTextContent("— conf.");
 	});
 });
+
+describe("Cloudflare categorization card (issue #755)", () => {
+	const withDomain = {
+		...baseCase,
+		status: "closed-tp",
+		observables: [{ id: "o1", kind: "domain", value: "evil-example.test" }],
+	};
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("disables the button when the token is not configured", async () => {
+		mockFetchOnce({ case: { ...withDomain, cloudflare_submit_enabled: false } });
+		renderCaseDetail();
+		const btn = await screen.findByRole("button", { name: /Submit to Cloudflare/ });
+		expect((btn as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("shows the submission date with no status claim", async () => {
+		mockFetchOnce({
+			case: {
+				...withDomain,
+				cloudflare_submit_enabled: true,
+				cloudflare_submissions: [
+					{ domain: "evil-example.test", submitted_at: "2026-10-11T12:00:00Z", category_id: 131 },
+				],
+			},
+		});
+		renderCaseDetail();
+		const el = await screen.findByTestId("cloudflare-submitted");
+		expect(el.textContent).toMatch(/^Submitted to Cloudflare /);
+		expect(el.textContent).not.toMatch(/approved|blocked|pending/i);
+	});
+});

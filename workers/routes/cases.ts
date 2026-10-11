@@ -21,6 +21,20 @@ import { stripHtmlToText } from "../lib/email-helpers";
 import { buildMispEvent } from "../intel/report";
 import { MispClient } from "../intel/misp-client";
 import { loadHubConfig } from "../lib/hub-config";
+import { callerEmailFromJwt } from "../lib/mailbox-acl";
+import {
+	ALLOWED_CATEGORIES,
+	CATEGORY_PHISHING,
+	getDomainSubmission,
+	isBlockedDomain,
+	isCategorizeConfigured,
+	listCaseSubmissions,
+	monthlyCap,
+	monthlyCount,
+	recordSubmission,
+	registrableDomain,
+	sendCategorization,
+} from "../intel/cloudflare-categorize";
 
 export const caseRoutes = new Hono<MailboxContext>();
 
@@ -43,6 +57,15 @@ const CreateCaseBody = z.object({
 const UpdateCaseBody = z.object({
 	status: z.enum(["open", "closed-tp", "closed-fp", "closed-dup"]).optional(),
 	notes: z.string().optional(),
+});
+
+const SubmitCloudflareBody = z.object({
+	domain: z.string().min(1).max(253),
+	categoryId: z
+		.number()
+		.int()
+		.refine((n) => (ALLOWED_CATEGORIES as readonly number[]).includes(n))
+		.optional(),
 });
 
 const ReportPhishBody = z.object({ emailId: z.string().min(1) });
@@ -94,7 +117,84 @@ caseRoutes.get("/:caseId", async (c) => {
 		}
 	}
 
-	return c.json({ case: { ...caseData, confidence } });
+	const cloudflare_submissions = await listCaseSubmissions(c.env.BLOOM_KV, c.req.param("caseId"));
+	return c.json({
+		case: {
+			...caseData,
+			confidence,
+			cloudflare_submissions,
+			cloudflare_submit_enabled: isCategorizeConfigured(c.env),
+		},
+	});
+});
+
+/**
+ * Analyst-confirmed "Submit to Cloudflare" categorization (issue #755). Only
+ * ever called from an explicit UI action; never from `report-phish`.
+ */
+caseRoutes.post("/:caseId/submit-cloudflare", async (c) => {
+	if (!isCategorizeConfigured(c.env)) {
+		return c.json({ error: "Cloudflare categorization is not configured" }, 501);
+	}
+	const kv = c.env.BLOOM_KV;
+	if (!kv) return c.json({ error: "Cloudflare categorization is not configured" }, 501);
+
+	const parsed = SubmitCloudflareBody.safeParse(await c.req.json().catch(() => null));
+	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+	const domain = registrableDomain(parsed.data.domain);
+	if (!domain) return c.json({ error: "Not a valid domain" }, 400);
+
+	const caseId = c.req.param("caseId");
+	const caseData = await c.var.mailboxStub.getCase(caseId);
+	if (!caseData) return c.json({ error: "Not found" }, 404);
+	if (caseData.status !== "closed-tp") {
+		return c.json({ error: "Only a confirmed-threat case can be submitted" }, 422);
+	}
+	const caseDomains = new Set(
+		caseData.observables
+			.filter((o: { kind: string }) => o.kind === "domain")
+			.map((o: { value: string }) => registrableDomain(o.value)),
+	);
+	if (!caseDomains.has(domain)) {
+		return c.json({ error: "Domain is not an observable of this case" }, 400);
+	}
+
+	if (isBlockedDomain(c.env, domain)) {
+		return c.json({ error: "Shared-platform or high-value domains are never submitted" }, 422);
+	}
+
+	for (const ref of caseData.emails ?? []) {
+		const email = (await c.var.mailboxStub.getEmail(ref.email_id)) as
+			| { feedback?: { label?: string } | null }
+			| null;
+		if (email?.feedback?.label === "not_phish") {
+			return c.json({ error: "A linked email is labeled Not phish" }, 422);
+		}
+	}
+
+	if (await getDomainSubmission(kv, domain)) {
+		return c.json({ error: "Domain already submitted" }, 409);
+	}
+
+	const now = new Date();
+	if ((await monthlyCount(kv, now)) >= monthlyCap(c.env)) {
+		return c.json({ error: "Monthly Cloudflare submission cap reached" }, 429);
+	}
+
+	const categoryId = parsed.data.categoryId ?? CATEGORY_PHISHING;
+	if (!(await sendCategorization(c.env, domain, categoryId))) {
+		return c.json({ error: "Cloudflare did not accept the request" }, 502);
+	}
+
+	const submission = {
+		domain,
+		case_id: caseId,
+		analyst: callerEmailFromJwt(c.req.header("cf-access-jwt-assertion")) ?? "unknown",
+		submitted_at: now.toISOString(),
+		category_id: categoryId,
+	};
+	await recordSubmission(kv, submission, now);
+	return c.json({ submission }, 201);
 });
 
 caseRoutes.patch("/:caseId", async (c) => {

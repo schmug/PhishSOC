@@ -25,6 +25,26 @@ export interface Env extends Cloudflare.Env {
 	 */
 	CROWDSEC_CTI_API_KEY?: string;
 	/**
+	 * Optional Cloudflare API token (scope: Account → Intel → Edit) used by the
+	 * analyst-confirmed "Submit to Cloudflare" action on cases (issue #755).
+	 * With `CLOUDFLARE_INTEL_ACCOUNT_ID` it enables the action; when either is
+	 * unset the route returns 501 and the button is disabled. Set with
+	 * `wrangler secret put CLOUDFLARE_INTEL_API_TOKEN`.
+	 */
+	CLOUDFLARE_INTEL_API_TOKEN?: string;
+	/** Account id the miscategorization request is filed under (issue #755). */
+	CLOUDFLARE_INTEL_ACCOUNT_ID?: string;
+	/**
+	 * Monthly cap on Cloudflare categorization submissions (issue #755).
+	 * Default 20 — the shared Threat Intel quota is 100/month. Integer string.
+	 */
+	CF_CATEGORIZE_MONTHLY_CAP?: string;
+	/**
+	 * Comma-separated registrable domains added to the built-in
+	 * never-submit list (shared platforms, high-value brands) (issue #755).
+	 */
+	CF_CATEGORIZE_EXTRA_BLOCKED?: string;
+	/**
 	 * HS256 signing secret for one-shot confirmation tokens.
 	 * Set with `wrangler secret put CONFIRMATION_TOKEN_SECRET`.
 	 * When absent, the confirm endpoint returns 503.

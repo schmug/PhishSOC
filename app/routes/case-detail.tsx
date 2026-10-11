@@ -66,7 +66,22 @@ interface CaseRecord {
 	stage_trace_error?: string | null;
 	emails: CaseEmail[];
 	observables: CaseObservable[];
+	// Analyst-confirmed Cloudflare categorization (issue #755).
+	cloudflare_submissions?: CloudflareSubmission[];
+	cloudflare_submit_enabled?: boolean;
 }
+
+interface CloudflareSubmission {
+	domain: string;
+	submitted_at: string;
+	category_id: number;
+}
+
+const CF_CATEGORIES: Array<{ id: number; label: string }> = [
+	{ id: 131, label: "Phishing" },
+	{ id: 191, label: "Scam" },
+	{ id: 117, label: "Malware" },
+];
 
 // Polling cadence for the co-pilot summary card while
 // `summary_status === 'pending'`. The summarizer is a single
@@ -152,6 +167,42 @@ export default function CaseDetailRoute() {
 		const handle = setTimeout(load, SUMMARY_POLL_INTERVAL_MS);
 		return () => clearTimeout(handle);
 	}, [data?.summary_status, data?.updated_at, load]);
+
+	const [cfDomain, setCfDomain] = useState("");
+	const [cfCategory, setCfCategory] = useState(131);
+	const [cfPending, setCfPending] = useState(false);
+
+	const submitCloudflare = async () => {
+		if (!mailboxId || !caseId || !cfDomain) return;
+		if (
+			!window.confirm(
+				`Ask Cloudflare to categorize ${cfDomain} as ${CF_CATEGORIES.find((c) => c.id === cfCategory)?.label ?? "Phishing"}? If accepted, Cloudflare Gateway will block it for everyone. This counts against a shared monthly quota and cannot be undone.`,
+			)
+		) {
+			return;
+		}
+		setCfPending(true);
+		try {
+			const res = await fetch(
+				`/api/v1/mailboxes/${encodeURIComponent(mailboxId)}/cases/${encodeURIComponent(caseId)}/submit-cloudflare`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ domain: cfDomain, categoryId: cfCategory }),
+				},
+			);
+			if (!res.ok) {
+				const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+				throw new Error(typeof body?.error === "string" ? body.error : `HTTP ${res.status}`);
+			}
+			feedback.success("Submitted to Cloudflare");
+			await load();
+		} catch (e) {
+			feedback.error(`Could not submit: ${(e as Error).message}`);
+		} finally {
+			setCfPending(false);
+		}
+	};
 
 	const updateStatus = async (status: string) => {
 		if (!mailboxId || !caseId) return;
@@ -384,6 +435,74 @@ export default function CaseDetailRoute() {
 							</span>
 						</button>
 					</div>
+
+					{(() => {
+						const domains = [
+							...new Set(
+								data.observables.filter((o) => o.kind === "domain").map((o) => o.value),
+							),
+						];
+						const enabled = data.cloudflare_submit_enabled === true;
+						const confirmed = data.status === "closed-tp";
+						const submissions = data.cloudflare_submissions ?? [];
+						if (domains.length === 0 && submissions.length === 0) return null;
+						return (
+							<div className="pp-card p-5 space-y-2.5" data-testid="cloudflare-card">
+								<div className="text-[11px] uppercase tracking-[0.06em] text-ink-3">
+									Cloudflare categorization
+								</div>
+								{submissions.map((s) => (
+									<div key={s.domain} className="text-[12.5px] text-ink-2" data-testid="cloudflare-submitted">
+										Submitted to Cloudflare {new Date(s.submitted_at).toLocaleDateString()}
+										<span className="pp-mono text-ink-3"> · {s.domain}</span>
+									</div>
+								))}
+								{domains.length > 0 && (
+									<>
+										<select
+											aria-label="Domain to submit"
+											value={cfDomain}
+											onChange={(e) => setCfDomain(e.target.value)}
+											className="w-full rounded-md border border-line bg-paper px-2 py-1.5 text-[12px] pp-mono"
+										>
+											<option value="">Select a domain…</option>
+											{domains.map((d) => (
+												<option key={d} value={d}>{d}</option>
+											))}
+										</select>
+										<select
+											aria-label="Category"
+											value={cfCategory}
+											onChange={(e) => setCfCategory(Number(e.target.value))}
+											className="w-full rounded-md border border-line bg-paper px-2 py-1.5 text-[12px]"
+										>
+											{CF_CATEGORIES.map((c) => (
+												<option key={c.id} value={c.id}>{c.label}</option>
+											))}
+										</select>
+										<button
+											type="button"
+											onClick={submitCloudflare}
+											disabled={!enabled || !confirmed || !cfDomain || cfPending}
+											title={
+												!enabled
+													? "Cloudflare Intel token is not configured"
+													: !confirmed
+														? "Confirm the threat first"
+														: undefined
+											}
+											className="w-full text-left rounded-md border border-line px-3 py-2 text-[12.5px] hover:bg-paper-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+										>
+											<span className="text-ink">Submit to Cloudflare</span>
+											<span className="block text-[11px] text-ink-3">
+												Ask Cloudflare to block this domain for everyone.
+											</span>
+										</button>
+									</>
+								)}
+							</div>
+						);
+					})()}
 
 					{/* Per-stage pipeline trace (issue #128). Mounted when the
 					    case carries a non-empty trace — pre-#128 cases, cases
