@@ -40,6 +40,9 @@ import {
 import { lookupIp } from "../intel/crowdsec-cti";
 import type { StageId, StageRecord, StageStatus } from "./stage-trace";
 import { SenderGraphDetector } from "./detectors";
+import { scoreOwnDomainLookalike } from "./own-domain-lookalike";
+import { domainFromMailboxId } from "../lib/domain-settings";
+import { getOrgSettings } from "../lib/org-settings";
 
 /**
  * Apply a post-aggregation score bump and recompute the action tier and
@@ -220,6 +223,33 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		});
 	}
 
+	// ── Own-domain lookalike detector (issue #756) ─────────────────
+	// Sender / link domains imitating the org's own domains. Pure CPU after
+	// one cached org-settings read; folded into the url stage's trace row.
+	// Applied as a post-aggregation boost, bounded at +25.
+	let lookalikeBoost = 0;
+	let lookalikeReason: string | undefined;
+	const mailboxDomain = domainFromMailboxId(mailboxId);
+	if (settings.detectors?.own_domain_lookalike?.enabled !== false && mailboxDomain) {
+		await tracer.extend("url", async () => {
+			const org = await getOrgSettings(env).catch(() => ({}) as { domains?: string[] });
+			const seed = (((env as { DOMAINS?: string }).DOMAINS) ?? "").split(",");
+			const anchors = [mailboxDomain, ...seed, ...(org.domains ?? [])]
+				.map((d) => d.trim().toLowerCase())
+				.filter(Boolean);
+			const senderDomains = [auth.headerFrom, sender.includes("@") ? sender.slice(sender.lastIndexOf("@") + 1) : ""]
+				.filter((d): d is string => !!d);
+			const result = scoreOwnDomainLookalike({
+				senderDomains,
+				linkHosts: urls.map((u) => u.hostname),
+				anchors,
+				mailboxDomain,
+			});
+			lookalikeBoost = result.score;
+			lookalikeReason = result.reason;
+		});
+	}
+
 	// ── Stage 5: triage ────────────────────────────────────────────
 	const triaged = tracer.measure("triage", () =>
 		evaluateTriage({
@@ -342,6 +372,10 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		if (detectorBoost > 0 && detectorReason) {
 			v = applyBoost(v, detectorBoost, detectorReason, settings.thresholds);
 		}
+		// Own-domain lookalike boost (issue #756). Bounded at +25 by construction.
+		if (lookalikeBoost > 0 && lookalikeReason) {
+			v = applyBoost(v, lookalikeBoost, lookalikeReason, settings.thresholds);
+		}
 		// Learning mode never quarantines/blocks — cap at "tag".
 		if (settings.learning_mode && (v.action === "quarantine" || v.action === "block")) {
 			v = { ...v, action: "tag" };
@@ -365,6 +399,9 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 			intelBoost + intelFloorBoost,
 			`${intelMatch.feedId}:${intelMatch.value}`,
 		);
+	}
+	if (lookalikeBoost > 0 && lookalikeReason) {
+		tracer.setContrib("url", urlContrib.score + lookalikeBoost, lookalikeReason);
 	}
 	tracer.completeVerdict(verdict.score);
 

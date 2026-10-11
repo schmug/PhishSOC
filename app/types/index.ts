@@ -88,7 +88,7 @@ export interface SecuritySettings {
 	ruf_ingestion?: RufIngestionSettings;
 	mitigations?: { dmarc_pass_compensates_method_fail?: boolean };
 	classification?: ClassificationSettings;
-	detectors?: { sender_graph?: { enabled?: boolean } };
+	detectors?: { sender_graph?: { enabled?: boolean }; own_domain_lookalike?: { enabled?: boolean } };
 	send_risk?: { trust_known_recipients?: boolean; llm_enabled?: boolean; classifier_model?: string };
 }
 
