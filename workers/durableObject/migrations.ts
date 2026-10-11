@@ -768,6 +768,17 @@ export const mailboxMigrations: Migration[] = [
             );
         `,
 	},
+	{
+		// Analyst-triggered Cloudflare URL Scanner result (#754), per URL row.
+		name: "37_url_scanner",
+		sql: `
+            ALTER TABLE urls ADD COLUMN scan_uuid TEXT;
+            ALTER TABLE urls ADD COLUMN scan_status TEXT;
+            ALTER TABLE urls ADD COLUMN scan_malicious INTEGER;
+            ALTER TABLE urls ADD COLUMN scan_categories TEXT;
+            ALTER TABLE urls ADD COLUMN scan_final_url TEXT;
+        `,
+	},
 ];
 
 /**

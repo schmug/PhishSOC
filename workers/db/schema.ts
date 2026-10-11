@@ -88,6 +88,11 @@ export const urls = sqliteTable("urls", {
 	page_title: text("page_title"),
 	fetch_status: text("fetch_status").default("pending"),
 	verdict: text("verdict"),
+	scan_uuid: text("scan_uuid"),
+	scan_status: text("scan_status"),
+	scan_malicious: integer("scan_malicious"),
+	scan_categories: text("scan_categories"),
+	scan_final_url: text("scan_final_url"),
 	created_at: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
 });
 
