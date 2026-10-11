@@ -74,6 +74,11 @@ export interface DetectorSettings {
 		 *  disabled for this mailbox. Defaults to true. */
 		enabled?: boolean;
 	};
+	own_domain_lookalike?: {
+		/** When false, the inbound own-domain lookalike detector (issue #756)
+		 *  is disabled for this mailbox. Defaults to true. */
+		enabled?: boolean;
+	};
 }
 
 export interface MailboxSecuritySettings {
@@ -203,6 +208,7 @@ export const DEFAULT_RUF_INGESTION_SETTINGS: RufIngestionSettings = {
 
 export const DEFAULT_DETECTOR_SETTINGS: DetectorSettings = {
 	sender_graph: { enabled: true },
+	own_domain_lookalike: { enabled: true },
 };
 
 export const DEFAULT_SEND_RISK_SETTINGS: SendRiskSettings = {

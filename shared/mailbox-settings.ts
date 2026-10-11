@@ -69,9 +69,16 @@ const SenderGraphSettings = z
   })
   .passthrough();
 
+const OwnDomainLookalikeSettings = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .passthrough();
+
 const DetectorSettings = z
   .object({
     sender_graph: SenderGraphSettings.optional(),
+    own_domain_lookalike: OwnDomainLookalikeSettings.optional(),
   })
   .passthrough();
 

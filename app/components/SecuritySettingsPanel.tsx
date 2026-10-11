@@ -339,6 +339,20 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 					})}
 					disabled={!s.enabled}
 				/>
+				<p className="text-xs text-ink-3 mt-4 mb-3">
+					The own-domain lookalike detector flags inbound mail whose sender or link domain
+					imitates one of your domains (<code>acme-hr.com</code>, <code>acrne.com</code>, or a
+					look-alike character for <code>acme.com</code>). It adds a bounded score boost and
+					never blocks on its own. On by default.
+				</p>
+				<Switch
+					label="Own-domain lookalike detector"
+					checked={s.detectors?.own_domain_lookalike?.enabled ?? true}
+					onCheckedChange={(v) => patch({
+						detectors: { ...s.detectors, own_domain_lookalike: { ...s.detectors?.own_domain_lookalike, enabled: v } },
+					})}
+					disabled={!s.enabled}
+				/>
 			</div>
 
 			{/* Outbound send risk */}
