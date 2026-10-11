@@ -1,6 +1,7 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 import {
+	CLASSIFIER_MODELS,
 	DEFAULT_AGENT_MODEL,
 	DEFAULT_AUTO_DRAFT_ENABLED,
 	DEFAULT_CLASSIFIER_MODEL,
@@ -208,7 +209,7 @@ export async function resolveMailboxSettings(
 		draftVerifierModel:
 			mailbox.draftVerifierModel ?? org.draftVerifierModel ?? DEFAULT_MAILBOX_SETTINGS.draftVerifierModel,
 		classifierModel:
-			mailbox.classifierModel ?? org.classifierModel ?? DEFAULT_MAILBOX_SETTINGS.classifierModel,
+			mailbox.classifierModel ?? knownOrgClassifierModel(org.classifierModel) ?? DEFAULT_MAILBOX_SETTINGS.classifierModel,
 		security: normalizeSecurity(security),
 		intel: {
 			hub: intelRaw.hub,
@@ -219,6 +220,14 @@ export async function resolveMailboxSettings(
 		domainName,
 		org,
 	};
+}
+
+/** Org-tier classifierModel is validated on write only; an unknown stored value falls back to the default on read. */
+function knownOrgClassifierModel(model: string | undefined): string | undefined {
+	if (!model) return undefined;
+	if ((CLASSIFIER_MODELS as readonly string[]).includes(model)) return model;
+	console.warn(`org classifierModel "${model}" is not in the allowlist; using default`);
+	return undefined;
 }
 
 function resolveAutoDraft(

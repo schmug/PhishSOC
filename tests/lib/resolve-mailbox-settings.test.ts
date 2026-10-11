@@ -1060,14 +1060,27 @@ describe("resolveMailboxSettings — security model fields (#151 PR A)", () => {
 			"org/settings.json": {
 				injectionScannerModel: "@cf/org/scanner",
 				draftVerifierModel: "@cf/org/verifier",
-				classifierModel: "@cf/org/classifier",
+				classifierModel: "typesafe/jev",
 			},
 			[MAILBOX_KEY]: {},
 		});
 		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
 		expect(resolved.injectionScannerModel).toBe("@cf/org/scanner");
 		expect(resolved.draftVerifierModel).toBe("@cf/org/verifier");
-		expect(resolved.classifierModel).toBe("@cf/org/classifier");
+		expect(resolved.classifierModel).toBe("typesafe/jev");
+	});
+
+	it("(b2) unknown stored org classifierModel falls back to default with a warning (#745)", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const bucket = makeFakeBucket({
+			"org/settings.json": { classifierModel: "not-a-model", agentModel: "@cf/org/agent" },
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.classifierModel).toBe(DEFAULT_MAILBOX_SETTINGS.classifierModel);
+		expect(resolved.agentModel).toBe("@cf/org/agent");
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
 	});
 
 	it("(c) both mailbox and org absent → system default", async () => {

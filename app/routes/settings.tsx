@@ -1031,6 +1031,10 @@ function SecurityModelDropdown({
 				{SECURITY_MODELS.map((m) => (
 					<option key={m} value={m}>{m}</option>
 				))}
+				{/* Show an inherited org value outside the mailbox-selectable list (e.g. typesafe/jev). */}
+				{!(SECURITY_MODELS as readonly string[]).includes(displayValue) && (
+					<option value={displayValue} disabled={!override}>{displayValue}</option>
+				)}
 			</select>
 		</div>
 	);
