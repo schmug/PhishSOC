@@ -48,6 +48,7 @@ import {
 import type { Env } from "../../workers/types";
 import type { EmailFull } from "../../workers/lib/schemas";
 import { GATE_BUDGET_MS, __setOutboundClassifier } from "../../workers/security/send-risk-llm";
+import { attachmentObjectKey } from "../../workers/lib/attachments";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -694,5 +695,42 @@ describe("MCP send tools — outbound LLM classifier", () => {
 		expect(seen).toEqual(["The API key is sk-live-123"]);
 		expect(result).toMatchObject({ error: "confirmation_required", risk: { tier: 1 } });
 		expect(sendEmail).not.toHaveBeenCalled();
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// toolSendEmail — Sent-folder attachment storage
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("toolSendEmail — attachments are stored for the Sent copy", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("writes each attachment blob to R2 under the key the SENT row points at", async () => {
+		const stub = makeStub();
+		const savedRows: Array<{ id: string; email_id: string; filename: string }> = [];
+		stub.createEmail = async (_folder: unknown, email: unknown, attachments?: unknown) => {
+			stub._sentEmails.push(email);
+			savedRows.push(...((attachments ?? []) as typeof savedRows));
+			return {};
+		};
+		const env = makeEnv(stub);
+
+		const result = await toolSendEmail(env, MAILBOX_ID, {
+			to: "colleague@internal.example",
+			subject: "Notes",
+			bodyHtml: "<p>Attached.</p>",
+			attachments: [{ content: btoa("hello world"), filename: "notes.txt", type: "text/plain" }],
+		});
+
+		expect(result).toMatchObject({ status: "sent" });
+		expect(savedRows).toHaveLength(1);
+		const row = savedRows[0];
+		expect(row.email_id).toBe((result as { messageId: string }).messageId);
+		const put = env.BUCKET.put as unknown as ReturnType<typeof vi.fn>;
+		expect(put).toHaveBeenCalledOnce();
+		expect(put.mock.calls[0][0]).toBe(attachmentObjectKey(row.email_id, row.id, row.filename));
+		expect(new TextDecoder().decode(put.mock.calls[0][1] as Uint8Array)).toBe("hello world");
 	});
 });

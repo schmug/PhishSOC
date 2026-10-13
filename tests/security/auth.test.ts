@@ -102,6 +102,14 @@ describe("parseAuthResults — authserv-id gating", () => {
 		expect(v).toMatchObject({ spf: "pass", trusted: true });
 	});
 
+	it("reads the authserv-id when it is followed by a version number (RFC 8601)", () => {
+		const v = parseAuthResults(
+			[header("Authentication-Results", "mx.example.org 1; spf=pass; dkim=pass; dmarc=pass")],
+			{ trustedAuthservIds: ["mx.example.org"] },
+		);
+		expect(v).toMatchObject({ spf: "pass", dkim: "pass", dmarc: "pass", authservId: "mx.example.org", trusted: true });
+	});
+
 	it("returns all-none when no trusted header is present (prefers silence over forged-pass)", () => {
 		const v = parseAuthResults(
 			[header("Authentication-Results", "attacker.example; spf=pass; dkim=pass; dmarc=pass")],
