@@ -39,19 +39,79 @@ const EMAIL_PALETTES = {
 	},
 } as const;
 
+/** Parses a CSS color the browser has normalized into `[r, g, b, a]`.
+ *  Handles hex and `rgb()`/`rgba()`; anything else returns null. */
+function parseCssColor(value: string): [number, number, number, number] | null {
+	const v = value.trim().toLowerCase();
+	const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(v);
+	if (hex) {
+		let h = hex[1];
+		if (h.length <= 4) h = [...h].map((c) => c + c).join("");
+		const n = (i: number) => Number.parseInt(h.slice(i, i + 2), 16);
+		return [n(0), n(2), n(4), h.length === 8 ? n(6) / 255 : 1];
+	}
+	const rgb = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+%?))?\s*\)$/.exec(v);
+	if (rgb) {
+		const alpha = rgb[4] === undefined
+			? 1
+			: rgb[4].endsWith("%") ? Number.parseFloat(rgb[4]) / 100 : Number.parseFloat(rgb[4]);
+		return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), alpha];
+	}
+	return null;
+}
+
+function relativeLuminance([r, g, b]: [number, number, number, number]): number {
+	const lin = (c: number) => {
+		const s = c / 255;
+		return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+	};
+	return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+// Relative luminance of the dark palette background, for contrast checks.
+const DARK_BG_LUMINANCE = relativeLuminance(parseCssColor(EMAIL_PALETTES.dark.bg)!);
+
 /**
- * True when the sanitized email HTML paints its own background via an
- * inline `style` background/background-color or a `bgcolor` attribute.
+ * True when an email-set text color would fail WCAG AA (4.5:1) against the
+ * dark palette background. Values we can't parse (named colors, hsl(), ...)
+ * count as unreadable so the email falls back to its own light canvas, which
+ * is the direction that never hides text. Fully transparent colors are ignored.
+ */
+function isUnreadableOnDark(value: string): boolean {
+	const v = value.trim().toLowerCase();
+	if (!v || v === "inherit" || v === "initial" || v === "unset" || v === "currentcolor") {
+		return false;
+	}
+	if (v === "white" || v === "transparent") return false;
+	const rgba = parseCssColor(v);
+	if (!rgba) return true;
+	if (rgba[3] === 0) return false;
+	return (relativeLuminance(rgba) + 0.05) / (DARK_BG_LUMINANCE + 0.05) < 4.5;
+}
+
+/**
+ * True when the sanitized email HTML was designed for a light canvas: it
+ * paints its own background via an inline `style` background/background-color
+ * or a `bgcolor` attribute (#711), or it sets a text color (inline `color` or
+ * `<font color>`) too dark to read on the dark palette. Without the second
+ * check, a sender's inline `color:#222` survives while the dark palette swaps
+ * out the white canvas it was written against, leaving near-black text on a
+ * near-black background. Links are skipped: the palette restyles them anyway
+ * and an email that only colors its links still reads fine in dark mode.
  * Runs on `cleanBody` (post-DOMPurify) so only styling that actually
  * reaches the iframe counts — `<style>` blocks are already stripped and
- * never considered (#711).
+ * never considered.
  */
-function emailSetsOwnBackground(html: string): boolean {
+function emailNeedsLightCanvas(html: string): boolean {
 	if (!html) return false;
 	const doc = new DOMParser().parseFromString(html, "text/html");
-	for (const el of doc.body.querySelectorAll<HTMLElement>("[style], [bgcolor]")) {
+	for (const el of doc.body.querySelectorAll<HTMLElement>("[style], [bgcolor], font[color]")) {
 		if (el.hasAttribute("bgcolor")) return true;
 		if (el.style.backgroundColor) return true;
+		if (el.closest("a")) continue;
+		if (el.style.color && isUnreadableOnDark(el.style.color)) return true;
+		const fontColor = el.tagName === "FONT" ? el.getAttribute("color") : null;
+		if (fontColor && isUnreadableOnDark(fontColor)) return true;
 	}
 	return false;
 }
@@ -166,10 +226,10 @@ export default function EmailIframe({ body, autoSize, onLinkClick }: EmailIframe
 
 		// Use srcdoc so the iframe is truly sandboxed (no same-origin access).
 		// We can't use doc.write() because that requires allow-same-origin.
-		// An email that paints its own light background (and, per the dark
-		// palette, inherits light body text) renders unreadable in dark mode
-		// unless it's shown in the light palette it was designed for (#711).
-		const useDarkPalette = theme === "dark" && !emailSetsOwnBackground(cleanBody);
+		// An email that paints its own light background or sets its own dark
+		// text color renders unreadable in dark mode unless it's shown in the
+		// light palette it was designed for (#711).
+		const useDarkPalette = theme === "dark" && !emailNeedsLightCanvas(cleanBody);
 		const palette = EMAIL_PALETTES[useDarkPalette ? "dark" : "light"];
 		iframe.srcdoc = `<!DOCTYPE html>
 <html>
