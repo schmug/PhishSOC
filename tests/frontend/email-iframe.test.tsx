@@ -149,3 +149,52 @@ describe("EmailIframe — palette selection for self-styled emails (issue #711)"
 		expect(srcdoc).toContain("color-scheme: light");
 	});
 });
+
+/**
+ * Palette selection for emails that set their own dark text color.
+ *
+ * A sender's inline `color:#222` survives sanitizing while the dark palette
+ * replaces the white canvas it was written against, so the text renders
+ * near-black on near-black. Such bodies get the light palette in dark mode;
+ * light or link-only colors keep the dark palette.
+ */
+describe("EmailIframe — palette selection for emails with dark text colors", () => {
+	afterEach(() => {
+		useUIStore.getState().setTheme("dark");
+	});
+
+	async function srcdocFor(body: string): Promise<string> {
+		useUIStore.getState().setTheme("dark");
+		const { container } = render(<EmailIframe body={body} />);
+		return getSrcdoc(container);
+	}
+
+	it.each([
+		['hex', '<p style="color:#222222">Hi!</p><p>Best,<br>Hanna</p>'],
+		['short hex', '<div style="color:#333">Hi!</div>'],
+		['rgb()', '<span style="color: rgb(34, 34, 34)">Hi!</span>'],
+		['named color', '<p style="color:black">Hi!</p>'],
+		['mid gray', '<p style="color:#777777">Hi!</p>'],
+		['<font color>', '<font color="#000000">Hi!</font>'],
+	])("dark theme + dark inline text color (%s): uses the light palette", async (_label, body) => {
+		const srcdoc = await srcdocFor(body);
+
+		expect(srcdoc).toContain("color: #1a1a1a");
+		expect(srcdoc).toContain("background: #ffffff");
+		expect(srcdoc).toContain("color-scheme: light");
+	});
+
+	it.each([
+		['light hex', '<p style="color:#eeeeee">Hi!</p>'],
+		['white', '<p style="color:white">Hi!</p>'],
+		['link-only color', '<p>Book here: <a href="https://example.com" style="color:#1155cc">link</a></p>'],
+		['color inherit', '<p style="color:inherit">Hi!</p>'],
+		['style without color', '<p style="font-size:14px">Hi!</p>'],
+	])("dark theme + %s: keeps the dark palette", async (_label, body) => {
+		const srcdoc = await srcdocFor(body);
+
+		expect(srcdoc).toContain("color: #ebe9e3");
+		expect(srcdoc).toContain("background: #1a1816");
+		expect(srcdoc).toContain("color-scheme: dark");
+	});
+});
