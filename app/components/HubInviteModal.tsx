@@ -23,6 +23,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { formatStandardDate } from "shared/dates";
 import { useCreateHubInvite } from "~/queries/hub";
 
 export interface HubInviteModalProps {
@@ -180,7 +181,12 @@ export default function HubInviteModal({
 						<div className="flex justify-end gap-2 pt-2">
 							<Dialog.Close
 								render={(props) => (
-									<Button {...props} variant="secondary" size="sm" type="button">
+									<Button
+										{...props}
+										variant="secondary"
+										size="sm"
+										type="button"
+									>
 										Cancel
 									</Button>
 								)}
@@ -204,8 +210,8 @@ export default function HubInviteModal({
 									Copy this token now — it won't be shown again.
 								</div>
 								<div className="text-ink-3 mt-0.5">
-									Share it with the peer through a trusted channel. They
-									redeem it via <span className="pp-mono">/orgs/accept</span>.
+									Share it with the peer through a trusted channel. They redeem
+									it via <span className="pp-mono">/orgs/accept</span>.
 								</div>
 							</div>
 						</div>
@@ -241,14 +247,14 @@ export default function HubInviteModal({
 							</div>
 							{copyState === "fallback" ? (
 								<p className="text-[11.5px] text-ink-3 mt-1">
-									Clipboard access denied. The token is selected — press
-									Cmd-C (macOS) or Ctrl-C (Windows/Linux) to copy.
+									Clipboard access denied. The token is selected — press Cmd-C
+									(macOS) or Ctrl-C (Windows/Linux) to copy.
 								</p>
 							) : null}
 						</div>
 						{expiresAt ? (
 							<div className="text-[12px] text-ink-3">
-								Expires {new Date(expiresAt).toLocaleString()}
+								Expires {formatStandardDate(expiresAt)}
 							</div>
 						) : null}
 						<div className="flex justify-end pt-2">
