@@ -779,6 +779,18 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE urls ADD COLUMN scan_final_url TEXT;
         `,
 	},
+	{
+		// Link-domains dashboard rollup (issue #740): `urls.hostname` mirrors
+		// `ExtractedUrl.hostname` for URLs stored after this migration, so the
+		// dashboard can group by host/registrable-domain without re-parsing
+		// the stored `url` column. Forward-only ALTER — pre-migration rows
+		// stay NULL and are excluded from the rollup rather than backfilled.
+		name: "38_urls_hostname",
+		sql: `
+            ALTER TABLE urls ADD COLUMN hostname TEXT;
+            CREATE INDEX IF NOT EXISTS idx_urls_hostname ON urls(hostname);
+        `,
+	},
 ];
 
 /**

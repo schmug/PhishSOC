@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
 	aggregateOrgOverview,
 	bucketThreatPressure,
+	computeLinkDomainRollup,
 	computeP95,
 	computeVerdictMix,
 	pipelineSuccessRate,
+	type LinkDomainUrlRow,
 	type OrgMailboxSummary,
 } from "../../workers/lib/dashboard-aggregation";
 
@@ -510,5 +512,91 @@ describe("computeP95", () => {
 
 	it("does not require pre-sorted input", () => {
 		expect(computeP95([900, 100, 500, 200, 300])).toBeCloseTo(820, 0);
+	});
+});
+
+describe("computeLinkDomainRollup", () => {
+	function linkRow(
+		hostname: string,
+		emailId: string,
+		action: string,
+		label: string,
+	): LinkDomainUrlRow {
+		return {
+			hostname,
+			email_id: emailId,
+			security_verdict: JSON.stringify({ action, classification: { label } }),
+		};
+	}
+
+	it("dedups multiple URLs to the same host within one email", () => {
+		const rows: LinkDomainUrlRow[] = [
+			linkRow("evil.example.com", "e1", "block", "phishing"),
+			linkRow("evil.example.com", "e1", "block", "phishing"), // second URL, same email — counts once
+			linkRow("evil.example.com", "e2", "tag", "phishing"),
+			linkRow("evil.example.com", "e3", "allow", "safe"),
+		];
+		const result = computeLinkDomainRollup(rows, 30);
+		expect(result.hosts).toEqual([
+			{ name: "evil.example.com", emails: 3, flagged: 2, phishing: 2, spam: 0 },
+		]);
+	});
+
+	it("omits rows with fewer than 3 distinct emails", () => {
+		const rows: LinkDomainUrlRow[] = [
+			linkRow("rare.example.com", "e1", "tag", "phishing"),
+			linkRow("rare.example.com", "e2", "tag", "phishing"),
+		];
+		expect(computeLinkDomainRollup(rows, 30).hosts).toEqual([]);
+	});
+
+	it("sorts by flagged desc, then emails desc", () => {
+		const rows: LinkDomainUrlRow[] = [];
+		// hostA: 5 emails, 1 flagged
+		for (let i = 0; i < 5; i++) {
+			rows.push(linkRow("a.example.com", `a${i}`, i === 0 ? "tag" : "allow", "safe"));
+		}
+		// hostB: 4 emails, 3 flagged
+		for (let i = 0; i < 4; i++) {
+			rows.push(linkRow("b.example.com", `b${i}`, i < 3 ? "tag" : "allow", "safe"));
+		}
+		// hostC: 10 emails, 3 flagged — ties hostB on flagged, wins on emails
+		for (let i = 0; i < 10; i++) {
+			rows.push(linkRow("c.example.com", `c${i}`, i < 3 ? "tag" : "allow", "safe"));
+		}
+		const result = computeLinkDomainRollup(rows, 30);
+		expect(result.hosts.map((r) => r.name)).toEqual([
+			"c.example.com",
+			"b.example.com",
+			"a.example.com",
+		]);
+	});
+
+	it("caps each list at 50 rows", () => {
+		const rows: LinkDomainUrlRow[] = [];
+		for (let h = 0; h < 60; h++) {
+			for (let e = 0; e < 3; e++) {
+				rows.push(linkRow(`host${h}.example.com`, `e${h}-${e}`, "allow", "safe"));
+			}
+		}
+		expect(computeLinkDomainRollup(rows, 30).hosts).toHaveLength(50);
+	});
+
+	it("rolls hosts up into their shared registrable domain", () => {
+		const rows: LinkDomainUrlRow[] = [
+			linkRow("www.example.com", "e1", "block", "phishing"),
+			linkRow("mail.example.com", "e2", "block", "phishing"),
+			linkRow("example.com", "e3", "allow", "safe"),
+		];
+		const result = computeLinkDomainRollup(rows, 30);
+		expect(result.domains).toEqual([
+			{ name: "example.com", emails: 3, flagged: 2, phishing: 2, spam: 0 },
+		]);
+		// Each individual host has only 1 email — below the <3 cutoff.
+		expect(result.hosts).toEqual([]);
+	});
+
+	it("carries window_days through unchanged", () => {
+		expect(computeLinkDomainRollup([], 7).window_days).toBe(7);
 	});
 });
