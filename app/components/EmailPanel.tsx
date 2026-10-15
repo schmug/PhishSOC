@@ -13,6 +13,7 @@ import SingleMessageView from "~/components/email-panel/SingleMessageView";
 import ThreadMessage from "~/components/email-panel/ThreadMessage";
 import { useFeedback } from "~/lib/feedback";
 import { requestStepUpConfirmation, StepUpNoPasskeyError } from "~/lib/step-up-confirm";
+import { combinedSendBodyForRisk } from "shared/send-risk-body";
 import { requiredRiskMessage, serverRequiredRisk } from "~/lib/send-risk-preview";
 import SendRiskReasons from "~/components/SendRiskReasons";
 import { htmlToPlainText, splitEmailList, toEmailListValue } from "~/lib/utils";
@@ -327,7 +328,7 @@ export default function EmailPanel({
 					cc: emailData.cc,
 					bcc: emailData.bcc,
 					subject: emailData.subject,
-					body: emailData.html || emailData.text || "",
+					body: combinedSendBodyForRisk(emailData.html, emailData.text),
 					attachmentIds: [],
 				});
 			}

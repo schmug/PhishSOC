@@ -19,6 +19,7 @@ import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
 import api from "~/services/api";
 import { requestStepUpConfirmation, StepUpNoPasskeyError } from "~/lib/step-up-confirm";
+import { combinedSendBodyForRisk } from "shared/send-risk-body";
 import { requiredRiskMessage, serverRequiredRisk } from "~/lib/send-risk-preview";
 
 function appendUniqueAddress(
@@ -368,7 +369,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 					cc: emailData.cc,
 					bcc: emailData.bcc,
 					subject: emailData.subject,
-					body: emailData.html || emailData.text || "",
+					body: combinedSendBodyForRisk(emailData.html, emailData.text),
 					attachmentIds: [],
 				});
 			}
