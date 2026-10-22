@@ -44,6 +44,13 @@ export interface ExtractedUrl {
 	hostname: string;
 	is_homograph: boolean;
 	is_shortener: boolean;
+	/**
+	 * The anchor's visible text is itself a URL or bare hostname whose
+	 * registrable domain differs from the href's ("shows bank.example, goes
+	 * to evil.example"). Only set for anchors; bare/href-only URLs have no
+	 * display text to compare.
+	 */
+	is_text_mismatch?: boolean;
 }
 
 const HREF_RE = /href\s*=\s*["']([^"']+)["']/gi;
@@ -152,26 +159,62 @@ export function extractUrls(body: string | null | undefined, cap = 20): Extracte
 	return out;
 }
 
+// Visible text that is entirely a URL or hostname — optional scheme, a
+// dotted host with an alphabetic TLD, optional port/path/query. Anything with
+// surrounding prose ("Visit example.com today", "Click here") is ignored so
+// only text that *claims* a destination is compared against the href.
+const DISPLAY_HOST_RE = /^(?:https?:\/\/)?((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63})\.?(?::\d+)?(?:[\/?#]\S*)?$/i;
+
+// Filename-shaped anchor text ("invoice.pdf", "report.docx") matches the
+// hostname shape but names a file, not a destination.
+const FILE_EXTENSION_TLDS = new Set([
+	"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "txt", "rtf",
+	"zip", "rar", "7z", "gz", "html", "htm", "php", "asp", "aspx", "jsp",
+	"jpg", "jpeg", "png", "gif", "svg", "mp3", "mp4", "mov", "ics", "eml",
+]);
+
+/**
+ * Registrable domain the anchor text claims to point at, or null when the
+ * text isn't a bare URL/hostname.
+ */
+export function displayedDomain(display: string | undefined): string | null {
+	if (!display) return null;
+	const m = DISPLAY_HOST_RE.exec(display.trim());
+	if (!m) return null;
+	const tld = m[1].slice(m[1].lastIndexOf(".") + 1).toLowerCase();
+	if (FILE_EXTENSION_TLDS.has(tld)) return null;
+	const host = normalizeHost(m[1]);
+	return host ? registrableDomain(host) : null;
+}
+
 function pushUrl(out: ExtractedUrl[], seen: Set<string>, rawUrl: string, display?: string) {
 	const hostname = safeHostname(rawUrl);
 	if (!hostname) return;
 	if (seen.has(rawUrl)) return;
 	seen.add(rawUrl);
 	const registrable = registrableDomain(hostname);
+	const shown = displayedDomain(display);
 	out.push({
 		url: rawUrl,
 		display_text: display,
 		hostname,
 		is_homograph: isHomographic(hostname),
 		is_shortener: SHORTENER_DOMAINS.has(hostname) || SHORTENER_DOMAINS.has(registrable),
+		...(shown && shown !== registrable ? { is_text_mismatch: true } : {}),
 	});
 }
+
+/** Weight of the `deceptive_link_text` rule before mitigations. */
+export const DECEPTIVE_LINK_TEXT_WEIGHT = 15;
 
 /**
  * Confidence sources (issue #105, v1):
  *   - 0.9 — a homograph fired (non-ASCII, bare punycode, or close
  *     Levenshtein to a high-value domain). These checks are deterministic
  *     once the URL is parsed.
+ *   - 0.8 — a deceptive-link-text match fired (no homograph). The
+ *     comparison is deterministic, but ESP click-tracking legitimately
+ *     rewrites hrefs, so it is not as conclusive as a homograph.
  *   - 0.6 — only a shortener match fired. Shortener-by-itself is a weak
  *     signal (legit users do shorten links).
  *   - 1.0 — no URL signals fired; nothing to be uncertain about.
@@ -199,6 +242,13 @@ export function scoreUrls(urls: ExtractedUrl[]): {
 		reasons.push(reason);
 		contributions.push({ scorer: "urls", rule: "link_shortener", weight: 5, reason });
 	}
-	const confidence = homograph ? 0.9 : shortener ? 0.6 : 1.0;
+	const mismatch = urls.find((u) => u.is_text_mismatch);
+	if (mismatch) {
+		score += DECEPTIVE_LINK_TEXT_WEIGHT;
+		const reason = `deceptive link text (shows ${mismatch.display_text}, goes to ${mismatch.hostname})`;
+		reasons.push(reason);
+		contributions.push({ scorer: "urls", rule: "deceptive_link_text", weight: DECEPTIVE_LINK_TEXT_WEIGHT, reason });
+	}
+	const confidence = homograph ? 0.9 : mismatch ? 0.8 : shortener ? 0.6 : 1.0;
 	return { score, reasons, confidence, contributions };
 }

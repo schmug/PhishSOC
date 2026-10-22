@@ -320,6 +320,17 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 					onCheckedChange={(v) => patch({ mitigations: { ...s.mitigations, dmarc_pass_compensates_method_fail: v } })}
 					disabled={!s.enabled}
 				/>
+				<p className="text-xs text-ink-3 mt-4 mb-3">
+					When on, DMARC=pass cuts the deceptive-link-text signal (link text shows one domain,
+					the link goes to another) to a small residual weight. On authenticated bulk mail
+					that mismatch is usually ESP click tracking rather than a lure.
+				</p>
+				<Switch
+					label="DMARC=pass softens deceptive-link-text contributions"
+					checked={s.mitigations?.dmarc_pass_softens_link_text ?? true}
+					onCheckedChange={(v) => patch({ mitigations: { ...s.mitigations, dmarc_pass_softens_link_text: v } })}
+					disabled={!s.enabled}
+				/>
 			</div>
 
 			{/* Detectors */}

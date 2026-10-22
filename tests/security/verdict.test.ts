@@ -5,12 +5,14 @@ import {
 	DEFAULT_THRESHOLDS,
 	DEFAULT_MITIGATION_CONFIG,
 	DMARC_PASS_COMPENSATES_METHOD_FAIL,
+	DMARC_PASS_SOFTENS_LINK_TEXT,
+	SOFTENED_LINK_TEXT_WEIGHT,
 	type FinalVerdict,
 } from "../../workers/security/verdict";
 import { scoreAttachments, DEFAULT_ATTACHMENT_POLICY } from "../../workers/security/attachments";
 import type { AuthVerdict } from "../../workers/security/auth";
 import { scoreClassification, type ClassificationResult } from "../../workers/security/classification";
-import { scoreUrls } from "../../workers/security/urls";
+import { DECEPTIVE_LINK_TEXT_WEIGHT, scoreUrls } from "../../workers/security/urls";
 import { scoreReputation } from "../../workers/security/reputation";
 
 const cleanAuth: AuthVerdict = { spf: "pass", dkim: "pass", dmarc: "pass" };
@@ -561,5 +563,66 @@ describe("aggregateVerdict spreads all scorer contributions into mitigContribs (
 		);
 		expect(v.signals).toContain("mitigated:dmarc_pass_compensates_method_fail");
 		expect(v.signals).toContain("link shortener (bit.ly)");
+	});
+});
+
+describe("dmarc_pass_softens_link_text mitigation", () => {
+	const mismatchUrl = {
+		url: "https://click.esp.example/abc",
+		display_text: "www.shop.example",
+		hostname: "click.esp.example",
+		is_homograph: false,
+		is_shortener: false,
+		is_text_mismatch: true,
+	};
+	const known = { sender: "a@shop.example", first_seen: "", last_seen: "", message_count: 3, avg_score: 0, flagged: false };
+	const noneAuth: AuthVerdict = { spf: "none", dkim: "none", dmarc: "none", dkimObservations: [] };
+	const passAuth: AuthVerdict = { spf: "pass", dkim: "pass", dmarc: "pass", dkimObservations: [] };
+
+	it("unauthenticated mail keeps the full deceptive_link_text weight", () => {
+		const v = aggregateVerdict({ auth: noneAuth, classification: safeClass, urls: [mismatchUrl], reputation: known });
+		expect(v.score).toBe(DECEPTIVE_LINK_TEXT_WEIGHT);
+		expect(v.signals).not.toContain("mitigated:dmarc_pass_softens_link_text");
+	});
+
+	it("DMARC=pass cuts the contribution to the residual weight", () => {
+		// A spam verdict keeps the total above zero so the clamp doesn't hide the delta.
+		const spam: ClassificationResult = { label: "spam", confidence: 1, reasoning: "" };
+		const withMitigation = aggregateVerdict({ auth: passAuth, classification: spam, urls: [mismatchUrl], reputation: known });
+		const without = aggregateVerdict(
+			{ auth: passAuth, classification: spam, urls: [mismatchUrl], reputation: known },
+			DEFAULT_THRESHOLDS,
+			{ ...DEFAULT_MITIGATION_CONFIG, dmarc_pass_softens_link_text: false },
+		);
+		expect(without.score - withMitigation.score).toBe(DECEPTIVE_LINK_TEXT_WEIGHT - SOFTENED_LINK_TEXT_WEIGHT);
+		expect(withMitigation.signals).toContain("mitigated:dmarc_pass_softens_link_text");
+		expect(without.signals).not.toContain("mitigated:dmarc_pass_softens_link_text");
+	});
+
+	it("absent config key inherits the on default", () => {
+		const v = aggregateVerdict(
+			{ auth: passAuth, classification: safeClass, urls: [mismatchUrl], reputation: known },
+			DEFAULT_THRESHOLDS,
+			{ dmarc_pass_compensates_method_fail: true },
+		);
+		expect(v.signals).toContain("mitigated:dmarc_pass_softens_link_text");
+	});
+
+	it("apply touches only deceptive_link_text", () => {
+		const out = DMARC_PASS_SOFTENS_LINK_TEXT.apply([
+			{ scorer: "urls", rule: "deceptive_link_text", weight: 15, reason: "" },
+			{ scorer: "urls", rule: "homograph_url", weight: 20, reason: "" },
+		]);
+		expect(out.map((c) => c.weight)).toEqual([SOFTENED_LINK_TEXT_WEIGHT, 20]);
+	});
+
+	it("an unauthenticated lure with a deceptive link and a suspicious classifier verdict reaches tag", () => {
+		const v = aggregateVerdict({
+			auth: noneAuth,
+			classification: { label: "suspicious", confidence: 0.6, reasoning: "" },
+			urls: [mismatchUrl],
+			reputation: null,
+		});
+		expect(v.action).toBe("tag");
 	});
 });

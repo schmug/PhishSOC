@@ -60,6 +60,7 @@ const ClassificationSettings = z
 const MitigationConfig = z
   .object({
     dmarc_pass_compensates_method_fail: z.boolean().optional(),
+    dmarc_pass_softens_link_text: z.boolean().optional(),
   })
   .passthrough();
 
