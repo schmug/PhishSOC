@@ -44,7 +44,9 @@ async function streamToArrayBuffer(
 		result.set(value, bytesRead);
 		bytesRead += value.length;
 	}
-	return result;
+	// A stream shorter than rawSize must not leave trailing zero bytes;
+	// slice() (not subarray) so `.buffer` consumers get an exact-length copy.
+	return bytesRead === streamSize ? result : result.slice(0, bytesRead);
 }
 
 /**

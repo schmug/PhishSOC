@@ -352,6 +352,46 @@ describe("fetchMtaStsPosture", () => {
 		expect(kv.store.get("mta-sts:v1:acme.com:none")).toBeDefined();
 	});
 
+	it("caches a failed policy fetch with the short TTL, a good one with the long TTL", async () => {
+		const ttls = new Map<string, number | undefined>();
+		const base = fakeKv();
+		const kv: MtaStsKv = {
+			get: base.get,
+			async put(key, value, opts) {
+				ttls.set(key, opts?.expirationTtl);
+				await base.put(key, value);
+			},
+		};
+		const makeFetch = (policyStatus: number) => async (url: string) => {
+			const u = new URL(url);
+			if (u.hostname === "cloudflare-dns.com") {
+				return dohTxtResponse(['"v=STSv1; id=abc"']);
+			}
+			return policyStatus === 200
+				? policyResponse("version: STSv1\nmode: enforce\nmx: mail.acme.com\nmax_age: 604800")
+				: new Response("unavailable", { status: policyStatus });
+		};
+		await fetchMtaStsPosture("acme.com", { fetchImpl: makeFetch(503), kv });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(ttls.get("mta-sts:v1:acme.com:abc")).toBe(5 * 60);
+
+		await fetchMtaStsPosture("good.com", { fetchImpl: makeFetch(200), kv });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(ttls.get("mta-sts:v1:good.com:abc")).toBe(24 * 60 * 60);
+	});
+
+	it("serves a cached negative without a DoH lookup", async () => {
+		const kv = fakeKv({ "mta-sts:v1:acme.com:none": emptyMtaStsPosture() });
+		let calls = 0;
+		const fetchImpl = async () => {
+			calls += 1;
+			return new Response(JSON.stringify({ Status: 0, Answer: [] }), { status: 200 });
+		};
+		const r = await fetchMtaStsPosture("acme.com", { fetchImpl, kv });
+		expect(r).toEqual(emptyMtaStsPosture());
+		expect(calls).toBe(0);
+	});
+
 	it("queries the _mta-sts.<domain> label, not the apex", async () => {
 		let captured = "";
 		const fetchImpl = async (url: string) => {

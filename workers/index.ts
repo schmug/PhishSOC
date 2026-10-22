@@ -1554,7 +1554,7 @@ app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) =
 	const before = await c.var.mailboxStub.getEmail(emailId);
 
 	const success = await c.var.mailboxStub.moveEmail(emailId, folderId);
-	if (!success) return c.json({ error: "Folder not found" }, 400);
+	if (!success) return before ? c.json({ error: "Folder not found" }, 400) : c.json({ error: "Not found" }, 404);
 
 	// Per-folder `treat_as_verified` hook. When the user moves a message
 	// INTO a verified folder from a non-verified folder, bump the sender's
