@@ -1,72 +1,176 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/schmug/PhishSOC)
 <div align="center">
   <h1>PhishSOC</h1>
-  <p><em>A phishing-aware email SOC on Cloudflare Workers — full mailbox UI, AI triage agent, and a real-time SPF/DKIM/DMARC + URL/RDAP scoring pipeline.</em></p>
+  <p><em>A self-hosted email client with a phishing SOC built in, running entirely on Cloudflare Workers.</em></p>
 </div>
 
-PhishSOC is a self-hosted phishing-detection layer wrapped around a complete Cloudflare-native email client. Mail arrives via [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/), each mailbox is isolated in its own [Durable Object](https://developers.cloudflare.com/durable-objects/) with a SQLite database, and attachments are stored in [R2](https://developers.cloudflare.com/r2/). When the security pipeline is enabled per mailbox, every inbound message is scored — SPF/DKIM/DMARC parse, URL/homograph heuristics, an LLM classifier, threat-intel feed matching, and an async deep-scan stage (redirect-chain resolution, RDAP domain age, attachment checks) — before it ever reaches the inbox.
+PhishSOC is a complete webmail client (inbox, threading, composer, search, attachments) where every inbound message can be scored by a layered security pipeline before it reaches you, and every risky outbound message needs a passkey to leave. It runs as a single Cloudflare Worker: mail arrives through [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/), each mailbox lives in its own [Durable Object](https://developers.cloudflare.com/durable-objects/) with a SQLite database, attachments go to [R2](https://developers.cloudflare.com/r2/), and the whole app sits behind [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/).
 
-An **AI agent** runs alongside the inbox: it reads incoming mail, auto-drafts replies (always requiring explicit send-confirmation), and exposes 9 agent tools in-app and 13 tools over [MCP](https://modelcontextprotocol.io/) so external clients like Claude Code or Cursor can act on any mailbox. Built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and [Workers AI](https://developers.cloudflare.com/workers-ai/).
+On top of the mail client you get:
+
+- **Inbound phishing detection.** SPF/DKIM/DMARC, URL and homograph heuristics, sender reputation and impersonation detection, threat-intel feeds, an LLM classifier, and an async deep scan (redirect chains, domain age, IP reputation, attachments). Every email shows its verdict and why.
+- **Outbound send-risk gating.** Drafts are classified into risk tiers; risky sends require a WebAuthn passkey step-up, and the riskiest also need a typed confirmation.
+- **SOC workflow.** Report-as-phish, cases, a per-mailbox dashboard, sender blocklists, false-positive labels, and an optional community threat-intel hub.
+- **AI agents.** A per-mailbox agent that reads, triages and drafts replies (never sending without confirmation), an org-wide agent, and an [MCP](https://modelcontextprotocol.io/) server so Claude Code, Cursor and other MCP clients can work your mailboxes.
+- **Domain posture.** DMARC, SPF, DKIM, MTA-STS, BIMI, TLS-RPT and DNSSEC posture per domain, plus DMARC and TLS-RPT report ingest.
+- **Deployment modes.** Use it as your mailbox, as an inline gateway in front of Google Workspace or M365, or as a sidecar that scores an existing Workspace mailbox without touching MX.
 
 ![PhishSOC screenshot](./docs/img/demo_app.webp)
 
+PhishSOC started as a fork of Cloudflare's [agentic-inbox](https://github.com/cloudflare/agentic-inbox) ([Email for Agents](https://blog.cloudflare.com/email-for-agents/)). For a folder-by-folder orientation of the repo, see the [Codebase map](./CLAUDE.md#codebase-map).
 
-Read the blog post to learn more about Cloudflare Email Service and how to use it with the Agents SDK, MCP, and from the Wrangler CLI: [Email for Agents](https://blog.cloudflare.com/email-for-agents/).
+## Contents
 
-For a folder-by-folder orientation of the repo, see the [Codebase map](./CLAUDE.md#codebase-map) in CLAUDE.md.
-
-## How to setup
-
-**Important**: Clicking the 'Deploy to Cloudflare' button is only one part of the setup. You must follow the **After deploying** steps as well. For a full step-by-step guide with screenshots, refer to the upstream setup walkthrough — its deploy/Email-Routing/Access steps still apply to PhishSOC: 
-https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
-
-### To set up
-
-1. Deploy to Cloudflare. The deploy flow will automatically provision R2, Durable Objects, and Workers AI. You'll be prompted for **DOMAINS** -- your domain(s) with Email Routing enabled. Comma-separated for multi-domain (e.g. `example.com` or `a.example,b.example`).
-
-     [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/schmug/PhishSOC)
-
-2. **Configure Cloudflare Access** -- Enable [one-click Cloudflare Access](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/) on your Worker under Settings > Domains & Routes. The modal will show your `POLICY_AUD` and `TEAM_DOMAIN` values. `TEAM_DOMAIN` can be either your Access team URL or the full `.../cdn-cgi/access/certs` URL. **You must set these as secrets for your Worker.**
-3. **Set up Email Routing** -- In the Cloudflare dashboard, go to your domain > Email Routing and create a catch-all rule that forwards to this Worker
-4. **Enable Email Service** -- The worker needs the `send_email` binding to send outbound emails. See [Email Service docs](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/)
-5. **Create a mailbox** -- Visit your deployed app and create a mailbox for any address on your domain (e.g. `hello@example.com`)
-
-### Troubleshooting Access
-
-1. If you see `Invalid or expired Access token`, that usually means `POLICY_AUD` or `TEAM_DOMAIN` secrets are incorrect.
-   * Resolution: [turn Access off and back on for the Worker to get the Access modal again](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/), then reset your Worker secrets to the latest `POLICY_AUD` and `TEAM_DOMAIN` values shown there.
-2. If you see `Cloudflare Access must be configured in production`, this application is intentionally enforcing Cloudflare Access so your inbox is not exposed to anyone on the internet.
-   * Resolution: enable Access using [one-click Cloudflare Access for Workers](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/), then set the `POLICY_AUD` and `TEAM_DOMAIN` Worker secrets from the modal values.
+- [Features](#features)
+- [Deploying](#deploying)
+- [Connecting an MCP client](#connecting-an-mcp-client)
+- [Local development](#local-development)
+- [Security pipeline](#security-pipeline)
+- [Architecture](#architecture)
+- [Documentation](#documentation)
 
 ## Features
 
-- **Full email client** — Send and receive emails via Cloudflare Email Routing with a rich text composer, reply/forward threading, folder organization, search, and attachments
-- **Per-mailbox isolation** — Each mailbox runs in its own Durable Object with SQLite storage and R2 for attachments
-- **Built-in AI agent** — Side panel with 9 agent tools for reading, searching, drafting, and sending
-- **MCP server** — 13 tools at `/mcp` so external AI clients (Claude Code, Cursor) can act on any mailbox
-- **Auto-draft on new email** — Agent automatically reads inbound emails and generates draft replies, always requiring explicit confirmation before sending
-- **Configurable and persistent** — Custom system prompts per mailbox, persistent chat history, streaming markdown responses, and tool call visibility
-- **Security pipeline** — Opt-in SPF/DKIM/DMARC parsing, URL homograph detection, LLM classifier, sender reputation, threat-intel feed matching, and async deep-scan (redirect-chain resolution, RDAP domain age, attachment heuristics). See [Security](#security) below
+### Email client
 
-## Stack
+- Send and receive through Cloudflare Email Routing and Email Service, with a rich-text composer, reply/forward threading, folders, search, and attachments.
+- Multiple domains and mailboxes per deployment, plus an **All inboxes** view across every mailbox you can see and org-wide search.
+- Per-mailbox isolation: each mailbox is a Durable Object with its own SQLite database and R2 attachment storage.
+- Layered settings: org, domain, and mailbox tiers. Unset values inherit from the tier above.
+- Per-mailbox access control (members and Access groups), ownership transfer, and a one-click lock-down for unscoped mailboxes.
+- Optional new-mail webhooks (Google Chat / Slack style, or JSON) per org, domain, or mailbox, optionally HMAC-signed.
 
-- **Frontend:** React 19, React Router v7, Tailwind CSS, Zustand, TipTap, `@cloudflare/kumo`
-- **Backend:** Hono, Cloudflare Workers, Durable Objects (SQLite), R2, Email Routing
-- **AI Agent:** Cloudflare Agents SDK (`AIChatAgent`), AI SDK v6, Workers AI (`@cf/moonshotai/kimi-k2.5`), `react-markdown` + `remark-gfm`
-- **Auth:** Cloudflare Access JWT validation (required outside local development)
+### Inbound security
 
-## Getting Started
+- Opt-in security pipeline (see [Security pipeline](#security-pipeline)) that can be enabled per mailbox or at the domain/org tier.
+- Every email shows its verdict, score, reasons, and a per-stage trace of what ran.
+- Verdicts map to actions: allow, tag, quarantine, or block, with learning mode (never quarantines) and confidence-aware demotion.
+- Sender blocklist at mailbox, domain, or org scope that drops silently, bounces, or moves to Spam.
+- **Not phish** button that records a false-positive label without changing the verdict.
+- Optional YARA attachment scanning through the [YaraMail sidecar](docs/yaramail-sidecar.md).
+- Catch-all scoring for mail sent to non-existent addresses on your domains, with directory-harvest alerts.
+- [Honeypot mailboxes](docs/honeypots.md): burner addresses that publish IOCs to the hub and never reply.
+
+### Outbound safety
+
+- Every send is classified into Tier 0 (no friction), Tier 1 (passkey step-up), or Tier 2 (step-up plus typed confirmation). Signals include external recipients, lookalike domains, BEC/credential language, risky attachments, replies to quarantined mail, and an outbound LLM check.
+- Step-up is an app-layer WebAuthn assertion bound to the payload and to the Cloudflare Access identity. See [docs/step-up-auth.md](docs/step-up-auth.md).
+- Agent-authored drafts are bumped a tier, and the agent cannot send without explicit confirmation.
+
+### SOC workflow
+
+- **Report phish** turns an email into a case. Cases track status, indicators of compromise, and an AI summary, and can be shared to the hub.
+- Per-mailbox **dashboard**: threats blocked, open cases, pipeline health and latency, verdict mix, and hub activity.
+- Analyst-confirmed **Submit to Cloudflare** phishing categorization of a domain from a case (optional; needs an Intel API token, with a never-submit list and a monthly cap).
+- A MISP-compatible [community threat-intel hub](hub/) that accepts reports from many deployments and publishes a trust-weighted, corroborated destroylist feed.
+- Security alerts to an operator webhook (`SECURITY_ALERT_WEBHOOK_URL`) for high-risk events such as a first passkey enrollment or a gateway relay failure.
+
+### AI agents
+
+- **Mailbox agent** side panel with 9 tools (list, read, search, thread, draft, update draft, mark read, move, send). Auto-drafts replies to new mail, always requiring confirmation to send. Custom system prompt per mailbox, persistent chat history, streaming responses.
+- **Org agent** with org-wide tools: overview, top threats, and case search across mailboxes.
+- **MCP server** at `/mcp` with 13 tools: `list_mailboxes`, `list_emails`, `get_email`, `get_thread`, `search_emails`, `create_draft`, `update_draft`, `draft_reply`, `send_email`, `send_reply`, `mark_email_read`, `move_email`, `delete_email`.
+- The agents never see analyst-only actions (URL scanning, Cloudflare categorization) so injected email content can't trigger them. See [SECURITY_SPEC.md](SECURITY_SPEC.md).
+- Models are configurable. The default agent model is Workers AI `@cf/moonshotai/kimi-k2.5`.
+
+### Domain posture and reports
+
+The domain page (`/domains/:domain`) shows DMARC policy and alignment, SPF (including a 10-lookup check), DKIM, MTA-STS, BIMI, TLS-RPT, and DNSSEC. DMARC aggregate (RUA) and forensic (RUF) reports and TLS-RPT reports sent to a PhishSOC mailbox are ingested and charted.
+
+### Deployment modes
+
+| Mode | What it does | Guide |
+| --- | --- | --- |
+| Standalone (default) | PhishSOC is the mailbox. Email Routing delivers to the Worker, which stores and scores mail. | [Deploying](#deploying) |
+| Inline gateway | PhishSOC scores inbound mail, then relays it to Google Workspace, M365, or any SMTP-submission backend with verdict headers and an ARC seal. Quarantined mail is held. | [docs/gateway-mode.md](docs/gateway-mode.md) |
+| Workspace sidecar | Polls existing Google Workspace mailboxes through the Gmail API and scores them, with no MX change. | [docs/sidecar-credentials.md](docs/sidecar-credentials.md) |
+
+## Deploying
+
+**Important:** the Deploy button is only part of setup. Finish the steps after it, or the app will refuse requests.
+
+### Prerequisites
+
+- A Cloudflare account with a domain
+- [Email Routing](https://developers.cloudflare.com/email-routing/) for receiving and [Email Service](https://developers.cloudflare.com/email-service/) for sending
+- [Workers AI](https://developers.cloudflare.com/workers-ai/) (agents and the LLM classifier)
+- [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) (required in production)
+
+### Steps
+
+1. **Deploy to Cloudflare.** The deploy flow provisions R2, Durable Objects, KV, D1, and Workers AI. You'll be prompted for **DOMAINS**, your Email Routing domain(s), comma-separated (e.g. `example.com` or `a.example,b.example`).
+
+   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/schmug/PhishSOC)
+
+2. **Configure Cloudflare Access.** Enable [one-click Cloudflare Access](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/) on the Worker under Settings > Domains & Routes. Set the `POLICY_AUD` and `TEAM_DOMAIN` values it shows as Worker secrets. `TEAM_DOMAIN` can be the Access team URL or the full `.../cdn-cgi/access/certs` URL.
+3. **Set the WebAuthn relying party.** Set `RP_ID` (e.g. `inbox.example.com`) and `RP_ORIGIN` (e.g. `https://inbox.example.com`) in `wrangler.jsonc` `vars` to your deployed hostname, apply the D1 migrations (`wrangler d1 migrations apply phishsoc-webauthn --remote`), and set `CONFIRMATION_TOKEN_SECRET` (`openssl rand -hex 32`). Without these, risky sends cannot be confirmed. See [docs/step-up-auth.md](docs/step-up-auth.md).
+4. **Set up Email Routing.** In your domain's Email Routing, create a catch-all rule that sends to this Worker.
+5. **Enable Email Service** so the `send_email` binding can send from your domain(s). See the [Email Service docs](https://developers.cloudflare.com/email-service/).
+6. **Create a mailbox.** Open the app and create a mailbox for any address on your domain (e.g. `hello@example.com`).
+7. **Turn on the security pipeline** in Settings → Security, and set the [recommended configuration](#recommended-configuration).
+
+For a walkthrough with screenshots of the deploy, Email Routing, and Access steps, see the [upstream setup guide](https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513); those steps apply to PhishSOC unchanged.
+
+Optional integrations (CrowdSec CTI, hub credentials, webhooks, Cloudflare Intel, gateway relay credentials) are all Worker secrets. Every one is listed, with its effect when missing, in [docs/secrets.md](docs/secrets.md).
+
+### Deploying from a clone
+
+`wrangler.jsonc` contains the maintainer's own resource IDs and hostnames. Replace them with yours before `npm run deploy`:
+
+```bash
+wrangler r2 bucket create agentic-inbox
+wrangler kv namespace create BLOOM_KV            # paste the id into wrangler.jsonc
+wrangler d1 create phishsoc-webauthn             # paste the database_id into wrangler.jsonc
+wrangler d1 migrations apply phishsoc-webauthn --remote
+```
+
+Then update `DOMAINS`, `RP_ID`, and `RP_ORIGIN` in `vars`, set the secrets above, and run `npm run deploy`.
+
+### Troubleshooting Access
+
+- **`Invalid or expired Access token`** usually means `POLICY_AUD` or `TEAM_DOMAIN` is wrong. [Turn Access off and on again](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/) for the Worker to see the modal, then reset both secrets.
+- **`Cloudflare Access must be configured in production`** means the secrets are missing. PhishSOC refuses to serve without Access so your inbox is never exposed to the internet.
+
+### Access model
+
+Cloudflare Access is the trust boundary for everything, including `/mcp`. Anyone who passes your Access policy can use the app. Two layers narrow that:
+
+- **Mailbox ACLs** limit which people and Access groups can open a given mailbox. A mailbox with no ACL is open to everyone behind Access.
+- **WebAuthn step-up** requires a passkey assertion, tied to the Access identity and the exact message, before a Tier 1+ send.
+
+Access service tokens carry no email identity, so they can only reach mailboxes with no ACL. The threat model is in [docs/security/THREAT_MODEL.md](docs/security/THREAT_MODEL.md).
+
+## Connecting an MCP client
+
+The MCP server is served over Streamable HTTP at `https://<your-host>/mcp`, behind the same Cloudflare Access application as the app.
+
+1. In Cloudflare Zero Trust, create a **service token** (Access → Service Auth) and add a policy with the **Service Auth** action that includes that token on the PhishSOC Access application.
+2. Register the server with your client, passing the token as headers. For Claude Code:
+
+   ```bash
+   claude mcp add --transport http phishsoc https://inbox.example.com/mcp \
+     --header "CF-Access-Client-Id: <client-id>.access" \
+     --header "CF-Access-Client-Secret: <client-secret>"
+   ```
+
+3. Ask the client to `list_mailboxes` to confirm it works.
+
+Because a service token has no email identity, MCP clients see only mailboxes without an ACL. ACL-scoped mailboxes stay private to their members. MCP sends go through the same send-risk checks as the UI.
+
+## Local development
 
 ```bash
 npm install
-npm run dev
+npm run dev        # local dev server; Cloudflare Access is skipped
+npm test           # Vitest: workers + frontend
+npm run typecheck  # wrangler types + react-router typegen + tsc
 ```
 
-By default the dev server runs with all bindings local-only — no Cloudflare Access service token is required. The Worker's `send_email` binding becomes a local no-op, which is fine for UI work and most backend iteration.
+The dev server runs with local-only bindings and seeds a synthetic `dev@localhost` identity, so no Access token is needed. The `send_email` binding is a no-op locally. Copy `.dev.vars.example` to `.dev.vars` for optional local secrets. See [docs/testing.md](docs/testing.md) for the test layout and [CONTRIBUTING.md](CONTRIBUTING.md) for the PR flow.
 
-### Optional: enable remote bindings locally
+### Optional: remote bindings locally
 
-If you have Cloudflare Access service-token credentials for the deployed Worker and want `send_email` (or future remote bindings) to route to it, install [direnv](https://direnv.net/) and create a gitignored `.envrc` at the repo root:
+To route `send_email` to the deployed Worker, install [direnv](https://direnv.net/) and create a gitignored `.envrc`:
 
 ```bash
 # .envrc — DO NOT COMMIT (already in .gitignore)
@@ -74,163 +178,108 @@ export CLOUDFLARE_ACCESS_CLIENT_ID=<your token>.access
 export CLOUDFLARE_ACCESS_CLIENT_SECRET=<your secret>
 ```
 
-Then `direnv allow .`. Vite will detect the creds at startup and enable the remote-binding proxy. Without these vars set, `vite.config.ts` passes `remoteBindings: false` so the dev server boots cleanly.
-
-### Configuration
-
-1. Set your domain(s) in `wrangler.jsonc` — `DOMAINS` is comma-separated, e.g. `"a.example,b.example"`
-2. Create an R2 bucket named `agentic-inbox`: `wrangler r2 bucket create agentic-inbox`
-3. Create the threat-intel KV namespace and paste the returned ID into `wrangler.jsonc` (replace `REPLACE_WITH_KV_NAMESPACE_ID`):
-
-   ```bash
-   wrangler kv namespace create BLOOM_KV
-   wrangler kv namespace create BLOOM_KV --preview
-   ```
-
-### Deploy
-
-```bash
-npm run deploy
-```
+Run `direnv allow .`. Vite enables the remote-binding proxy when these are set and passes `remoteBindings: false` otherwise.
 
 ### Two-domain end-to-end test
 
-To exercise both inbound and outbound on independent domains (useful for validating the full security pipeline):
+1. Put two domains in `DOMAINS` and enable Email Routing (catch-all to the Worker) and Email Service on both.
+2. Create one mailbox per domain and send from one to the other. This exercises outbound send, inbound routing, pipeline scoring, auto-draft, and reply.
+3. Turn the security pipeline on for at least one mailbox and set **Trusted authentication servers** to `mx.cloudflare.net` first.
 
-1. Add both domains to `DOMAINS`, e.g. `"cortech.online,dmarc.mx"`.
-2. In the Cloudflare dashboard, enable **Email Routing** on each domain and add a catch-all rule that forwards to this Worker.
-3. Verify each domain (or specific MAIL FROM addresses) under **Email → Email Service** so the `send_email` binding can send "from" either domain. See the [Email Service docs](https://developers.cloudflare.com/email-service/).
-4. Create one mailbox per domain in the app (e.g. `inbox@cortech.online`, `inbox@dmarc.mx`).
-5. Send a message from mailbox A → mailbox B. The roundtrip exercises: outbound `send_email`, inbound Email Routing, security pipeline scoring, agent auto-draft, and reply send.
-6. Recommended: turn the **security pipeline** on for at least one mailbox and populate **Trusted authentication servers** with `mx.cloudflare.net` (Settings → Security) before testing.
+## Security pipeline
 
-## Prerequisites
+The pipeline is **opt-in**. Existing mailboxes are unaffected until you enable it in Settings → Security (per mailbox, or at the domain/org tier to cover every mailbox beneath it).
 
-- Cloudflare account with a domain
-- [Email Routing](https://developers.cloudflare.com/email-routing/) enabled for receiving
-- [Email Service](https://developers.cloudflare.com/email-service/) enabled for sending
-- [Workers AI](https://developers.cloudflare.com/workers-ai/) enabled (for the agent)
-- [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) configured for deployed/shared environments (required in production)
+### Recommended configuration
 
-Cloudflare Access is the primary trust boundary: any user who passes the shared Access policy is admitted to the app, including the MCP server at `/mcp` -- external AI tools (Claude Code, Cursor, etc.) connected via MCP. Two mechanisms narrow it further: per-mailbox ACLs scope which teammates can act on a given mailbox (#27/#295), and an app-layer **WebAuthn step-up** (#376) demands a per-send, payload-bound passkey assertion -- bound to the Access identity -- before a risky (Tier >= 1) message can be sent. See [docs/step-up-auth.md](docs/step-up-auth.md).
+Both settings live in Settings → Security and are empty by default.
 
-## Security
-
-See also: [SECURITY_SPEC.md](./SECURITY_SPEC.md) — "Rules for Agent-Safe Email Pipelines", a vendor-neutral codification of the prompt-injection and async-pipeline invariants this codebase ships.
-
-To report a vulnerability or review the disclosure policy, see [SECURITY.md](.github/SECURITY.md).
-
-[Security Policies](./docs/security-policies.md) — SCA (Dependabot) and SAST (CodeQL) remediation SLAs, merge-gate policies, and waiver processes (OSPS-VM-05.01, VM-05.02, VM-06.01).
-
-For secrets management (storage locations, access scope, and rotation policy for every Worker and CI secret), see [docs/secrets.md](./docs/secrets.md).
-
-For the step-up confirmation flow (two-Access-app topology, shared-hostname caveat, required secrets, and testing guide), see [docs/step-up-auth.md](./docs/step-up-auth.md).
-
-The security pipeline is **opt-in per mailbox** — existing mailboxes are unaffected until you flip the toggle in **Settings → Security**. When enabled, every inbound email runs through a synchronous scoring pipeline (SPF/DKIM/DMARC parse → URL heuristics → LLM classifier → sender reputation → threat-intel feed match → aggregate verdict), then an async deep-scan stage layered on top.
-
-### Recommended configuration after enabling
-
-These two settings are the high-leverage ones. Both live in **Settings → Security**; both are empty by default for back-compat.
-
-#### 1. Trusted authentication servers
-
-Sets which `Authentication-Results` headers are trusted when computing the SPF/DKIM/DMARC verdict. Without this list populated, an attacker-controlled upstream mail server can inject a forged `Authentication-Results: attacker.example; spf=pass; dkim=pass; dmarc=pass` header and the parser will accept it.
-
-Populate with the authserv-id(s) that actually sit on your mail path. For a typical Cloudflare-routed setup:
-
-```
-mx.cloudflare.net
-```
-
-If your mail traverses a Google/Microsoft forwarder before Cloudflare, add those too (suffix match is supported — `google.com` covers `mx1.google.com`, `mx5.google.com`, etc.):
+**1. Trusted authentication servers.** Only `Authentication-Results` headers from these authserv-ids are trusted. Without this list, an upstream server can forge `spf=pass; dkim=pass; dmarc=pass`. For a Cloudflare-routed setup use `mx.cloudflare.net`; add forwarders on your path (suffix match, so `google.com` covers `mx1.google.com`):
 
 ```
 mx.cloudflare.net, google.com, outlook.com
 ```
 
-#### 2. Business hours
+**2. Business hours (optional).** Mail outside your hours gets +10, since BEC and wire-fraud requests cluster at night and on weekends. It can tip a borderline verdict but never quarantines on its own. Takes an IANA timezone, a start hour, an exclusive end hour, and an optional weekdays-only flag.
 
-Optional. When enabled, mail delivered outside your working hours gets a small score nudge (+10) — BEC / wire-fraud requests disproportionately land at 3 AM and on weekends. The nudge can push a borderline verdict over the tag/quarantine threshold; it can never single-handedly quarantine an email on time alone (the triage layer deliberately ignores the signal for explicit allowlists and trusted history).
-
-Takes an IANA timezone plus an hour window:
-
-```
-Timezone: America/New_York
-Start:    09
-End:      18  (exclusive — 18:00 itself is off-hours)
-Weekends: flagged when weekdays_only is on
-```
-
-### Pipeline stages
+### Stages
 
 | Stage | Latency | Notes |
 | --- | --- | --- |
-| Auth header parse | µs | SPF/DKIM/DMARC from `Authentication-Results`; gated by trusted authserv-ids |
-| URL extract + homograph/shortener check | ms | Levenshtein vs a high-value-domain list |
-| Sender reputation | ms | Rolling avg score per mailbox; flagged-sender fast path |
-| Threat-intel bloom lookup | ms | Against [workers/intel/feeds.ts](workers/intel/feeds.ts) (URLhaus, PhishDestroy, configurable; Spamhaus DROP/EDROP CIDR feeds consumed in deep-scan) |
-| Triage short-circuits | µs | Hard-block on confirmed intel / flagged sender; hard-allow on DMARC pass + allowlist or trusted history |
-| LLM classifier | seconds (5s cap) | Workers AI; timeout → contributes 0 to score (skipped); parse/other error → fail-closed to `suspicious` (see [SECURITY_SPEC.md Rule 5](SECURITY_SPEC.md)) |
-| Verdict aggregation | µs | Pure scoring function; thresholds configurable per mailbox |
-| Off-hours boost | µs | Optional, scoring-only |
-| **Async deep-scan** | seconds–tens-of-seconds | `ctx.waitUntil`; see below |
+| Sender blocklist | µs | Before storage. Mailbox > domain > org precedence; drop, bounce, or Spam |
+| Auth parse | µs | SPF/DKIM/DMARC from `Authentication-Results`, gated by trusted authserv-ids; sender trust is bound to the DMARC-evaluated From domain |
+| URL extract + heuristics | ms | Homograph/Levenshtein against high-value domains, shorteners, and own-domain lookalikes (sender and link domains imitating your domains, up to +25) |
+| Threat-intel feeds | ms | Bloom-filter lookup of canonicalized URLs/hosts against [feeds](workers/intel/feeds.ts) (URLhaus, PhishDestroy, and configurable feeds); hits in 2+ feeds floor the score at quarantine |
+| Sender reputation | ms | Rolling per-mailbox score, flagged-sender fast path, CrowdSec prior for first-time senders, and display-name impersonation detection (up to +30) |
+| Triage short-circuits | µs | Hard block on confirmed intel or flagged sender; hard allow on DMARC pass plus allowlist or trusted history |
+| LLM classifier | seconds | Workers AI model (configurable), or the opt-in Cloudflare Clef or TypeSafe Jev backends with fallback. Timeout contributes 0; a parse error fails closed to `suspicious` ([SECURITY_SPEC.md Rule 5](SECURITY_SPEC.md)) |
+| Verdict aggregation | µs | Thresholds per settings tier; off-hours, impersonation, lookalike, and intel boosts; learning mode and confidence demotion |
+| **Async deep scan** | seconds | `ctx.waitUntil`, after the verdict is stored. Can only tighten the verdict, capped at +40 |
+| YARA sidecar | ≤30s | Optional, async, never on the critical path |
 
-### Async deep-scan
+### Async deep scan
 
-Fires after the sync verdict is stored and only ever *tightens* the decision (sync `allow` → deep-scan `quarantine` is fine; reverse is not). Contribution capped at `+40` so it can't dominate the sync signal.
-
-- **Redirect-chain resolution** — follows `bit.ly`-style wrappers up to 5 hops so downstream checks see the real destination.
-- **RDAP domain age** — queries `rdap.org` for registration date. Domains <7d get +20, <30d get +10. Fails silently on flaky RDAP servers.
-- **CrowdSec CTI enrichment** — *optional, async-only*. When `CROWDSEC_CTI_API_KEY` is set, redirect-target hostnames are resolved via DoH (`cloudflare-dns.com`) and each unique IP is looked up against [CrowdSec CTI](https://docs.crowdsec.net/u/cti_api/intro). Signals: `behaviors` matching `phishing`/`exploit` (+25), `reputation=malicious` (+15), `reputation=suspicious` or `classifications` containing `tor`/`vpn:public`/`data_center` (+10). Capped at +25 per inbound. Responses cached in `BLOOM_KV` for 12h (1h for 404s); 429 rate-limits return `null` without poisoning the cache. Free-tier CTI is rate-limited, so this stage **never runs on the synchronous receive path**. Set the secret with `wrangler secret put CROWDSEC_CTI_API_KEY`; deploys without it just no-op the stage.
-- **Spamhaus DROP / EDROP** — *no-auth IP feed*. The cron refresher pulls [Spamhaus DROP](https://www.spamhaus.org/drop/drop.txt) and [EDROP](https://www.spamhaus.org/drop/edrop.txt) every 12h and stores the parsed CIDR list in `BLOOM_KV`. In deep-scan, every redirect-target hostname is resolved via DoH and each unique IP is checked for membership against the DROP/EDROP CIDR set; a match adds +20 (capped at +25 per inbound) and a `redirect target IP <ip> (<cidr>) on Spamhaus DROP` reason. CIDR membership is implemented as a linear scan with IPv4-as-uint32 masking (the lists are small — a few thousand entries — so no index is needed). DoH resolution is shared with the CrowdSec CTI stage so we don't double-spend DNS queries; deploys without DROP feeds and without a CTI key skip DoH entirely.
-- **CrowdSec community blocklist** — *operator-configured IP feed*. Same `ip-cidr` ingest path as DROP/EDROP, scoped to redirect targets only (the signal is strong on attacker infra, weak on sending MTA IPs). Registered as a default feed with id `crowdsec-community` but ships with an empty URL because there is no public no-auth download endpoint; operators wire it up via mailbox settings (`intel.feeds`) by setting their CrowdSec Console blocklist URL plus an `auth_secret` referencing a Worker secret containing the API key. Once configured, a match contributes the same +20 IP-feed weight and a `redirect target IP <ip> (<cidr>) on CrowdSec Community Blocklist` reason.
-- **Attachment heuristics** — dangerous extensions, macro-enabled Office, `.pdf.exe`-style double extensions, MIME/extension mismatches, archives that advertise a payload in the filename.
+- **Redirect-chain resolution** follows up to 5 hops so later checks see the real destination.
+- **RDAP domain age**: under 7 days +20, under 30 days +10.
+- **CrowdSec CTI** (optional, `CROWDSEC_CTI_API_KEY`): redirect-target IPs resolved over DoH and checked for phishing/exploit behaviors and malicious reputation. Capped at +25, cached 12h in KV.
+- **Spamhaus DROP/EDROP**: refreshed every 12h by cron; redirect-target IPs in a listed CIDR add +20.
+- **CrowdSec community blocklist**: an operator-configured IP feed (`intel.feeds`, with an `auth_secret`) on the same path as DROP/EDROP.
+- **Attachment heuristics**: dangerous and macro-enabled types, double extensions, MIME/extension mismatch, payload-advertising archives.
 
 ### Threat-intel hub
 
-The [`hub/`](hub/) subdirectory is a MISP-compatible community threat-intel hub — mailboxes can push phishing reports (`workers/intel/report.ts`) and pull corroborated lists back via the destroylist feed. Trust-weighted so one org can't single-handedly promote its own intel.
-
-### Domain posture surfaces
-
-The per-domain page (`/domains/:domain`) surfaces published email-auth posture alongside threat verdicts. Today it shows:
-
-- DMARC apex policy + alignment rate.
-- **MTA-STS** mode/mx/max_age (`_mta-sts.<domain>` TXT + `https://mta-sts.<domain>/.well-known/mta-sts.txt`, cached in KV by policy `id` so a roll auto-invalidates).
-- **BIMI** record presence (`default._bimi.<domain>` TXT — surfaces "configured / configured-with-VMC / not configured / unavailable"; does NOT fetch the SVG logo or VMC certificate).
-- **SPF** posture (`<domain>` TXT for `v=spf1 …` — surfaces mechanism count, `all` qualifier, include count, and a bounded include-chain resolver that flags records exceeding RFC 7208 §4.6.4's 10-DNS-lookup ceiling).
-- **TLS-RPT** posture (`_smtp._tls.<domain>` TXT for `v=TLSRPTv1` — surfaces "TLS reporting configured: yes / no" plus the parsed `rua=` endpoint URLs; posture-only, does NOT ingest inbound TLS-RPT reports here).
+[`hub/`](hub/) is a separate MISP-compatible Worker. Deployments push phishing reports and honeypot IOCs to it and pull corroborated indicators back as a feed. Corroboration is trust-weighted, so one org can't promote its own intel alone. Hub and feed credentials are only sent to hosts on `HUB_ALLOWED_HOSTS` / `FEED_ALLOWED_HOSTS`.
 
 ## Architecture
 
 ```
-┌──────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Browser    │────>│  Hono Worker     │────>│  MailboxDO      │
-│  React SPA   │     │  (API + SSR)     │     │  (SQLite + R2)  │
-│  Agent Panel │     │                  │     └─────────────────┘
-└──────┬───────┘     │  /agents/* ──────┼────>┌─────────────────┐
-       │             │                  │     │  EmailAgent DO  │
-       │ WebSocket   │                  │     │  (AIChatAgent)  │
-       └─────────────┤                  │     │  9 email tools  │
-                     │                  │────>│  Workers AI     │
-                     └──────────────────┘     └─────────────────┘
+                      ┌──────────── Cloudflare Access (JWT) ────────────┐
+┌─────────────┐       │  ┌──────────────────────┐    ┌───────────────┐  │
+│ Browser SPA │──────────│  Hono Worker         │───>│ MailboxDO     │  │
+│ MCP clients │──────────│  /api/v1  /mcp       │    │ SQLite + R2   │  │
+└─────────────┘       │  │  /agents  SSR        │    └───────────────┘  │
+                      │  │                      │───>│ EmailAgent DO │  │
+Email Routing ──────────>│  email()  security   │    │ OrgAgent DO   │  │
+                      │  │  pipeline, deep scan │    │ EmailMCP DO   │  │
+Cron (1m / 1h) ─────────>│  scheduled()         │    │ CatchallIntel │  │
+                      │  └──────────┬───────────┘    └───────────────┘  │
+                      └─────────────┼───────────────────────────────────┘
+                                    ├──> Workers AI   (agents, classifier)
+                                    ├──> KV  BLOOM_KV (feeds, caches, quotas)
+                                    ├──> D1  WEBAUTHN_DB (passkeys)
+                                    ├──> Email Service / SMTP relay (outbound)
+                                    └──> Optional: YaraMail sidecar, hub, Gmail API
 ```
 
-## Versioning and Support
+The minutely cron polls Workspace sidecar mailboxes. The hourly cron refreshes intel feeds and reaps expired honeypots, WebAuthn challenges, and sidecar bodies.
 
-PhishSOC uses [Semantic Versioning](https://semver.org/). Changes are tracked
-in [`CHANGELOG.md`](CHANGELOG.md) (auto-maintained by
-[git-cliff](https://git-cliff.org/) from conventional commits).
+**Stack:** React 19, React Router v7, Tailwind CSS, TanStack Query, Zustand, TipTap, `@cloudflare/kumo` on the frontend; Hono, Workers, Durable Objects (SQLite), R2, KV, D1, Email Routing and Email Service on the backend; Cloudflare Agents SDK and AI SDK v6 for the agents.
 
-For the full release support policy — which branches receive security fixes,
-expected support windows per release, and EOL policy for older releases — see
-[docs/support.md](docs/support.md).
+## Documentation
+
+| Document | Covers |
+| --- | --- |
+| [SECURITY_SPEC.md](SECURITY_SPEC.md) | Rules for agent-safe email pipelines: prompt-injection and async-pipeline invariants this code enforces |
+| [docs/security/THREAT_MODEL.md](docs/security/THREAT_MODEL.md) | Threat model |
+| [docs/step-up-auth.md](docs/step-up-auth.md) | WebAuthn step-up for risky sends: setup, D1, recovery, testing |
+| [docs/secrets.md](docs/secrets.md) | Every Worker secret: purpose, storage, rotation, behavior when missing |
+| [docs/gateway-mode.md](docs/gateway-mode.md) | Inline gateway relay to Workspace/M365 |
+| [docs/sidecar-credentials.md](docs/sidecar-credentials.md) | Workspace sidecar service account setup and rotation |
+| [docs/yaramail-sidecar.md](docs/yaramail-sidecar.md) | YARA attachment scanner deployment and interface |
+| [docs/honeypots.md](docs/honeypots.md) | Honeypot mailboxes |
+| [docs/testing.md](docs/testing.md) | Test layout and CI |
+| [docs/security-policies.md](docs/security-policies.md) | Dependabot/CodeQL remediation SLAs and merge gates |
+| [docs/support.md](docs/support.md) | Release support policy |
+| [.github/SECURITY.md](.github/SECURITY.md) | Reporting a vulnerability |
+
+## Versioning and support
+
+PhishSOC uses [Semantic Versioning](https://semver.org/). Changes are tracked in [`CHANGELOG.md`](CHANGELOG.md), generated by [git-cliff](https://git-cliff.org/) from conventional commits. Support windows are in [docs/support.md](docs/support.md).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the fork→branch→PR flow, how to run tests, commit-format rules, and DCO sign-off requirement.
-
-For project governance, maintainer contacts, and the solo-maintainer review waiver, see [MAINTAINERS.md](MAINTAINERS.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the fork, branch, and PR flow, tests, commit format, and DCO sign-off. Governance and maintainer contacts are in [MAINTAINERS.md](MAINTAINERS.md).
 
 ## License
 
-Apache 2.0 -- see [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE).

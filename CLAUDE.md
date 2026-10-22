@@ -23,7 +23,7 @@ seed, not a comprehensive style guide.
 
 | Subsystem | Purpose |
 | --- | --- |
-| `workers/agent/` | `EmailAgent` and `OrgAgent` Durable Objects — AI chat agents with 9 email tools, auto-draft, and streaming responses |
+| `workers/agent/` | `EmailAgent` and `OrgAgent` Durable Objects — per-mailbox AI agent (9 email tools, auto-draft, streaming) and org-wide agent |
 | `workers/security/` | Synchronous security pipeline: SPF/DKIM/DMARC, URL heuristics, LLM classifier, sender reputation, off-hours scoring, and verdict aggregation |
 | `workers/intel/` | Async deep-scan stage: redirect-chain resolution, RDAP domain age, CrowdSec CTI, Spamhaus DROP/EDROP CIDR, attachment heuristics, and threat-intel feed management |
 | `workers/lib/` | Shared backend helpers: mailbox/domain/org settings resolution, attachment storage, email helpers, token handling, and schema definitions |
@@ -37,6 +37,7 @@ seed, not a comprehensive style guide.
 | `workers/bimi/` | BIMI TXT record presence check for the per-domain posture surface |
 | `workers/mta-sts/` | MTA-STS policy fetch and caching for the per-domain posture surface |
 | `workers/tlsrpt/` | TLS-RPT posture check and aggregate-report ingest for the per-domain posture surface |
+| `workers/dnssec/` | DNSSEC posture lookup (DoH AD bit + DS record) for the per-domain posture surface |
 | `workers/db/` | SQLite schema definition and migration runner used by `MailboxDO` |
 | `workers/app.ts` | Top-level Worker entry point: Cloudflare Access auth, Hono routing, cron handler, Durable Object exports |
 | `workers/index.ts` | Core Hono API app: mailbox CRUD, email receive pipeline, settings endpoints, send-email handler |

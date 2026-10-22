@@ -163,12 +163,78 @@ on every step-up verify, so they MUST match the deployed hostname.
 | **Rotation cadence** | Does not rotate (account IDs are immutable). Update only if the Worker moves to a different Cloudflare account. |
 | **If missing** | Same as `CLOUDFLARE_API_TOKEN` absent — Worker falls back to the curated model list. |
 
+### `CLOUDFLARE_INTEL_API_TOKEN` / `CLOUDFLARE_INTEL_ACCOUNT_ID` — optional
+
+| Field | Value |
+| --- | --- |
+| **What it is** | Cloudflare API token (scope: **Account → Intel → Edit**) and the account ID it files under. Used only by the analyst-confirmed **Submit to Cloudflare** phishing-categorization action on cases (issue #755). Never called from the receive pipeline, the agent, or MCP. |
+| **Where stored** | Cloudflare Workers secrets — `wrangler secret put CLOUDFLARE_INTEL_API_TOKEN` and `wrangler secret put CLOUDFLARE_INTEL_ACCOUNT_ID` |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role |
+| **Rotation cadence** | Every 90 days, or on personnel change. Scope the replacement token to Intel Edit only. |
+| **If missing** | The route returns `501` and the button is disabled. Nothing else is affected. |
+
+Two optional tuning variables go with it: `CF_CATEGORIZE_MONTHLY_CAP` (integer, default `20`; the shared Threat Intel quota is 100/month) and `CF_CATEGORIZE_EXTRA_BLOCKED` (comma-separated registrable domains added to the built-in never-submit list). Neither is sensitive; set them as secrets or `vars`.
+
+### `URLSCAN_API_TOKEN` / `URLSCAN_ACCOUNT_ID` — optional, reserved
+
+| Field | Value |
+| --- | --- |
+| **What it is** | Cloudflare API token (scope: **Account → URL Scanner → Edit**) and account ID for the analyst "Scan this URL" action (issue #754). The client and quota tracking exist; the UI action is not wired up yet. Scans are always submitted as Unlisted. |
+| **Where stored** | Cloudflare Workers secrets — `wrangler secret put URLSCAN_API_TOKEN` and `wrangler secret put URLSCAN_ACCOUNT_ID`. `URLSCAN_MONTHLY_CAP` (default `450`) overrides the monthly cap. |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role |
+| **Rotation cadence** | Every 90 days, or on personnel change |
+| **If missing** | The scan action is disabled. |
+
+### `ARC_SEAL_PRIVATE_KEY` — optional (inline gateway)
+
+| Field | Value |
+| --- | --- |
+| **What it is** | PKCS8 PEM RSA private key used to ARC-seal mail the inline gateway relays to a backend (issue #32). The public key is published as a DNS TXT record under the ARC selector configured in org settings. See [`docs/gateway-mode.md`](gateway-mode.md). |
+| **Where stored** | Cloudflare Workers secret — `wrangler secret put ARC_SEAL_PRIVATE_KEY < arc-private.pem` |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role |
+| **Rotation cadence** | Yearly, or immediately on suspected compromise. Publish the new public key under a **new selector**, switch the selector in org settings, then retire the old DNS record after in-flight mail has been delivered. |
+| **If missing** | Relayed mail goes out unsealed (no alert). A key that is set but fails to seal also relays unsealed, and that does fire a security alert. |
+
+### `WEBAUTHN_ADMIN_EMAILS` — optional
+
+| Field | Value |
+| --- | --- |
+| **What it is** | Comma-separated allowlist of admin emails who may clear another user's lost step-up passkeys so they can re-enroll (issue #507). Only an interactive Access identity with an email claim qualifies; service tokens never do. |
+| **Where stored** | Cloudflare Workers secret (`wrangler secret put WEBAUTHN_ADMIN_EMAILS`) or a `wrangler.jsonc` var. Kept out of teammate-editable settings on purpose. |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role |
+| **Rotation cadence** | Review on personnel change |
+| **If missing** | Admin recovery is impossible (fails closed). |
+
+### `HUB_ALLOWED_HOSTS` / `FEED_ALLOWED_HOSTS` — optional (required to use hub or feed credentials)
+
+| Field | Value |
+| --- | --- |
+| **What it is** | Comma-separated hostname allowlists that pin where credentials may be sent. A `HUB_SECRET_*` key is only sent when `intel.hub.url` is https and its hostname is on `HUB_ALLOWED_HOSTS`. A `FEED_SECRET_*` Authorization header is only attached when the feed URL is https and its hostname is on `FEED_ALLOWED_HOSTS` or belongs to a built-in default feed. Not secret themselves, but operator-only because settings are teammate-editable. |
+| **Where stored** | Workers secret or `wrangler.jsonc` var |
+| **Who has access** | Cloudflare account members with Workers Admin or Super Administrator role |
+| **Rotation cadence** | Update when the hub or a credentialed feed moves hosts |
+| **If missing** | Hub credentials are never released; credentialed feeds still fetch, but without their secret. |
+
+### Prefixed secret families
+
+Some settings reference a Worker secret **by name** so the value itself never lands in R2 (settings blobs are readable by any Access-authenticated client). Each family has a required prefix, enforced by the Zod schema on write and re-checked at use time so a hand-edited blob cannot point at an unrelated secret.
+
+| Prefix | Used by | Value | Guide |
+| --- | --- | --- | --- |
+| `RELAY_CREDS_` | Inline gateway relay, per domain | JSON `{"user": "...", "pass": "..."}` for SMTP submission | [`gateway-mode.md`](gateway-mode.md) |
+| `SIDECAR_SECRET_` | Workspace sidecar | Google service-account JSON key with domain-wide delegation | [`sidecar-credentials.md`](sidecar-credentials.md) |
+| `HUB_SECRET_` | Community hub client (`intel.hub`) | Hub API key | [`hub/`](../hub/) |
+| `FEED_SECRET_` | Credentialed intel feeds (`intel.feeds[].auth_secret`) | Feed API key, e.g. a CrowdSec Console blocklist key | — |
+| `NEW_EMAIL_WEBHOOK_` | Per-tier new-mail webhooks | Webhook URL, or a `{url, headers}` JSON envelope | See above |
+
+Rotate each with `wrangler secret put <NAME>`; the settings reference does not change.
+
 ---
 
 ## CI secrets (GitHub Actions)
 
-The CI workflows (`ci.yml`, `codeql.yml`) run `npm run typecheck` and
-`npm test` only. They do not deploy the Worker and do not require any
+The CI workflows (`ci.yml`, `codeql.yml`, `bumblebee.yml`) run typecheck,
+tests, CodeQL, and a lockfile exposure scan only. They do not deploy the Worker and do not require any
 Cloudflare credentials. There are currently **no GitHub Actions secrets**
 configured for this repository.
 
