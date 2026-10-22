@@ -166,7 +166,7 @@ Weekends: flagged when weekdays_only is on
 | Stage | Latency | Notes |
 | --- | --- | --- |
 | Auth header parse | µs | SPF/DKIM/DMARC from `Authentication-Results`; gated by trusted authserv-ids |
-| URL extract + homograph/shortener check | ms | Levenshtein vs a high-value-domain list |
+| URL extract + homograph/shortener/deceptive-link-text check | ms | Levenshtein vs a high-value-domain list; anchor text naming a different domain than its href |
 | Sender reputation | ms | Rolling avg score per mailbox; flagged-sender fast path |
 | Threat-intel bloom lookup | ms | Against [workers/intel/feeds.ts](workers/intel/feeds.ts) (URLhaus, PhishDestroy, configurable; Spamhaus DROP/EDROP CIDR feeds consumed in deep-scan) |
 | Triage short-circuits | µs | Hard-block on confirmed intel / flagged sender; hard-allow on DMARC pass + allowlist or trusted history |

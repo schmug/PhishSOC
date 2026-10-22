@@ -68,10 +68,19 @@ export interface MitigationConfig {
 	 * aggregate verdict should not add suspicion. Default: true (on by default).
 	 */
 	dmarc_pass_compensates_method_fail: boolean;
+	/**
+	 * When DMARC=pass, soften the `deceptive_link_text` URL contribution to
+	 * {@link SOFTENED_LINK_TEXT_WEIGHT}. Authenticated bulk mail routinely
+	 * shows its own domain while the href goes through an ESP click-tracking
+	 * host; the signal keeps a small residual weight because a compromised
+	 * account also passes DMARC. Absent ⇒ on (absent-key-inherits).
+	 */
+	dmarc_pass_softens_link_text?: boolean;
 }
 
 export const DEFAULT_MITIGATION_CONFIG: MitigationConfig = {
 	dmarc_pass_compensates_method_fail: true,
+	dmarc_pass_softens_link_text: true,
 };
 
 /**
@@ -93,6 +102,27 @@ export const DMARC_PASS_COMPENSATES_METHOD_FAIL: Mitigation = {
 		return contribs.map((c) =>
 			c.scorer === "auth" && (c.rule === "spf_fail" || c.rule === "dkim_fail")
 				? { ...c, weight: 0 }
+				: c,
+		);
+	},
+};
+
+/** Residual `deceptive_link_text` weight under DMARC=pass. */
+export const SOFTENED_LINK_TEXT_WEIGHT = 5;
+
+/**
+ * When DMARC=pass, the `deceptive_link_text` contribution is cut to
+ * {@link SOFTENED_LINK_TEXT_WEIGHT}. See `MitigationConfig.dmarc_pass_softens_link_text`.
+ */
+export const DMARC_PASS_SOFTENS_LINK_TEXT: Mitigation = {
+	name: "dmarc_pass_softens_link_text",
+	applies(inputs) {
+		return inputs.auth.dmarc === "pass";
+	},
+	apply(contribs) {
+		return contribs.map((c) =>
+			c.scorer === "urls" && c.rule === "deceptive_link_text"
+				? { ...c, weight: Math.min(c.weight, SOFTENED_LINK_TEXT_WEIGHT) }
 				: c,
 		);
 	},
@@ -216,16 +246,18 @@ export function aggregateVerdict(
 	// Apply each enabled mitigation, sum the weight delta, and adjust `score`
 	// before the final clamp so the mitigation can push the auth subtotal
 	// negative on legitimate mail.
-	if (mitigations.dmarc_pass_compensates_method_fail) {
-		if (DMARC_PASS_COMPENSATES_METHOD_FAIL.applies(inputs, mitigContribs)) {
-			const modified = DMARC_PASS_COMPENSATES_METHOD_FAIL.apply(mitigContribs);
-			const origSum = mitigContribs.reduce((s, c) => s + c.weight, 0);
-			const newSum = modified.reduce((s, c) => s + c.weight, 0);
-			const delta = newSum - origSum;
-			if (delta !== 0) {
-				score += delta;
-				signals.push(`mitigated:${DMARC_PASS_COMPENSATES_METHOD_FAIL.name}`);
-			}
+	const enabled: Mitigation[] = [];
+	if (mitigations.dmarc_pass_compensates_method_fail) enabled.push(DMARC_PASS_COMPENSATES_METHOD_FAIL);
+	if (mitigations.dmarc_pass_softens_link_text !== false) enabled.push(DMARC_PASS_SOFTENS_LINK_TEXT);
+	for (const m of enabled) {
+		if (!m.applies(inputs, mitigContribs)) continue;
+		const modified = m.apply(mitigContribs);
+		const origSum = mitigContribs.reduce((s, c) => s + c.weight, 0);
+		const newSum = modified.reduce((s, c) => s + c.weight, 0);
+		const delta = newSum - origSum;
+		if (delta !== 0) {
+			score += delta;
+			signals.push(`mitigated:${m.name}`);
 		}
 	}
 

@@ -86,7 +86,7 @@ export interface SecuritySettings {
 	attachment_policy?: AttachmentPolicySettings;
 	folder_policies?: Record<string, FolderPolicySettings>;
 	ruf_ingestion?: RufIngestionSettings;
-	mitigations?: { dmarc_pass_compensates_method_fail?: boolean };
+	mitigations?: { dmarc_pass_compensates_method_fail?: boolean; dmarc_pass_softens_link_text?: boolean };
 	classification?: ClassificationSettings;
 	detectors?: { sender_graph?: { enabled?: boolean }; own_domain_lookalike?: { enabled?: boolean } };
 	send_risk?: { trust_known_recipients?: boolean; llm_enabled?: boolean; classifier_model?: string };

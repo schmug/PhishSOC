@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+	DECEPTIVE_LINK_TEXT_WEIGHT,
+	displayedDomain,
 	extractUrls,
 	isHomographic,
 	scoreUrls,
@@ -143,5 +145,50 @@ describe("scoreUrls", () => {
 			{ url: "https://paypa1.com", hostname: "paypa1.com", is_homograph: true, is_shortener: false },
 		];
 		expect(scoreUrls(urls).score).toBe(25);
+	});
+});
+
+describe("deceptive link text", () => {
+	it("flags an anchor whose text is a different domain than its href", () => {
+		const urls = extractUrls('<a href="https://evil.example/login">https://www.paypal.com/signin</a>');
+		expect(urls[0].is_text_mismatch).toBe(true);
+	});
+
+	it("flags a bare-hostname anchor text", () => {
+		const urls = extractUrls('<a href="https://collect.example.net/x">mybank.co.jp</a>');
+		expect(urls[0].is_text_mismatch).toBe(true);
+	});
+
+	it("does not flag text on the same registrable domain", () => {
+		const urls = extractUrls('<a href="https://login.example.com/a">www.example.com</a>');
+		expect(urls[0].is_text_mismatch).toBeUndefined();
+	});
+
+	it("does not flag prose, filenames, or email addresses", () => {
+		const urls = extractUrls(
+			'<a href="https://a.example/1">Click here</a>' +
+			'<a href="https://a.example/2">Visit example.com today</a>' +
+			'<a href="https://a.example/3">invoice.pdf</a>' +
+			'<a href="https://a.example/4">help@b.example</a>',
+		);
+		expect(urls.some((u) => u.is_text_mismatch)).toBe(false);
+	});
+
+	it("displayedDomain extracts the registrable domain from URL-shaped text", () => {
+		expect(displayedDomain("https://Sub.Amazon.co.jp/path?q=1")).toBe("amazon.co.jp");
+		expect(displayedDomain("example.org.")).toBe("example.org");
+		expect(displayedDomain("not a domain")).toBeNull();
+		expect(displayedDomain(undefined)).toBeNull();
+	});
+
+	it("scoreUrls adds deceptive_link_text with the shown and real hosts", () => {
+		const urls = extractUrls('<a href="https://evil.example/x">paypal.com</a>');
+		const r = scoreUrls(urls);
+		expect(r.score).toBe(DECEPTIVE_LINK_TEXT_WEIGHT);
+		expect(r.confidence).toBe(0.8);
+		expect(r.contributions).toEqual([
+			expect.objectContaining({ rule: "deceptive_link_text", weight: DECEPTIVE_LINK_TEXT_WEIGHT }),
+		]);
+		expect(r.reasons[0]).toContain("evil.example");
 	});
 });
