@@ -94,6 +94,10 @@ export const urls = sqliteTable("urls", {
 	scan_categories: text("scan_categories"),
 	scan_final_url: text("scan_final_url"),
 	created_at: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+	// `ExtractedUrl.hostname` verbatim, for the link-domains dashboard rollup
+	// (issue #740). NULL for rows stored before this column was added — the
+	// rollup is a forward-only view, no backfill.
+	hostname: text("hostname"),
 });
 
 // One row per `runSecurityPipeline` invocation that actually ran (skipped

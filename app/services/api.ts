@@ -22,6 +22,7 @@ import type {
 	HubInviteRequest,
 	HubInviteResponse,
 	HubSharingGroupsResponse,
+	LinkDomainsSummary,
 	Mailbox,
 	OrgOverview,
 	UnifiedInboxResponse,
@@ -286,6 +287,11 @@ const api = {
 	// Dashboard
 	getDashboardSummary: (mailboxId: string, opts?: { signal?: AbortSignal }) =>
 		get<DashboardSummary>(`/api/v1/mailboxes/${mailboxId}/dashboard`, { signal: opts?.signal }),
+	getLinkDomains: (mailboxId: string, days: number, opts?: { signal?: AbortSignal }) =>
+		get<LinkDomainsSummary>(`/api/v1/mailboxes/${mailboxId}/link-domains`, {
+			params: { days: String(days) },
+			signal: opts?.signal,
+		}),
 
 	// Org overview
 	getOrgOverview: (opts?: { signal?: AbortSignal }) =>

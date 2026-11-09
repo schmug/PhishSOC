@@ -7,6 +7,8 @@
  * with the SQL it owns.
  */
 
+import { registrableDomain } from "../security/urls";
+
 export type ThreatAction = "tag" | "quarantine" | "block";
 
 export interface VerdictBucketRow {
@@ -115,6 +117,139 @@ export function computeP95(durationsMs: number[]): number | null {
 	if (lo === hi) return sample[lo]!;
 	const weight = rank - lo;
 	return sample[lo]! * (1 - weight) + sample[hi]! * weight;
+}
+
+// ── Link-domains rollup (#740) ────────────────────────────────────────
+
+/** One (hostname, email) pair from the DO join, carrying that email's raw verdict JSON. */
+export interface LinkDomainUrlRow {
+	hostname: string | null;
+	email_id: string;
+	security_verdict: string | null;
+}
+
+export interface LinkDomainRow {
+	name: string;
+	emails: number;
+	flagged: number;
+	phishing: number;
+	spam: number;
+}
+
+export interface LinkDomainRollup {
+	window_days: number;
+	hosts: LinkDomainRow[];
+	domains: LinkDomainRow[];
+}
+
+/** Rows with fewer than this many distinct emails are omitted (#740 Definitions). */
+const LINK_DOMAIN_MIN_EMAILS = 3;
+/** Top-N rows kept per list, after the cutoff and sort (#740 Constraints). */
+const LINK_DOMAIN_MAX_ROWS = 50;
+
+function parseLinkDomainVerdict(
+	json: string | null,
+): { action?: string; label?: string } | null {
+	if (!json) return null;
+	try {
+		const parsed = JSON.parse(json) as {
+			action?: unknown;
+			classification?: { label?: unknown };
+		};
+		return {
+			action: typeof parsed.action === "string" ? parsed.action : undefined,
+			label:
+				typeof parsed.classification?.label === "string"
+					? parsed.classification.label
+					: undefined,
+		};
+	} catch {
+		return null;
+	}
+}
+
+function rollupLinkDomainsByKey(
+	rows: LinkDomainUrlRow[],
+	keyOf: (row: LinkDomainUrlRow) => string | null,
+): LinkDomainRow[] {
+	interface Acc {
+		emails: Set<string>;
+		flagged: Set<string>;
+		phishing: Set<string>;
+		spam: Set<string>;
+	}
+	const byName = new Map<string, Acc>();
+	// Dedup once per (name, email) — an email linking the same host/domain
+	// several times counts once (#740 Constraints).
+	const seen = new Set<string>();
+
+	for (const row of rows) {
+		const name = keyOf(row);
+		if (!name || !row.email_id) continue;
+		const dedupeKey = `${name}\u0000${row.email_id}`;
+		if (seen.has(dedupeKey)) continue;
+		seen.add(dedupeKey);
+
+		let acc = byName.get(name);
+		if (!acc) {
+			acc = {
+				emails: new Set(),
+				flagged: new Set(),
+				phishing: new Set(),
+				spam: new Set(),
+			};
+			byName.set(name, acc);
+		}
+		acc.emails.add(row.email_id);
+
+		const parsed = parseLinkDomainVerdict(row.security_verdict);
+		if (!parsed) continue;
+		if (
+			parsed.action === "tag" ||
+			parsed.action === "quarantine" ||
+			parsed.action === "block"
+		) {
+			acc.flagged.add(row.email_id);
+		}
+		if (parsed.label === "phishing" || parsed.label === "bec") {
+			acc.phishing.add(row.email_id);
+		}
+		if (parsed.label === "spam") {
+			acc.spam.add(row.email_id);
+		}
+	}
+
+	return [...byName.entries()]
+		.map(([name, acc]) => ({
+			name,
+			emails: acc.emails.size,
+			flagged: acc.flagged.size,
+			phishing: acc.phishing.size,
+			spam: acc.spam.size,
+		}))
+		.filter((r) => r.emails >= LINK_DOMAIN_MIN_EMAILS)
+		.sort((a, b) => b.flagged - a.flagged || b.emails - a.emails)
+		.slice(0, LINK_DOMAIN_MAX_ROWS);
+}
+
+/**
+ * Roll up (hostname, email) rows into per-host and per-registrable-domain
+ * link-verdict rates for the "Link domains" dashboard panel (#740). Pure
+ * function — the DO supplies the windowed join, this does the dedup,
+ * cutoff, sort, and cap.
+ */
+export function computeLinkDomainRollup(
+	rows: LinkDomainUrlRow[],
+	windowDays: number,
+): LinkDomainRollup {
+	return {
+		window_days: windowDays,
+		hosts: rollupLinkDomainsByKey(rows, (r) => r.hostname),
+		domains: rollupLinkDomainsByKey(
+			rows,
+			(r) => (r.hostname ? registrableDomain(r.hostname) : null),
+		),
+	};
 }
 
 // ── Org overview aggregation ─────────────────────────────────────────

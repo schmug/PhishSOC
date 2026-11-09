@@ -33,6 +33,8 @@ export const queryKeys = {
 			["search", "_org", query, page] as const,
 	},
 	dashboard: (mailboxId: string) => ["dashboard", mailboxId] as const,
+	linkDomains: (mailboxId: string, days: number) =>
+		["dashboard", mailboxId, "link-domains", days] as const,
 	org: {
 		overview: ["org", "overview"] as const,
 		settings: ["org", "settings"] as const,

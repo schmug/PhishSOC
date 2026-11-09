@@ -6,8 +6,8 @@ import { WarningIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { Link, useParams } from "react-router";
 import Sparkline from "~/components/phishsoc/Sparkline";
-import { useDashboardSummary } from "~/queries/dashboard";
-import type { DashboardCase, DashboardSummary } from "~/types";
+import { useDashboardSummary, useLinkDomains } from "~/queries/dashboard";
+import type { DashboardCase, DashboardSummary, LinkDomainRow } from "~/types";
 
 export default function DashboardRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
@@ -83,6 +83,8 @@ function DashboardBody({
 				<ThreatPressureCard values={data.threatPressure} />
 				<RecentCasesCard mailboxId={mailboxId} cases={data.recentCases} />
 			</div>
+
+			<LinkDomainsCard mailboxId={mailboxId} />
 		</>
 	);
 }
@@ -194,6 +196,79 @@ function RecentCasesCard({
 			)}
 		</div>
 	);
+}
+
+/**
+ * Link domains panel (#740): per-registrable-domain link-verdict rates, with
+ * a per-host breakdown nested under each domain. Monitoring only — see the
+ * issue's "Out of scope" list for what this does NOT feed. Fetches its own
+ * data independently of the rest of the dashboard so a slow/failed
+ * link-domains query doesn't block the KPI cards above.
+ */
+function LinkDomainsCard({ mailboxId }: { mailboxId: string }) {
+	const { data } = useLinkDomains(mailboxId);
+
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3">
+				Link domains{data ? ` · ${data.window_days}d` : ""}
+			</div>
+			{!data || data.domains.length === 0 ? (
+				<p className="text-[12.5px] text-ink-3">No recurring link domains in this window.</p>
+			) : (
+				<table className="w-full text-[12.5px]">
+					<thead>
+						<tr className="text-ink-3 text-[10.5px] uppercase tracking-[0.04em]">
+							<th className="text-left font-medium pb-2">Domain</th>
+							<th className="text-right font-medium pb-2">Emails</th>
+							<th className="text-right font-medium pb-2">Flagged</th>
+							<th className="text-right font-medium pb-2">Phishing</th>
+							<th className="text-right font-medium pb-2">Spam</th>
+						</tr>
+					</thead>
+					<tbody>
+						{data.domains.map((domain) => {
+							const hosts = data.hosts.filter(
+								(h) => h.name === domain.name || h.name.endsWith(`.${domain.name}`),
+							);
+							return <LinkDomainGroup key={domain.name} domain={domain} hosts={hosts} />;
+						})}
+					</tbody>
+				</table>
+			)}
+		</div>
+	);
+}
+
+function LinkDomainGroup({
+	domain,
+	hosts,
+}: { domain: LinkDomainRow; hosts: LinkDomainRow[] }) {
+	return (
+		<>
+			<tr className="border-t border-line">
+				<td className="py-2 text-ink font-medium">{domain.name}</td>
+				<td className="py-2 text-right text-ink">{domain.emails}</td>
+				<td className="py-2 text-right text-ink">{linkDomainPct(domain.flagged, domain.emails)}</td>
+				<td className="py-2 text-right text-ink">{linkDomainPct(domain.phishing, domain.emails)}</td>
+				<td className="py-2 text-right text-ink">{linkDomainPct(domain.spam, domain.emails)}</td>
+			</tr>
+			{hosts.map((host) => (
+				<tr key={host.name}>
+					<td className="pl-4 py-1 text-ink-3">{host.name}</td>
+					<td className="py-1 text-right text-ink-3">{host.emails}</td>
+					<td className="py-1 text-right text-ink-3">{linkDomainPct(host.flagged, host.emails)}</td>
+					<td className="py-1 text-right text-ink-3">{linkDomainPct(host.phishing, host.emails)}</td>
+					<td className="py-1 text-right text-ink-3">{linkDomainPct(host.spam, host.emails)}</td>
+				</tr>
+			))}
+		</>
+	);
+}
+
+function linkDomainPct(count: number, total: number): string {
+	if (total === 0) return "—";
+	return `${Math.round((count / total) * 100)}%`;
 }
 
 function formatRelative(iso: string): string {

@@ -31,6 +31,7 @@ export interface FakeUrlRow {
 	display_text: string | null;
 	is_homograph: number;
 	is_shortener: number;
+	hostname?: string | null;
 }
 
 export interface IntelFeedStateRow {
