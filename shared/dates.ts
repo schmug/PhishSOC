@@ -58,6 +58,11 @@ const quotedDateFormatter = new Intl.DateTimeFormat("en-US", {
 	hour12: true,
 });
 
+const standardDateFormatter = new Intl.DateTimeFormat(undefined, {
+	dateStyle: "medium",
+	timeStyle: "medium",
+});
+
 let _lastNowMs = 0;
 let _lastNowMidnightMs = 0;
 let _lastNowMidnightNextMs = 0;
@@ -146,4 +151,18 @@ export function formatQuotedDate(dateStr: string | undefined): string {
 	if (ms === null) return dateStr;
 
 	return quotedDateFormatter.format(ms);
+}
+
+/**
+ * Standard date formatting, matching default `toLocaleString()`.
+ * Use this to avoid `new Date().toLocaleString()` overhead in renders.
+ */
+export function formatStandardDate(dateStr: string | number): string {
+	if (typeof dateStr === "number") {
+		return standardDateFormatter.format(dateStr);
+	}
+	const ms = safeParse(dateStr);
+	if (ms === null) return dateStr;
+
+	return standardDateFormatter.format(ms);
 }
