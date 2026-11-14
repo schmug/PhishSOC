@@ -28,7 +28,7 @@
 		"typecheck": "npm run cf-typegen && react-router typegen && tsc -b"
 	},
 	"dependencies": {
-		"@cloudflare/ai-chat": "^0.1.9",
+		"@cloudflare/ai-chat": "^0.12.2",
 		"@cloudflare/kumo": "^1.19.0",
 		"@phosphor-icons/react": "^2.1.10",
 		"@simplewebauthn/browser": "^13.3.0",
@@ -43,7 +43,7 @@
 		"@tiptap/extension-underline": "3.31.4",
 		"@tiptap/react": "3.31.4",
 		"@tiptap/starter-kit": "3.31.4",
-		"agents": "^0.7.9",
+		"agents": "^0.29.0",
 		"ai": "^6.0.300",
 		"dompurify": "^3.4.16",
 		"drizzle-orm": "^0.45.3",
