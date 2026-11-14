@@ -39,6 +39,7 @@ function makeSqlLike(): SqlLike {
         CREATE TABLE sidecar_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             history_cursor TEXT,
+            history_page_token TEXT,
             access_token TEXT,
             token_expires_at INTEGER,
             label_ids TEXT,

@@ -779,6 +779,14 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE urls ADD COLUMN scan_final_url TEXT;
         `,
 	},
+	{
+		// History page-cap resume (#667): when Gmail history spans more than
+		// MAX_HISTORY_PAGES and pages 1–3 are fully deduped, the cursor stays
+		// frozen (truncated=true) and the poller never reaches page 4+.
+		// Persist the dangling pageToken so the next tick resumes past the cap.
+		name: "38_history_page_token",
+		sql: `ALTER TABLE sidecar_state ADD COLUMN history_page_token TEXT;`,
+	},
 ];
 
 /**
