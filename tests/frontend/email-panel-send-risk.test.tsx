@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router";
 import { renderWithProviders } from "./test-utils";
 import type { Email } from "~/types";
+import { combinedSendBodyForRisk } from "shared/send-risk-body";
 
 // ── hoisted mocks ─────────────────────────────────────────────────────────────
 
@@ -208,7 +209,7 @@ describe("EmailPanel draft send-risk (#314)", () => {
 			// The step-up payload must match the exact wire values so the server
 			// payloadHash binding holds.
 			const sent = sendEmailMutate.mock.calls[0][0] as {
-				email: { to: unknown; subject: string; html: string };
+				email: { to: unknown; subject: string; html: string; text?: string };
 			};
 			const stepUpArg = stepUpMock.mock.calls[0][0] as {
 				to: unknown;
@@ -217,7 +218,7 @@ describe("EmailPanel draft send-risk (#314)", () => {
 			};
 			expect(stepUpArg.to).toEqual(sent.email.to);
 			expect(stepUpArg.subject).toBe(sent.email.subject);
-			expect(stepUpArg.body).toBe(sent.email.html);
+			expect(stepUpArg.body).toBe(combinedSendBodyForRisk(sent.email.html, sent.email.text));
 			expect(feedbackSuccess).toHaveBeenCalledWith("Email sent!");
 		});
 
