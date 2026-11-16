@@ -27,7 +27,7 @@ const CreatePeerSchema = z.object({
 	base_url: z.string().url().max(2000),
 	api_key_secret_name: z.string().min(1).max(200).startsWith("PEER_SECRET_", { message: "Secret name must start with PEER_SECRET_" }),
 	// Required non-NULL: pulled events default to this group's visibility.
-	default_sharing_group_uuid: z.string().uuid(),
+	default_sharing_group_uuid: z.guid(),
 	default_trust: z.number().min(0).max(10).default(0.5),
 	tag_include: z.string().max(4000).optional(),
 	tag_exclude: z.string().max(4000).optional(),
