@@ -20,7 +20,7 @@ export const eventRoutes = new Hono<HubContext>();
 eventRoutes.use("*", requireOrg);
 
 const AttributeSchema = z.object({
-	uuid: z.string().uuid().optional(),
+	uuid: z.guid().optional(),
 	type: z.string().min(1).max(64),
 	category: z.string().min(1).max(64),
 	value: z.string().min(1).max(2000),
@@ -30,15 +30,15 @@ const AttributeSchema = z.object({
 
 const EventSchema = z.object({
 	Event: z.object({
-		uuid: z.string().uuid().optional(),
+		uuid: z.guid().optional(),
 		info: z.string().min(1).max(500),
 		date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 		timestamp: z.string(),
 		analysis: z.string().optional(),
 		threat_level_id: z.string().optional(),
 		distribution: z.string().optional(),
-		orgc_uuid: z.string().uuid().optional(),
-		sharing_group_uuid: z.string().uuid().optional(),
+		orgc_uuid: z.guid().optional(),
+		sharing_group_uuid: z.guid().optional(),
 		Tag: z.array(z.object({ name: z.string().min(1).max(128) })).optional(),
 		Attribute: z.array(AttributeSchema).default([]),
 	}),

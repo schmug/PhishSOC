@@ -98,7 +98,7 @@ orgRoutes.get("/me", async (c) => {
 });
 
 const InviteSchema = z.object({
-	sharing_group_uuid: z.string().uuid().optional(),
+	sharing_group_uuid: z.guid().optional(),
 	note: z.string().max(500).optional(),
 	ttl_hours: z
 		.number()
