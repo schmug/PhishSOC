@@ -157,6 +157,25 @@ The MCP server is served over Streamable HTTP at `https://<your-host>/mcp`, behi
 
 Because a service token has no email identity, MCP clients see only mailboxes without an ACL. ACL-scoped mailboxes stay private to their members. MCP sends go through the same send-risk checks as the UI.
 
+### Narrowing what MCP clients can do
+
+Four optional Worker variables limit the MCP server. Set them under Worker → Settings → Variables & Secrets, or with `wrangler secret put`.
+
+| Variable | Effect |
+| --- | --- |
+| `MCP_READ_ONLY` | `true` offers only `list_mailboxes`, `list_emails`, `get_email`, `get_thread` and `search_emails`. The draft, send, delete, move and mark-read tools are not registered. |
+| `MCP_ALLOWED_DOMAINS` | Comma-separated domains, e.g. `example.com`. `list_mailboxes` shows only mailboxes on those domains, and every tool refuses any other mailbox. Mailbox ACLs still apply on top. |
+| `MCP_DRAFT_MAILBOXES` | Comma-separated mailbox addresses, e.g. `support@example.com`. `create_draft`, `draft_reply` and `update_draft` work only on these mailboxes. They take a plain-text `body` instead of `bodyHtml`, and their drafts count as agent-written, so sending one later gets the stricter send-risk tier. With `MCP_READ_ONLY=true`, these three are the only tools added to the read tools. The mailbox must still pass `MCP_ALLOWED_DOMAINS` and its ACL. |
+| `MCP_MAX_BODY_CHARS` | Maximum plain-text body length per message. Default `20000`. |
+
+For a client that should read one domain and only draft replies from one mailbox, set `MCP_READ_ONLY=true`, `MCP_ALLOWED_DOMAINS=example.com` and `MCP_DRAFT_MAILBOXES=support@example.com`. A person still sends each draft from the app.
+
+`update_draft` only changes messages in the Drafts folder, and an agent-written draft stays agent-written after any edit.
+
+MCP tools always return message bodies as plain text, never the stored HTML, and add a `content_notice` field saying the content is sender-written. Longer bodies are cut and marked `body_truncated: true`. List and search snippets are plain text too.
+
+Mail sent to an address that has no mailbox goes to catch-all intel, which the MCP server does not expose. Create a mailbox for each address an MCP client should read.
+
 ## Local development
 
 ```bash

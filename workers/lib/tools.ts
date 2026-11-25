@@ -318,6 +318,12 @@ export async function toolUpdateDraft(
 		bcc?: string | string[];
 		subject?: string;
 		bodyHtml?: string;
+		/**
+		 * Provenance of this edit (issue #266). "agent" marks the updated draft
+		 * as agent-authored. An agent-authored draft stays agent-authored after
+		 * any edit, so an update never lowers its send-risk tier.
+		 */
+		createdBy?: "agent" | "user";
 	},
 ): Promise<
 	| { status: string; newDraftId: string; oldDraftId: string; message: string }
@@ -325,10 +331,16 @@ export async function toolUpdateDraft(
 > {
 	const stub = getMailboxStub(env, mailboxId);
 
-	const oldDraft = (await stub.getEmail(params.draftId)) as EmailFull | null;
-	if (!oldDraft) {
+	const oldDraft = (await stub.getEmail(params.draftId)) as
+		| (EmailFull & { created_by?: string | null })
+		| null;
+	// Only messages in the Drafts folder are drafts. Anything else is left
+	// alone: updating replaces the row, so it must never touch received mail.
+	if (!oldDraft || oldDraft.folder_id !== Folders.DRAFT) {
 		return { error: "Draft not found" };
 	}
+	const createdBy: "agent" | "user" =
+		params.createdBy === "agent" || oldDraft.created_by === "agent" ? "agent" : "user";
 
 	// Verify the body BEFORE deleting the old draft to prevent data loss
 	const newDraftId = crypto.randomUUID();
@@ -361,6 +373,7 @@ export async function toolUpdateDraft(
 			in_reply_to: oldDraft.in_reply_to || null,
 			email_references: oldDraft.email_references || null,
 			thread_id: oldDraft.thread_id || newDraftId,
+			created_by: createdBy,
 		},
 		[],
 	);
