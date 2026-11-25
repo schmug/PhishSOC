@@ -93,6 +93,16 @@ describe("parseDmarcRuf", () => {
 		expect(record!.auth_results).toBe("mx.example.com; dmarc=fail header.from=example.com");
 	});
 
+	it("unfolds a header field continued onto the next line", () => {
+		const body = feedbackBody({
+			"Authentication-Results": "mx.example.com;\r\n\tdmarc=fail header.from=example.com",
+		});
+		const email = makeEmail([{ mimeType: "message/feedback-report", content: enc(body) }]);
+		const record = parseDmarcRuf(email, false);
+		expect(record!.auth_results).toBe("mx.example.com; dmarc=fail header.from=example.com");
+		expect(record!.reported_domain).toBe("example.com");
+	});
+
 	it("returns null when no message/feedback-report attachment is present", () => {
 		const email = makeEmail([{ mimeType: "text/plain", content: enc("nothing here") }]);
 		expect(parseDmarcRuf(email, false)).toBeNull();

@@ -64,7 +64,9 @@ export function isDmarcRuf(parsed: Email): boolean {
  */
 function extractHeader(raw: string, name: string): string | null {
 	const re = new RegExp(`^${name}\\s*:\\s*(.+)$`, "im");
-	const m = raw.match(re);
+	// Unfold continuation lines (RFC 5322 §2.2.3) so a folded value is
+	// captured whole, not just its first physical line.
+	const m = raw.replace(/\r?\n[ \t]+/g, " ").match(re);
 	return m ? m[1].trim() : null;
 }
 
