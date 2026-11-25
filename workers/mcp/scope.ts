@@ -14,6 +14,12 @@
  *     When set, list_mailboxes shows only mailboxes on those domains and every
  *     tool refuses any other mailboxId. This is in addition to the mailbox ACL,
  *     never instead of it.
+ *   - `MCP_DRAFT_MAILBOXES` — comma-separated mailbox addresses (e.g.
+ *     "support@example.com"). When set, create_draft, draft_reply and
+ *     update_draft work only on those mailboxes, take plain-text bodies, and
+ *     mark their drafts as agent-authored. With `MCP_READ_ONLY` they are the
+ *     only tools added to the read tools; send, delete, move and mark-read
+ *     stay off. The mailbox must still pass `MCP_ALLOWED_DOMAINS` and the ACL.
  *   - `MCP_MAX_BODY_CHARS` — cap on the plain-text body returned per message.
  *     Default 20000.
  */
@@ -23,6 +29,7 @@ import { stripHtmlToText } from "../lib/email-helpers";
 export interface McpScopeEnv {
 	MCP_READ_ONLY?: string;
 	MCP_ALLOWED_DOMAINS?: string;
+	MCP_DRAFT_MAILBOXES?: string;
 	MCP_MAX_BODY_CHARS?: string;
 }
 
@@ -30,6 +37,8 @@ export interface McpScope {
 	readOnly: boolean;
 	/** Lower-cased allowed domains, or null when every domain is allowed. */
 	allowedDomains: string[] | null;
+	/** Lower-cased mailboxes the draft tools may write to, or null when unset. */
+	draftMailboxes: string[] | null;
 	maxBodyChars: number;
 }
 
@@ -44,13 +53,18 @@ export const MCP_CONTENT_NOTICE =
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 
+function splitList(value: string | undefined): string[] {
+	return (value ?? "")
+		.split(",")
+		.map((v) => v.trim().toLowerCase())
+		.filter((v) => v.length > 0);
+}
+
 export function parseMcpScope(env: McpScopeEnv): McpScope {
 	const readOnly = TRUE_VALUES.has((env.MCP_READ_ONLY ?? "").trim().toLowerCase());
 
-	const domains = (env.MCP_ALLOWED_DOMAINS ?? "")
-		.split(",")
-		.map((d) => d.trim().toLowerCase().replace(/^@/, ""))
-		.filter((d) => d.length > 0);
+	const domains = splitList(env.MCP_ALLOWED_DOMAINS).map((d) => d.replace(/^@/, ""));
+	const draftMailboxes = splitList(env.MCP_DRAFT_MAILBOXES).filter((m) => m.includes("@"));
 
 	const parsedMax = Number.parseInt(env.MCP_MAX_BODY_CHARS ?? "", 10);
 	const maxBodyChars =
@@ -59,6 +73,7 @@ export function parseMcpScope(env: McpScopeEnv): McpScope {
 	return {
 		readOnly,
 		allowedDomains: domains.length > 0 ? domains : null,
+		draftMailboxes: draftMailboxes.length > 0 ? draftMailboxes : null,
 		maxBodyChars,
 	};
 }
@@ -75,6 +90,26 @@ export function mailboxInScope(scope: McpScope, mailboxId: string): boolean {
 	if (scope.allowedDomains === null) return true;
 	const domain = mailboxDomain(mailboxId);
 	return domain !== null && scope.allowedDomains.includes(domain);
+}
+
+/**
+ * True when create_draft, draft_reply and update_draft should be registered:
+ * always outside read-only mode, and in read-only mode only when
+ * `MCP_DRAFT_MAILBOXES` names at least one mailbox.
+ */
+export function draftToolsEnabled(scope: McpScope): boolean {
+	return !scope.readOnly || scope.draftMailboxes !== null;
+}
+
+/**
+ * True when the draft tools may write to this mailbox. It must be in the
+ * domain allowlist, and on `MCP_DRAFT_MAILBOXES` when that is set. With no
+ * draft list, drafting follows read-only mode.
+ */
+export function canDraftIn(scope: McpScope, mailboxId: string): boolean {
+	if (!mailboxInScope(scope, mailboxId)) return false;
+	if (scope.draftMailboxes === null) return !scope.readOnly;
+	return scope.draftMailboxes.includes(mailboxId.trim().toLowerCase());
 }
 
 function cap(text: string, max: number): { text: string; truncated: boolean } {

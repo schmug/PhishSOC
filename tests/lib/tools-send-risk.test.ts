@@ -552,10 +552,17 @@ describe("toolDraftEmail — cc / bcc storage", () => {
 
 const DRAFT_ID = "draft-email-1";
 
-function makeUpdateDraftStub(initialCc: string | null, initialBcc: string | null) {
+function makeUpdateDraftStub(
+	initialCc: string | null,
+	initialBcc: string | null,
+	overrides: { folder_id?: string; created_by?: "agent" | "user" } = {},
+) {
 	const savedEmails: unknown[] = [];
+	const deletedIds: string[] = [];
 	const existingDraft = {
 		id: DRAFT_ID,
+		folder_id: overrides.folder_id ?? "draft",
+		created_by: overrides.created_by ?? "user",
 		subject: "Existing Subject",
 		sender: MAILBOX_ID.toLowerCase(),
 		recipient: "recip@internal.example",
@@ -575,9 +582,10 @@ function makeUpdateDraftStub(initialCc: string | null, initialBcc: string | null
 		async checkSendRateLimit() { return null; },
 		async getEmail(id: string) { return id === DRAFT_ID ? existingDraft : null; },
 		async createEmail(_folder: unknown, email: unknown) { savedEmails.push(email); return {}; },
-		async deleteEmail(_id: string) { return {}; },
+		async deleteEmail(id: string) { deletedIds.push(id); return {}; },
 		async consumeJti() { return true; },
 		_savedEmails: savedEmails,
+		_deletedIds: deletedIds,
 	};
 }
 
@@ -612,6 +620,52 @@ describe("toolUpdateDraft — cc / bcc carry-forward", () => {
 		const row = stub._savedEmails[0] as { cc: string | null; bcc: string | null };
 		expect(row.cc).toBe("preserved@internal.example");
 		expect(row.bcc).toBe("preservedbcc@internal.example");
+	});
+});
+
+describe("toolUpdateDraft — drafts only, provenance kept", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("refuses a message that is not in the Drafts folder and leaves it untouched", async () => {
+		const stub = makeUpdateDraftStub(null, null, { folder_id: "inbox" });
+		const env = makeEnv(stub as any);
+		const result = await toolUpdateDraft(env, MAILBOX_ID, {
+			draftId: DRAFT_ID,
+			bodyHtml: "<p>replaced</p>",
+		});
+		expect(result).toEqual({ error: "Draft not found" });
+		expect(stub._deletedIds).toEqual([]);
+		expect(stub._savedEmails).toEqual([]);
+	});
+
+	it("keeps an agent-authored draft agent-authored after a user edit", async () => {
+		const stub = makeUpdateDraftStub(null, null, { created_by: "agent" });
+		const env = makeEnv(stub as any);
+		await toolUpdateDraft(env, MAILBOX_ID, { draftId: DRAFT_ID, subject: "Edited" });
+		const row = stub._savedEmails[0] as { created_by: string };
+		expect(row.created_by).toBe("agent");
+	});
+
+	it("marks a user draft agent-authored when an agent edits it", async () => {
+		const stub = makeUpdateDraftStub(null, null);
+		const env = makeEnv(stub as any);
+		await toolUpdateDraft(env, MAILBOX_ID, {
+			draftId: DRAFT_ID,
+			subject: "Edited",
+			createdBy: "agent",
+		});
+		const row = stub._savedEmails[0] as { created_by: string };
+		expect(row.created_by).toBe("agent");
+	});
+
+	it("keeps a user draft user-authored after a user edit", async () => {
+		const stub = makeUpdateDraftStub(null, null);
+		const env = makeEnv(stub as any);
+		await toolUpdateDraft(env, MAILBOX_ID, { draftId: DRAFT_ID, subject: "Edited" });
+		const row = stub._savedEmails[0] as { created_by: string };
+		expect(row.created_by).toBe("user");
 	});
 });
 

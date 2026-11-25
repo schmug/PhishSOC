@@ -29,9 +29,12 @@ import {
 	callerGroupsFromJwt,
 	callerEmailFromJwt,
 } from "../lib/mailbox-acl";
+import { textToHtml } from "../lib/email-helpers";
 import {
 	parseMcpScope,
 	mailboxInScope,
+	canDraftIn,
+	draftToolsEnabled,
 	toAgentEmail,
 	toAgentList,
 	MCP_MAX_LIST_LIMIT,
@@ -75,7 +78,8 @@ function mcpResult(result: Record<string, unknown>) {
  * `/mcp` endpoint and can list mailboxes, read/search emails,
  * draft replies, send messages, and manage folders.
  *
- * Operators can narrow it with `MCP_READ_ONLY` (read tools only) and
+ * Operators can narrow it with `MCP_READ_ONLY` (read tools only),
+ * `MCP_DRAFT_MAILBOXES` (draft tools for listed mailboxes only) and
  * `MCP_ALLOWED_DOMAINS` (mailboxes on those domains only); see ./scope.ts.
  * Message content is always returned as capped plain text.
  */
@@ -250,137 +254,232 @@ export class EmailMCP extends McpAgent<Env> {
 			},
 		);
 
-		// Everything below drafts, sends, deletes, moves or marks mail. In
-		// read-only mode none of it is registered, so clients never see it.
-		if (scope.readOnly) return;
+		// ── Draft tools ────────────────────────────────────────────
+		// Offered unless the server is read-only with no MCP_DRAFT_MAILBOXES.
+		// With MCP_DRAFT_MAILBOXES set they work only on those mailboxes, take
+		// plain-text bodies, and mark what they write as agent-authored so a
+		// later send of the draft gets the stricter agent send-risk tier.
+		if (!draftToolsEnabled(scope)) return;
+		const plainDrafts = scope.draftMailboxes !== null;
+		const draftAuthor = plainDrafts ? ("agent" as const) : undefined;
+
+		const verifyDraftMailbox = async (mailboxId: string) => {
+			const denied = await verifyMailbox(mailboxId);
+			if (denied) return denied;
+			if (!canDraftIn(scope, mailboxId)) {
+				return mcpError(`Drafts are not enabled for mailbox "${mailboxId}".`);
+			}
+			return null;
+		};
+
+		const plainBodyField = z
+			.string()
+			.describe("Plain-text body. Line breaks are kept; HTML is shown as text, not rendered.");
 
 		// ── draft_reply ────────────────────────────────────────────
-		this.server.tool(
-			"draft_reply",
-			"Draft a reply to an email and save it to the Drafts folder. Does NOT send — saves a draft for review.",
-			{
-				mailboxId: z.string().describe("The mailbox email address"),
-				originalEmailId: z
-					.string()
-					.describe("The ID of the email being replied to"),
-				to: z.string().email().describe("Recipient email address"),
-				subject: z.string().describe("Subject line (usually 'Re: ...')"),
-				bodyHtml: z
-					.string()
-					.describe("The HTML body of the reply"),
-			},
-			async ({ mailboxId, originalEmailId, to, subject, bodyHtml }) => {
-				const denied = await verifyMailbox(mailboxId);
-				if (denied) return denied;
-				const result = await toolDraftReply(env, mailboxId, {
-					originalEmailId,
-					to,
-					subject,
-					body: bodyHtml,
-					isPlainText: false,
-					runVerifyDraft: true,
-				});
-				return mcpResult(result);
-			},
-		);
+		const draftReplyFields = {
+			mailboxId: z.string().describe("The mailbox email address"),
+			originalEmailId: z
+				.string()
+				.describe("The ID of the email being replied to"),
+			to: z.string().email().describe("Recipient email address"),
+			subject: z.string().describe("Subject line (usually 'Re: ...')"),
+		};
+		const runDraftReply = async (args: {
+			mailboxId: string;
+			originalEmailId: string;
+			to: string;
+			subject: string;
+			body: string;
+		}) => {
+			const denied = await verifyDraftMailbox(args.mailboxId);
+			if (denied) return denied;
+			const result = await toolDraftReply(env, args.mailboxId, {
+				originalEmailId: args.originalEmailId,
+				to: args.to,
+				subject: args.subject,
+				body: args.body,
+				isPlainText: plainDrafts,
+				runVerifyDraft: true,
+				createdBy: draftAuthor,
+			});
+			return mcpResult(result);
+		};
+		const DRAFT_REPLY_DESCRIPTION =
+			"Draft a reply to an email and save it to the Drafts folder. Does NOT send — saves a draft for review.";
+		if (plainDrafts) {
+			this.server.tool(
+				"draft_reply",
+				DRAFT_REPLY_DESCRIPTION,
+				{ ...draftReplyFields, body: plainBodyField },
+				async (args) => runDraftReply(args),
+			);
+		} else {
+			this.server.tool(
+				"draft_reply",
+				DRAFT_REPLY_DESCRIPTION,
+				{
+					...draftReplyFields,
+					bodyHtml: z.string().describe("The HTML body of the reply"),
+				},
+				async ({ bodyHtml, ...rest }) => runDraftReply({ ...rest, body: bodyHtml }),
+			);
+		}
 
 		// ── create_draft ───────────────────────────────────────────
-		this.server.tool(
-			"create_draft",
-			"Create a new draft email. Can be a new email or a reply draft.",
-			{
-				mailboxId: z.string().describe("The mailbox email address"),
-				to: RecipientFieldSchema
-					.optional()
-					.describe("Recipient email address (single or array, optional for early drafts)"),
-				cc: RecipientFieldSchema
-					.optional()
-					.describe("CC recipients (single email or array)"),
-				bcc: RecipientFieldSchema
-					.optional()
-					.describe("BCC recipients (single email or array)"),
-				subject: z.string().describe("Subject line"),
-				bodyHtml: z.string().describe("The HTML body of the draft"),
-				in_reply_to: z
-					.string()
-					.optional()
-					.describe("The ID of the email this draft is replying to (optional)"),
-				thread_id: z
-					.string()
-					.optional()
-					.describe("Thread ID to attach this draft to (optional)"),
-			},
-			async ({ mailboxId, to, cc, bcc, subject, bodyHtml, in_reply_to, thread_id }) => {
-				const denied = await verifyMailbox(mailboxId);
-				if (denied) return denied;
-				const toStr = Array.isArray(to) ? to.join(", ") : (to || "");
-				const result = await toolDraftEmail(env, mailboxId, {
-					to: toStr,
-					cc,
-					bcc,
-					subject,
-					body: bodyHtml,
-					isPlainText: false,
-					runVerifyDraft: true,
-					in_reply_to,
-					thread_id,
-				});
-				if ("error" in result) {
-					return mcpResult(result);
-				}
-				// Map the response to match the original create_draft output shape
-				return mcpText({
-					status: "draft_created",
-					draftId: result.draftId,
-					threadId: result.threadId,
-					message: "Draft created in Drafts folder.",
-				});
-			},
-		);
+		const createDraftFields = {
+			mailboxId: z.string().describe("The mailbox email address"),
+			to: RecipientFieldSchema
+				.optional()
+				.describe("Recipient email address (single or array, optional for early drafts)"),
+			cc: RecipientFieldSchema
+				.optional()
+				.describe("CC recipients (single email or array)"),
+			bcc: RecipientFieldSchema
+				.optional()
+				.describe("BCC recipients (single email or array)"),
+			subject: z.string().describe("Subject line"),
+			in_reply_to: z
+				.string()
+				.optional()
+				.describe("The ID of the email this draft is replying to (optional)"),
+			thread_id: z
+				.string()
+				.optional()
+				.describe("Thread ID to attach this draft to (optional)"),
+		};
+		const runCreateDraft = async (args: {
+			mailboxId: string;
+			to?: string | string[];
+			cc?: string | string[];
+			bcc?: string | string[];
+			subject: string;
+			body: string;
+			in_reply_to?: string;
+			thread_id?: string;
+		}) => {
+			const denied = await verifyDraftMailbox(args.mailboxId);
+			if (denied) return denied;
+			const toStr = Array.isArray(args.to) ? args.to.join(", ") : (args.to || "");
+			const result = await toolDraftEmail(env, args.mailboxId, {
+				to: toStr,
+				cc: args.cc,
+				bcc: args.bcc,
+				subject: args.subject,
+				body: args.body,
+				isPlainText: plainDrafts,
+				runVerifyDraft: true,
+				in_reply_to: args.in_reply_to,
+				thread_id: args.thread_id,
+				createdBy: draftAuthor,
+			});
+			if ("error" in result) {
+				return mcpResult(result);
+			}
+			// Map the response to match the original create_draft output shape
+			return mcpText({
+				status: "draft_created",
+				draftId: result.draftId,
+				threadId: result.threadId,
+				message: "Draft created in Drafts folder.",
+			});
+		};
+		const CREATE_DRAFT_DESCRIPTION =
+			"Create a new draft email. Can be a new email or a reply draft. Does NOT send.";
+		if (plainDrafts) {
+			this.server.tool(
+				"create_draft",
+				CREATE_DRAFT_DESCRIPTION,
+				{ ...createDraftFields, body: plainBodyField },
+				async (args) => runCreateDraft(args),
+			);
+		} else {
+			this.server.tool(
+				"create_draft",
+				CREATE_DRAFT_DESCRIPTION,
+				{
+					...createDraftFields,
+					bodyHtml: z.string().describe("The HTML body of the draft"),
+				},
+				async ({ bodyHtml, ...rest }) => runCreateDraft({ ...rest, body: bodyHtml }),
+			);
+		}
 
 		// ── update_draft ───────────────────────────────────────────
-		this.server.tool(
-			"update_draft",
-			"Update an existing draft email's content.",
-			{
-				mailboxId: z.string().describe("The mailbox email address"),
-				draftId: z.string().describe("The ID of the draft to update"),
-				to: RecipientFieldSchema
-					.optional()
-					.describe("Updated recipient email address (single or array)"),
-				cc: RecipientFieldSchema
-					.optional()
-					.describe("Updated CC recipients (single email or array)"),
-				bcc: RecipientFieldSchema
-					.optional()
-					.describe("Updated BCC recipients (single email or array)"),
-				subject: z.string().optional().describe("Updated subject line"),
-				bodyHtml: z.string().optional().describe("Updated HTML body"),
-			},
-			async ({ mailboxId, draftId, to, cc, bcc, subject, bodyHtml }) => {
-				const denied = await verifyMailbox(mailboxId);
-				if (denied) return denied;
-				const toStr = Array.isArray(to) ? to.join(", ") : to;
-				const result = await toolUpdateDraft(env, mailboxId, {
-					draftId,
-					to: toStr,
-					cc,
-					bcc,
-					subject,
-					bodyHtml,
-				});
-				if ("error" in result) {
-					if (result.error === "Draft not found") {
-						return {
-							content: [{ type: "text" as const, text: "Draft not found" }],
-							isError: true,
-						};
-					}
-					return mcpResult(result);
+		const updateDraftFields = {
+			mailboxId: z.string().describe("The mailbox email address"),
+			draftId: z.string().describe("The ID of the draft to update"),
+			to: RecipientFieldSchema
+				.optional()
+				.describe("Updated recipient email address (single or array)"),
+			cc: RecipientFieldSchema
+				.optional()
+				.describe("Updated CC recipients (single email or array)"),
+			bcc: RecipientFieldSchema
+				.optional()
+				.describe("Updated BCC recipients (single email or array)"),
+			subject: z.string().optional().describe("Updated subject line"),
+		};
+		const runUpdateDraft = async (args: {
+			mailboxId: string;
+			draftId: string;
+			to?: string | string[];
+			cc?: string | string[];
+			bcc?: string | string[];
+			subject?: string;
+			bodyHtml?: string;
+		}) => {
+			const denied = await verifyDraftMailbox(args.mailboxId);
+			if (denied) return denied;
+			const toStr = Array.isArray(args.to) ? args.to.join(", ") : args.to;
+			const result = await toolUpdateDraft(env, args.mailboxId, {
+				draftId: args.draftId,
+				to: toStr,
+				cc: args.cc,
+				bcc: args.bcc,
+				subject: args.subject,
+				bodyHtml: args.bodyHtml,
+				createdBy: draftAuthor,
+			});
+			if ("error" in result) {
+				if (result.error === "Draft not found") {
+					return {
+						content: [{ type: "text" as const, text: "Draft not found" }],
+						isError: true,
+					};
 				}
-				return mcpText(result);
-			},
-		);
+				return mcpResult(result);
+			}
+			return mcpText(result);
+		};
+		const UPDATE_DRAFT_DESCRIPTION =
+			"Update an existing draft email's content. Only messages in the Drafts folder can be updated.";
+		if (plainDrafts) {
+			this.server.tool(
+				"update_draft",
+				UPDATE_DRAFT_DESCRIPTION,
+				{ ...updateDraftFields, body: plainBodyField.optional() },
+				async ({ body, ...rest }) =>
+					runUpdateDraft({
+						...rest,
+						...(body !== undefined ? { bodyHtml: textToHtml(body.trim()) } : {}),
+					}),
+			);
+		} else {
+			this.server.tool(
+				"update_draft",
+				UPDATE_DRAFT_DESCRIPTION,
+				{
+					...updateDraftFields,
+					bodyHtml: z.string().optional().describe("Updated HTML body"),
+				},
+				async (args) => runUpdateDraft(args),
+			);
+		}
+
+		// Everything below sends, deletes, moves or marks mail. In read-only
+		// mode none of it is registered, so clients never see it.
+		if (scope.readOnly) return;
 
 		// ── delete_email ───────────────────────────────────────────
 		this.server.tool(

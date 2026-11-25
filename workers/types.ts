@@ -57,10 +57,13 @@ export interface Env extends Cloudflare.Env {
 	 * variables in the dashboard or with `wrangler secret put`.
 	 *   - MCP_READ_ONLY: "true" offers only the read tools.
 	 *   - MCP_ALLOWED_DOMAINS: comma-separated domains MCP clients may read.
+	 *   - MCP_DRAFT_MAILBOXES: comma-separated mailboxes the draft tools may
+	 *     write to (plain text, agent-authored); adds them to read-only mode.
 	 *   - MCP_MAX_BODY_CHARS: plain-text body cap per message (default 20000).
 	 */
 	MCP_READ_ONLY?: string;
 	MCP_ALLOWED_DOMAINS?: string;
+	MCP_DRAFT_MAILBOXES?: string;
 	MCP_MAX_BODY_CHARS?: string;
 	/**
 	 * HS256 signing secret for one-shot confirmation tokens.

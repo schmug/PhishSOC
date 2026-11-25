@@ -3,6 +3,8 @@ import {
 	DEFAULT_MCP_MAX_BODY_CHARS,
 	MCP_CONTENT_NOTICE,
 	MCP_MAX_HEADER_CHARS,
+	canDraftIn,
+	draftToolsEnabled,
 	mailboxDomain,
 	mailboxInScope,
 	parseMcpScope,
@@ -15,6 +17,7 @@ describe("parseMcpScope", () => {
 		expect(parseMcpScope({})).toEqual({
 			readOnly: false,
 			allowedDomains: null,
+			draftMailboxes: null,
 			maxBodyChars: DEFAULT_MCP_MAX_BODY_CHARS,
 		});
 	});
@@ -68,6 +71,46 @@ describe("mailboxInScope", () => {
 	it("uses the last @ for the domain", () => {
 		expect(mailboxDomain("a@b@dungelo.com")).toBe("dungelo.com");
 		expect(mailboxInScope(scoped, "a@dungelo.com@other.test")).toBe(false);
+	});
+});
+
+describe("draft-only mode", () => {
+	const draftOnly = parseMcpScope({
+		MCP_READ_ONLY: "true",
+		MCP_ALLOWED_DOMAINS: "dungelo.com",
+		MCP_DRAFT_MAILBOXES: " Support@Dungelo.com , not-an-address, press@other.test",
+	});
+
+	it("parses MCP_DRAFT_MAILBOXES as lower-cased addresses", () => {
+		expect(draftOnly.draftMailboxes).toEqual(["support@dungelo.com", "press@other.test"]);
+		expect(parseMcpScope({ MCP_DRAFT_MAILBOXES: " , " }).draftMailboxes).toBeNull();
+	});
+
+	it("registers draft tools in read-only mode only when a draft list is set", () => {
+		expect(draftToolsEnabled(parseMcpScope({}))).toBe(true);
+		expect(draftToolsEnabled(parseMcpScope({ MCP_READ_ONLY: "true" }))).toBe(false);
+		expect(draftToolsEnabled(draftOnly)).toBe(true);
+	});
+
+	it("drafts only in listed mailboxes", () => {
+		expect(canDraftIn(draftOnly, "support@dungelo.com")).toBe(true);
+		expect(canDraftIn(draftOnly, "SUPPORT@dungelo.com")).toBe(true);
+		expect(canDraftIn(draftOnly, "hello@dungelo.com")).toBe(false);
+	});
+
+	it("still applies the domain allowlist to listed mailboxes", () => {
+		expect(canDraftIn(draftOnly, "press@other.test")).toBe(false);
+	});
+
+	it("follows read-only mode when no draft list is set", () => {
+		expect(canDraftIn(parseMcpScope({}), "anyone@anywhere.test")).toBe(true);
+		expect(canDraftIn(parseMcpScope({ MCP_READ_ONLY: "1" }), "anyone@anywhere.test")).toBe(false);
+	});
+
+	it("limits drafts to the list outside read-only mode too", () => {
+		const scoped = parseMcpScope({ MCP_DRAFT_MAILBOXES: "support@dungelo.com" });
+		expect(canDraftIn(scoped, "support@dungelo.com")).toBe(true);
+		expect(canDraftIn(scoped, "other@dungelo.com")).toBe(false);
 	});
 });
 
